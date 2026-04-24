@@ -11,6 +11,7 @@ import {
   normalizeMods,
   type HotkeyBinding,
   type HotkeyMod,
+  type HotkeyMode,
 } from "@/lib/hotkey";
 import { detectPlatform, type Platform } from "@/lib/platform";
 
@@ -197,39 +198,75 @@ function Waveform({
   );
 }
 
-function statusCopy(state: RecordingState): { tag: string; hint: string } {
+/**
+ * 文案矩阵：`primary` 是当前状态下的"主操作/进行中提示"；`secondary` 是 Esc 取消
+ * 的副提示，两者语义不同必须分两行。hold / toggle 模式在 recording 态下操作方式
+ * 不同（松开 vs 再按一次），preparing 态也略有差异。
+ */
+function statusCopy(
+  state: RecordingState,
+  mode: HotkeyMode,
+): { tag: string; primary: string; secondary?: string } {
   switch (state) {
     case "preparing":
-      return { tag: "// READY", hint: "准备中，开始说话…" };
+      return {
+        tag: "// READY",
+        primary: mode === "hold" ? "继续按住，开始说话…" : "开始说话…",
+        secondary: "Esc 取消",
+      };
     case "recording":
-      return { tag: "// LISTENING", hint: "松开快捷键结束录音" };
+      return {
+        tag: "// LISTENING",
+        primary:
+          mode === "hold"
+            ? "松开快捷键 结束并转写"
+            : "再按一次快捷键 结束并转写",
+        secondary: "Esc 取消本次录音",
+      };
     case "transcribing":
-      return { tag: "// TRANSCRIBING", hint: "正在转写…" };
+      return {
+        tag: "// TRANSCRIBING",
+        primary: "正在转写…",
+        secondary: "Esc 放弃这次结果",
+      };
     case "injecting":
-      return { tag: "// INJECTING", hint: "正在写入当前输入框…" };
+      // 注入阶段只有几十毫秒，提 Esc 没意义——来不及撤回
+      return { tag: "// INJECTING", primary: "正在写入输入框…" };
     case "error":
-      return { tag: "// ERROR", hint: "出错了，检查日志或重试" };
+      return { tag: "// ERROR", primary: "出错了，检查日志或重试" };
     default:
-      return { tag: "// IDLE", hint: "" };
+      return { tag: "// IDLE", primary: "" };
   }
 }
 
 /**
  * Live 面板：state ≠ idle 时替换 HOTKEY CARD 主体。三栏布局：
  *   ┌──────────────┬───────────────────────────────┐
- *   │ 波形         │ 实时转写文字（占位，待接入） │
+ *   │ 波形         │ 实时转写文字（OpenLoaf realtime ASR） │
  *   └──────────────┴───────────────────────────────┘
- * 实时文字接入 STT 流后从 recording store 里拿对应字段填入即可。
+ * `liveTranscript` 由 recording store 在 asr-partial / asr-final 事件里更新；
+ * recording 阶段展示 partial（accent 弱化），transcribing/injecting 展示 Final。
  */
 function LiveDictationPanel({
   state,
+  mode,
   audioLevels,
+  liveTranscript,
 }: {
   state: RecordingState;
+  mode: HotkeyMode;
   audioLevels: number[];
+  liveTranscript: string;
 }) {
-  const { tag, hint } = statusCopy(state);
+  const { tag, primary, secondary } = statusCopy(state, mode);
   const waveActive = state === "preparing" || state === "recording";
+  const hasText = liveTranscript.trim().length > 0;
+  // partial 态用 accent 色弱化提示"还在听"；Final 后状态机切 transcribing/injecting
+  // 时用 te-fg 主色表示已定稿
+  const textToneClass =
+    state === "recording" || state === "preparing"
+      ? "text-te-accent"
+      : "text-te-fg";
 
   return (
     <div className="flex flex-col gap-3">
@@ -244,7 +281,7 @@ function LiveDictationPanel({
           {tag}
         </span>
         <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
-          LIVE
+          {hasText ? `${liveTranscript.length} CHARS` : "LIVE"}
         </span>
       </div>
 
@@ -257,15 +294,28 @@ function LiveDictationPanel({
           </span>
         </div>
 
-        {/* 右：实时文字（占位；STT 接入后把流式结果填在这里） */}
+        {/* 右：realtime 转写流 */}
         <div className="flex min-h-[4rem] flex-col justify-between border-l border-te-gray/40 pl-4 md:pl-6">
-          <p className="font-sans text-xs text-te-light-gray md:text-sm">
-            {/* TODO(stt): 接入流式转写后，把 partial 文字渲染在此处；accent 色高亮正在听的词 */}
-            <span className="text-te-fg/40">实时转写文字将出现在这里…</span>
+          {/* max-h + overflow：文字很长时内部滚动，不撑爆卡片布局 */}
+          <p
+            className={cn(
+              "font-sans text-xs leading-relaxed md:text-sm",
+              "max-h-24 overflow-y-auto",
+              hasText ? textToneClass : "text-te-fg/40",
+            )}
+          >
+            {hasText ? liveTranscript : "实时转写文字将出现在这里…"}
           </p>
-          <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-            {hint}
-          </span>
+          <div className="flex flex-col gap-0.5">
+            <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+              {primary}
+            </span>
+            {secondary ? (
+              <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+                {secondary}
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
@@ -327,10 +377,12 @@ export default function HomePage() {
   const modeHint =
     binding?.mode === "toggle" ? "单击切换 · 再按停止" : "按住说话 · 松开插入";
 
-  // 录音状态：非 idle 时 HOTKEY CARD 主体换成 Live 面板（波形 + 实时文字占位）。
-  // audioLevels 由 Rust `openspeech://audio-level` 事件驱动，recording store 维护。
+  // 录音状态：非 idle 时 HOTKEY CARD 主体换成 Live 面板（波形 + realtime 转写）。
+  // audioLevels 由 Rust `openspeech://audio-level` 事件驱动，liveTranscript 由
+  // `openspeech://asr-partial` / `asr-final` 事件驱动——两者都在 recording store 维护。
   const recState = useRecordingStore((s) => s.state);
   const audioLevels = useRecordingStore((s) => s.audioLevels);
+  const liveTranscript = useRecordingStore((s) => s.liveTranscript);
   const isLive = recState !== "idle";
 
   // 按键预览：优先走 Rust `openspeech://key-preview`（rdev 无条件 emit，macOS 下
@@ -485,7 +537,9 @@ export default function HomePage() {
                   >
                     <LiveDictationPanel
                       state={recState}
+                      mode={binding?.mode ?? "hold"}
                       audioLevels={audioLevels}
+                      liveTranscript={liveTranscript}
                     />
                   </motion.div>
                 ) : (

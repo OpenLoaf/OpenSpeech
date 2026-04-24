@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Gift, LogOut, Mail, Sparkles } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Dialog,
   DialogContent,
@@ -8,6 +10,32 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuthStore } from "@/stores/auth";
+
+/** 根据 membershipLevel 返回显示标签（UI 用）。 */
+function membershipLabel(level: string | undefined): string {
+  switch (level) {
+    case "lite":
+      return "LITE / 轻享";
+    case "pro":
+      return "PRO / 专业";
+    case "premium":
+      return "PREMIUM / 旗舰";
+    case "free":
+    default:
+      return "FREE / 免费";
+  }
+}
+
+/** Pro 及以上：SaaS 调用无限，不扣积分。见 docs/subscription.md。 */
+function isUnlimited(level: string | undefined): boolean {
+  return level === "pro" || level === "premium";
+}
+
+/** 通用：打开 OpenLoaf Web 页面（订阅 / 充值） */
+async function openWebPage(path: string) {
+  const url = await invoke<string>("openloaf_web_url", { path });
+  await openUrl(url);
+}
 
 type Props = {
   open: boolean;
@@ -32,8 +60,17 @@ function Row({
 }
 
 export function AccountDialog({ open, onOpenChange }: Props) {
-  const { user, isAuthenticated, init, loaded, logout } = useAuthStore();
+  const { user, profile, isAuthenticated, init, loaded, logout } = useAuthStore();
   const [loggingOut, setLoggingOut] = useState(false);
+  const level = profile?.membershipLevel;
+  const unlimited = isUnlimited(level);
+  // 文案按等级切：free/lite → "订阅 / 升级"；pro → "升级到 PREMIUM"；premium → "管理订阅"。
+  const subscribeButtonLabel =
+    level === "premium"
+      ? "管理订阅"
+      : level === "pro"
+        ? "升级到 PREMIUM"
+        : "订阅 / 升级套餐";
 
   // 首次打开面板时确保 store 已初始化（Rust 端 bootstrap 是异步的，
   // 这里再主动读一次最新状态）。
@@ -99,47 +136,71 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                 <Row label="订阅">
                   <span className="inline-flex items-center gap-2 border border-te-accent/60 bg-te-accent/8 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.15em] text-te-accent">
                     <span className="size-1.5 bg-te-accent" />
-                    免费 / 自带模型
+                    {membershipLabel(level)}
                   </span>
                 </Row>
+                {unlimited ? (
+                  <Row label="SaaS 调用">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-te-accent">
+                      无限 · 不扣积分
+                    </span>
+                  </Row>
+                ) : (
+                  <Row label="剩余积分">
+                    <span className="font-mono text-sm tabular-nums text-te-fg">
+                      {Math.round(profile?.creditsBalance ?? 0).toLocaleString(
+                        "zh-CN",
+                      )}
+                    </span>
+                  </Row>
+                )}
               </div>
 
-              {/* Upgrade */}
+              {/* Subscription —— 跳浏览器到 OpenLoaf Web 完成 */}
               <div className="mb-5">
                 <div className="mb-3 flex items-center gap-2">
                   <span className="h-px w-4 bg-te-accent" />
                   <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                    升级
+                    订阅
                   </span>
                 </div>
                 <button
                   type="button"
+                  onClick={() => void openWebPage("/pricing")}
                   className="inline-flex w-full items-center justify-center gap-2 bg-te-accent px-4 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
                 >
                   <Sparkles className="size-4" />
-                  升级到 PRO
+                  {subscribeButtonLabel}
                 </button>
                 <p className="mt-2 font-sans text-xs text-te-light-gray">
-                  解锁托管模型、更高精度与自动润色。
+                  {unlimited
+                    ? "当前套餐在 OpenLoaf 站点统一管理。"
+                    : "在 OpenLoaf 网站购买 Pro 或 Premium 套餐后，OpenSpeech 云端调用即变为无限。"}
                 </p>
               </div>
 
-              {/* Gift card */}
-              <div className="mb-5">
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="h-px w-4 bg-te-accent" />
-                  <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                    礼品卡
-                  </span>
+              {/* Recharge —— 仅非 pro+ 展示 */}
+              {!unlimited ? (
+                <div className="mb-5">
+                  <div className="mb-3 flex items-center gap-2">
+                    <span className="h-px w-4 bg-te-accent" />
+                    <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
+                      充值积分
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void openWebPage("/recharge")}
+                    className="inline-flex w-full items-center justify-center gap-2 border border-te-gray px-4 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+                  >
+                    <Gift className="size-4" />
+                    充值
+                  </button>
+                  <p className="mt-2 font-sans text-xs text-te-light-gray">
+                    1 元 = 100 积分。不订阅套餐也可直接充值。
+                  </p>
                 </div>
-                <button
-                  type="button"
-                  className="inline-flex w-full items-center justify-center gap-2 border border-te-gray px-4 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
-                >
-                  <Gift className="size-4" />
-                  购买
-                </button>
-              </div>
+              ) : null}
 
               {/* Session */}
               <div>

@@ -375,7 +375,32 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      unlistens.push(u1, u2, u3, u4, u5, u6, u7);
+      // Esc 取消——走 Rust modifier_only 的预览通道（`openspeech://key-preview`），
+      // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc；见 docs/hotkeys.md
+      // 的 "Esc 处理 · 状态化"）。状态门控：只有当录音 / 转写流程活跃时才响应，
+      // idle / injecting 一律忽略——injecting 几十毫秒来不及撤回，ignore。
+      const u8 = await listen<{ code: string; phase: "pressed" | "released" }>(
+        "openspeech://key-preview",
+        (evt) => {
+          if (evt.payload.phase !== "pressed") return;
+          if (evt.payload.code !== "Escape") return;
+          const s = get().state;
+          if (s === "idle" || s === "error" || s === "injecting") return;
+          console.log("[recording] Esc pressed, cancelling", { state: s });
+          discardRecording();
+          stopMic();
+          set({
+            state: "idle",
+            activeId: null,
+            activeMode: null,
+            audioLevels: emptyLevels(),
+            recordingId: null,
+            liveTranscript: "",
+          });
+        },
+      );
+
+      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u8);
       console.log(
         "[recording] listeners attached (hotkey + register-failed + audio-level + asr-*)",
       );

@@ -26,33 +26,6 @@ export interface UserProfile {
 export type LoginProvider = "google" | "wechat";
 export type LoginStatus = "idle" | "opening" | "polling" | "error";
 
-// ─── 支付 ────────────────────────────────────────────────────────
-export type PlanCode = "lite" | "pro" | "premium";
-export type BillingPeriod = "monthly" | "yearly";
-
-export interface PaymentOrder {
-  orderId: string;
-  /** 微信支付二维码 URL（weixin:// 或可被微信扫的 http URL） */
-  codeUrl: string | null;
-  /** 仅 upgrade 返回：补差价金额（元） */
-  upgradePayable: number | null;
-}
-
-export type OrderStatus =
-  | "pending"
-  | "paid"
-  | "refunded"
-  | "closed"
-  | "failed";
-
-export interface PaymentOrderStatus {
-  orderId: string;
-  status: OrderStatus | string;
-  type?: "subscription" | "recharge" | "upgrade" | string;
-  amount?: number;
-  paidAt?: string;
-}
-
 // Rust 端 LoginEvent payload（tag="status", rename_all="lowercase"）
 type LoginEventPayload =
   | { status: "success"; state: string; user: AuthUser }
@@ -81,17 +54,6 @@ interface AuthState {
   logout: () => Promise<void>;
   /** 主动拉一次 profile（登录事件 / 恢复会话后自动触发；其他地方也可手动用） */
   fetchProfile: () => Promise<void>;
-
-  // 支付：下单。成功返回二维码 URL，调用方负责展示 QR + 轮询状态。
-  paymentSubscribe: (input: {
-    planCode: PlanCode;
-    period: BillingPeriod;
-  }) => Promise<PaymentOrder>;
-  paymentRecharge: (input: { amount: number }) => Promise<PaymentOrder>;
-  paymentUpgrade: (input: { newPlanCode: PlanCode }) => Promise<PaymentOrder>;
-  paymentOrderStatus: (input: {
-    orderId: string;
-  }) => Promise<PaymentOrderStatus>;
 }
 
 // listen 事件订阅一次（模块级），解绑函数保留以便热更新场景解绑。
@@ -236,16 +198,4 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // 静默失败：profile 拉不到不影响登录态本身，UI 用 fallback。
     }
   },
-
-  paymentSubscribe: async ({ planCode, period }) =>
-    invoke<PaymentOrder>("openloaf_payment_subscribe", { planCode, period }),
-
-  paymentRecharge: async ({ amount }) =>
-    invoke<PaymentOrder>("openloaf_payment_recharge", { amount }),
-
-  paymentUpgrade: async ({ newPlanCode }) =>
-    invoke<PaymentOrder>("openloaf_payment_upgrade", { newPlanCode }),
-
-  paymentOrderStatus: async ({ orderId }) =>
-    invoke<PaymentOrderStatus>("openloaf_payment_order_status", { orderId }),
 }));

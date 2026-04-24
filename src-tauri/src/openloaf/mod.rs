@@ -21,8 +21,7 @@ use openloaf_saas::{
     AuthClientInfo, AuthSession, AuthUser, OAuthStartOptions, SaaSClient, SaaSClientConfig,
     SaaSError, SaaSResult, UserMembershipLevel, UserSelf,
 };
-use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod callback;
@@ -42,6 +41,19 @@ const DEFAULT_BASE_URL: &str = match option_env!("OPENLOAF_BASE_URL") {
     Some(v) => v,
     None => FALLBACK_BASE_URL,
 };
+
+// OpenLoaf Web 前端地址。订阅/充值走 Web 页面（App 内不内嵌支付流程），
+// 前端通过 openloaf_web_url command 拿完整 URL 后 openUrl 到浏览器。
+#[cfg(debug_assertions)]
+const FALLBACK_WEB_URL: &str = "http://localhost:5180";
+#[cfg(not(debug_assertions))]
+const FALLBACK_WEB_URL: &str = "https://openloaf.hexems.com";
+
+pub const DEFAULT_WEB_URL: &str = match option_env!("OPENLOAF_WEB_URL") {
+    Some(v) => v,
+    None => FALLBACK_WEB_URL,
+};
+
 const APP_ID: &str = "openspeech-desktop";
 const LOGIN_EVENT: &str = "openspeech://openloaf-login";
 /// 自动 refresh 彻底失败（refresh token 也无效）时广播给前端，让 UI 切回未登录态。
@@ -341,6 +353,19 @@ pub fn openloaf_is_authenticated(state: State<'_, SharedOpenLoaf>) -> bool {
     state.client.access_token().is_some()
 }
 
+/// 拼出 OpenLoaf Web 的页面 URL（订阅 / 充值等）。前端拿到后用 openUrl 打开。
+///
+/// 例：`path = "/pricing"` → `https://openloaf.hexems.com/pricing`
+#[tauri::command]
+pub fn openloaf_web_url(path: String) -> String {
+    // 兼容前端不小心传了完整 URL 的情况：以 http 开头就原样返回。
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path;
+    }
+    let sep = if path.starts_with('/') { "" } else { "/" };
+    format!("{DEFAULT_WEB_URL}{sep}{path}")
+}
+
 // ─── 用户 profile（含会员等级 / 积分） ──────────────────────────
 //
 // SDK 0.3.0 封装了 GET /api/user/self，走底层 FFI dispatcher 和 auth 一套路径。
@@ -450,224 +475,6 @@ where
         }
         other => other,
     }
-}
-
-// ─── REST JSON helper（未进 SDK 的接口直连，同样带 401 auto-refresh） ───
-//
-// 目前 payment 模块还在 Node SDK v0.2.x，Rust SDK 0.3.0 还没移植；这些 command
-// 先直接用 reqwest 打 REST，等 Rust SDK 补齐后再切回 SDK 调用。调用链和 call_authed
-// 同构：401 → ensure_fresh_token → 重试；refresh 失败 → clear_session + auth-lost。
-
-async fn rest_json<Req, Resp>(
-    app: &AppHandle,
-    ol: &SharedOpenLoaf,
-    method: reqwest::Method,
-    path: &str,
-    body: Option<&Req>,
-) -> Result<Resp, String>
-where
-    Req: Serialize + ?Sized,
-    Resp: DeserializeOwned,
-{
-    let url = format!("{}{}", DEFAULT_BASE_URL, path);
-    // JSON 序列化一次，两次尝试共用。
-    let body_value = match body {
-        Some(b) => Some(serde_json::to_value(b).map_err(|e| e.to_string())?),
-        None => None,
-    };
-
-    async fn one_shot<T: DeserializeOwned>(
-        token: &str,
-        url: &str,
-        method: reqwest::Method,
-        body_value: Option<&serde_json::Value>,
-    ) -> Result<Option<T>, String> {
-        // Ok(Some) 正常；Ok(None) 401；Err 其他错误。
-        let mut req = reqwest::Client::new()
-            .request(method, url)
-            .bearer_auth(token)
-            .header("Accept-Language", "zh-CN");
-        if let Some(v) = body_value {
-            req = req.json(v);
-        }
-        let resp = req.send().await.map_err(|e| e.to_string())?;
-        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Ok(None);
-        }
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("HTTP {s}: {text}"));
-        }
-        let parsed: T = resp.json().await.map_err(|e| e.to_string())?;
-        Ok(Some(parsed))
-    }
-
-    let token = ol
-        .client
-        .access_token()
-        .ok_or_else(|| "not authenticated".to_string())?;
-    let first: Option<Resp> =
-        one_shot(&token, &url, method.clone(), body_value.as_ref()).await?;
-    if let Some(val) = first {
-        return Ok(val);
-    }
-
-    // 401：尝试 refresh 后再试一次。
-    if !ol.ensure_fresh_token().await {
-        clear_session(ol);
-        if let Err(e) = app.emit(AUTH_LOST_EVENT, ()) {
-            log::warn!("openloaf: emit auth-lost failed: {e}");
-        }
-        return Err("session expired".into());
-    }
-    let token2 = ol
-        .client
-        .access_token()
-        .ok_or_else(|| "not authenticated".to_string())?;
-    let second: Option<Resp> = one_shot(&token2, &url, method, body_value.as_ref()).await?;
-    second.ok_or_else(|| "still 401 after refresh".into())
-}
-
-// ─── 支付 / 订阅 ────────────────────────────────────────────────
-
-/// 响应统一是 `{ success, data: {...} }`。
-#[derive(Debug, Deserialize)]
-struct ApiEnvelope<T> {
-    #[serde(default)]
-    #[allow(dead_code)]
-    success: Option<bool>,
-    data: T,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawProviderData {
-    #[serde(default)]
-    code_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawOrderResult {
-    order_id: String,
-    #[serde(default)]
-    provider_data: Option<RawProviderData>,
-    #[serde(default)]
-    upgrade_payable: Option<f64>,
-}
-
-/// 扁平结构吐给前端，避免前端再扒 providerData。
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentOrder {
-    pub order_id: String,
-    pub code_url: Option<String>,
-    /// 仅 upgrade 接口会填：补差价金额（元）。
-    pub upgrade_payable: Option<f64>,
-}
-
-impl From<RawOrderResult> for PaymentOrder {
-    fn from(r: RawOrderResult) -> Self {
-        Self {
-            order_id: r.order_id,
-            code_url: r.provider_data.and_then(|p| p.code_url),
-            upgrade_payable: r.upgrade_payable,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentOrderStatus {
-    pub order_id: String,
-    /// "pending" | "paid" | "refunded" | "closed" | "failed"
-    pub status: String,
-    /// "subscription" | "recharge" | "upgrade"
-    #[serde(default)]
-    pub r#type: Option<String>,
-    #[serde(default)]
-    pub amount: Option<f64>,
-    #[serde(default)]
-    pub paid_at: Option<String>,
-}
-
-#[tauri::command]
-pub async fn openloaf_payment_subscribe(
-    app: AppHandle,
-    state: State<'_, SharedOpenLoaf>,
-    plan_code: String,
-    period: String,
-) -> Result<PaymentOrder, String> {
-    let ol = state.inner().clone();
-    let body = serde_json::json!({ "planCode": plan_code, "period": period });
-    let env: ApiEnvelope<RawOrderResult> = rest_json(
-        &app,
-        &ol,
-        reqwest::Method::POST,
-        "/api/payment/subscribe",
-        Some(&body),
-    )
-    .await?;
-    Ok(env.data.into())
-}
-
-#[tauri::command]
-pub async fn openloaf_payment_recharge(
-    app: AppHandle,
-    state: State<'_, SharedOpenLoaf>,
-    amount: f64,
-) -> Result<PaymentOrder, String> {
-    let ol = state.inner().clone();
-    let body = serde_json::json!({ "amount": amount });
-    let env: ApiEnvelope<RawOrderResult> = rest_json(
-        &app,
-        &ol,
-        reqwest::Method::POST,
-        "/api/payment/recharge",
-        Some(&body),
-    )
-    .await?;
-    Ok(env.data.into())
-}
-
-#[tauri::command]
-pub async fn openloaf_payment_upgrade(
-    app: AppHandle,
-    state: State<'_, SharedOpenLoaf>,
-    new_plan_code: String,
-) -> Result<PaymentOrder, String> {
-    let ol = state.inner().clone();
-    let body = serde_json::json!({ "newPlanCode": new_plan_code });
-    let env: ApiEnvelope<RawOrderResult> = rest_json(
-        &app,
-        &ol,
-        reqwest::Method::POST,
-        "/api/payment/upgrade",
-        Some(&body),
-    )
-    .await?;
-    Ok(env.data.into())
-}
-
-#[tauri::command]
-pub async fn openloaf_payment_order_status(
-    app: AppHandle,
-    state: State<'_, SharedOpenLoaf>,
-    order_id: String,
-) -> Result<PaymentOrderStatus, String> {
-    let ol = state.inner().clone();
-    let path = format!("/api/payment/order/{order_id}");
-    // GET，无 body；Req 类型给个 unit 占位。
-    let env: ApiEnvelope<PaymentOrderStatus> = rest_json::<(), _>(
-        &app,
-        &ol,
-        reqwest::Method::GET,
-        &path,
-        None,
-    )
-    .await?;
-    Ok(env.data)
 }
 
 // ─── 本地回调 handler（callback.rs 调入） ─────────────────────────

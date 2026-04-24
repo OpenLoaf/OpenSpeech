@@ -275,15 +275,24 @@ export default function Layout() {
         </nav>
 
         {/* Credits rail：账号积分仪表，仅登录 + profile 拉回后渲染。
-            放在 nav 与底部按钮之间，避免把账户按钮撑成双行破坏对称。 */}
+            放在 nav 与底部按钮之间，避免把账户按钮撑成双行破坏对称。
+            Pro 及以上套餐 SaaS 调用无限（见 docs/subscription.md），积分数不再是瓶颈，
+            这里换成 UNLIMITED 标记，避免误导用户"积分会减少"。 */}
         {isAuthenticated && profile ? (
           <div className="flex items-baseline justify-between gap-2 border-t border-te-gray px-5 py-3">
             <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
               Credits
             </span>
-            <span className="font-mono text-base font-bold tracking-tighter text-te-fg tabular-nums">
-              {Math.round(profile.creditsBalance).toLocaleString("zh-CN")}
-            </span>
+            {profile.membershipLevel === "pro" ||
+            profile.membershipLevel === "premium" ? (
+              <span className="font-mono text-xs font-bold uppercase tracking-[0.25em] text-te-accent">
+                UNLIMITED
+              </span>
+            ) : (
+              <span className="font-mono text-base font-bold tracking-tighter text-te-fg tabular-nums">
+                {Math.round(profile.creditsBalance).toLocaleString("zh-CN")}
+              </span>
+            )}
           </div>
         ) : null}
 

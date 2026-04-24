@@ -27,9 +27,7 @@ import { HotkeyField } from "@/components/HotkeyField";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import {
   BINDING_IDS,
-  BINDING_LABELS,
   findConflict,
-  formatBinding,
   type BindingId,
   type HotkeyBinding,
 } from "@/lib/hotkey";
@@ -323,7 +321,6 @@ function LevelMeter({ peak }: { peak: number }) {
 const UNDO_WINDOW_MS = 8000;
 
 function HotkeysSection() {
-  const platform = detectPlatform();
   const bindings = useHotkeysStore((s) => s.bindings);
   const setBinding = useHotkeysStore((s) => s.setBinding);
   const recordUndo = useHotkeysStore((s) => s.recordUndo);
@@ -332,7 +329,6 @@ function HotkeysSection() {
     id: BindingId,
     newValue: HotkeyBinding | null,
   ) => {
-    const prevValue = bindings[id];
     const conflictId =
       newValue && findConflict(bindings, newValue, id);
     if (conflictId) {
@@ -346,34 +342,9 @@ function HotkeysSection() {
         newValue,
         expiresAt: Date.now() + UNDO_WINDOW_MS,
       });
-      toast(
-        `已替换：「${BINDING_LABELS[id]}」→ ${formatBinding(newValue, platform)}（「${BINDING_LABELS[conflictId]}」已清空）`,
-        {
-          duration: UNDO_WINDOW_MS,
-          action: {
-            label: "撤销",
-            onClick: async () => {
-              await setBinding(conflictId, replacedOld);
-              await setBinding(id, prevValue);
-            },
-          },
-        },
-      );
       return;
     }
     await setBinding(id, newValue);
-    toast(
-      `「${BINDING_LABELS[id]}」→ ${formatBinding(newValue, platform)}`,
-      {
-        duration: UNDO_WINDOW_MS,
-        action: {
-          label: "撤销",
-          onClick: async () => {
-            await setBinding(id, prevValue);
-          },
-        },
-      },
-    );
   };
 
   const handleCheckConflict = (candidate: HotkeyBinding, excludeId: BindingId) =>
