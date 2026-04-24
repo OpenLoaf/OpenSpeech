@@ -1,0 +1,54 @@
+[package]
+name = "openspeech"
+version = "0.1.0"
+description = "OpenSpeech - AI voice input desktop app"
+authors = ["OpenSpeech"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "openspeech_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-store = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-log = "2"
+log = "0.4"
+cpal = "0.17.3"
+hound = "3.5.1"
+zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
+keyring = "3.6.3"
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "http2", "json", "multipart", "stream"] }
+enigo = "0.6.1"
+openloaf-saas = { path = "vendor/openloaf-saas" }
+tiny_http = "0.12"
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
+rdev = "0.5.3"
+# TODO(modifier-only): 真正实现 modifier_only.rs 时切到 rustdesk-org/rdev fork
+# 以获得 `Modifiers::FN` 与更稳的 macOS Accessibility 处理：
+#   rdev = { git = "https://github.com/rustdesk-org/rdev" }
+# 切换前务必确认网络能访问 github.com（国内直连常失败），否则走本地 clone + path dep。
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2.7"
+

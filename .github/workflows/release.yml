@@ -1,0 +1,95 @@
+name: Release
+
+# 触发方式：本地 `pnpm version <major|minor|patch>` 会自动改 package.json + Cargo.toml
+# 并 commit + 打 tag；`git push && git push --tags` 之后这条 workflow 被 `v*` tag 触发。
+#
+# 首次启用前必做（一次性）：
+# 1. `pnpm tauri signer generate -w ~/.tauri/openspeech.key` 生成签名密钥
+# 2. 把输出的 pub key 贴到 src-tauri/tauri.conf.json → plugins.updater.pubkey
+# 3. 把 ~/.tauri/openspeech.key 的内容和设置时的密码配到 GitHub → Settings → Secrets:
+#    - TAURI_SIGNING_PRIVATE_KEY           (整个 key 文件内容)
+#    - TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (生成时输入的密码，无密码就留空)
+#
+# 产物：三端 installer (.app.tar.gz / .nsis.zip / .AppImage.tar.gz) + 对应 .sig +
+# latest.json（tauri-action 自动聚合三端），发布为 **draft** Release。确认无误后
+# 在 GitHub UI 手动点 "Publish release"，客户端的 updater 才会看见新版本。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS 打 universal (arm64 + x86_64) 单产物，省得前端做架构探测。
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Tauri 2 的 Linux 依赖：webkit2gtk-4.1（不是 4.0）、ayatana appindicator、librsvg2。
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'OpenSpeech ${{ github.ref_name }}'
+          releaseBody: |
+            Auto-generated release.
+
+            See commit log for changes. Binaries below will be picked up by the in-app
+            auto-updater once this draft is published.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          includeUpdaterJson: true
