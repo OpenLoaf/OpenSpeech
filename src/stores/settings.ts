@@ -9,6 +9,9 @@ const SCHEMA_VERSION = 2;
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
 export type InjectMethod = "CLIPBOARD + PASTE" | "SIMULATE KEYBOARD";
 export type Sensitivity = "LOW" | "NORMAL" | "HIGH";
+// 听写源：SAAS = OpenLoaf 云端（扣积分 / Pro+ 无限）；BYO = 用户自己的 REST 端点。
+// 详见 docs/subscription.md。
+export type DictationSource = "SAAS" | "BYO";
 
 export interface GeneralSettings {
   interfaceLang: string;
@@ -18,6 +21,9 @@ export interface GeneralSettings {
   // 空串 = 跟随系统默认麦克风；非空 = cpal 枚举出的设备名
   inputDevice: string;
   cueSound: boolean;
+  // 听写源：SAAS 默认（需登录 OpenLoaf）；BYO 用户自带 REST 端点，不走 SaaS 不扣积分。
+  // UI 开关尚未接入（文档已描述），字段先在 schema 里占位。
+  dictationSource: DictationSource;
   endpoint: string;
   modelName: string;
   timeout: string;
@@ -60,6 +66,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   langVariant: "EN-US",
   inputDevice: "",
   cueSound: true,
+  dictationSource: "SAAS",
   endpoint: "",
   modelName: "",
   timeout: "30",
