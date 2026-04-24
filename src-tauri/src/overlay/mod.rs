@@ -71,6 +71,15 @@ fn position_to_bottom_center<R: Runtime>(
 }
 
 pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    // 主窗口 focused 时跳过：Home 页的 Live 面板已经提供了 overlay 的全部信息
+    // （状态标签 + 波形 + 实时文字占位），再在屏幕底部叠一个浮窗属于视觉重复。
+    // 真正需要 overlay 的场景是用户在别的 app 里说话（主窗口失焦）。
+    if let Some(main) = app.get_webview_window("main") {
+        if main.is_focused().unwrap_or(false) {
+            eprintln!("[overlay] skip show: main window focused");
+            return Ok(());
+        }
+    }
     ensure_overlay(app)?;
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         position_to_bottom_center(&w)?;

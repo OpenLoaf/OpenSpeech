@@ -18,6 +18,9 @@ use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
 };
 
+pub mod modifier_only;
+pub use modifier_only::SharedModifierOnlyState;
+
 pub const HOTKEY_EVENT: &str = "openspeech://hotkey";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -130,7 +133,31 @@ pub fn apply_bindings<R: Runtime>(
     // 整个 unregister→register 流程独占锁，避免并发 apply 交错造成系统层重复注册。
     let mut s = state.lock().map_err(|e| e.to_string())?;
 
-    // 1. 先计算目标集合，便于幂等判断。
+    // 先把 modifier-only 路径分流出去（走 rdev 订阅，不占用系统快捷键注册名额）。
+    let modifier_only_bindings: Vec<(String, HotkeyBinding)> = payload
+        .bindings
+        .iter()
+        .filter_map(|(id_str, maybe)| {
+            let b = maybe.as_ref()?;
+            if b.kind == "modifierOnly" {
+                Some((id_str.clone(), b.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if let Some(mo_state) = app.try_state::<SharedModifierOnlyState>() {
+        if let Err(e) = modifier_only::apply(&mo_state, &modifier_only_bindings) {
+            eprintln!("[hotkey] modifier_only apply failed: {e}");
+        }
+    } else {
+        eprintln!(
+            "[hotkey] SharedModifierOnlyState missing; skip {} modifier-only binding(s)",
+            modifier_only_bindings.len()
+        );
+    }
+
+    // 1. 先计算 combo 目标集合，便于幂等判断。
     let mut desired: HashMap<Shortcut, (String, BindingId, HotkeyMode)> = HashMap::new();
     for (id_str, maybe) in &payload.bindings {
         let Some(id) = parse_binding_id(id_str) else {
@@ -141,15 +168,14 @@ pub fn apply_bindings<R: Runtime>(
             eprintln!("[hotkey]   skip null binding: {id_str}");
             continue;
         };
-        // tauri-plugin-global-shortcut 天然只支持 combo（修饰键 + 主键）。
-        // modifierOnly / doubleTap 走另一条路径（rdev 订阅），暂未实现——
-        // 先 skip，让前端其他 combo 绑定正常注册，避免整体 apply 失败。
+        // modifierOnly 已在上方分流；doubleTap 待实现，先 skip。
         if binding.kind != "combo" {
-            eprintln!(
-                "[hotkey]   skip non-combo binding {id_str}: kind={} \
-                 (modifier-only / double-tap 后续通过 rdev 订阅实现)",
-                binding.kind
-            );
+            if binding.kind != "modifierOnly" {
+                eprintln!(
+                    "[hotkey]   skip non-combo binding {id_str}: kind={} (not yet implemented)",
+                    binding.kind
+                );
+            }
             continue;
         }
         let Some(sc) = build_shortcut(binding) else {
@@ -266,4 +292,58 @@ pub async fn apply_hotkey_config<R: Runtime>(
     payload: HotkeyConfigPayload,
 ) -> Result<(), String> {
     apply_bindings(&app, &payload)
+}
+
+/// 录入期间从 OS 层反注册所有 combo——避免用户在录入框里按到 `Ctrl+Shift+Space`
+/// 时原听写快捷键同时被系统触发。`HotkeyState.active` 保留不动，作为"目标快照"
+/// 供 `resume_combos` 恢复。
+fn pause_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let state = app
+        .try_state::<SharedHotkeyState>()
+        .ok_or_else(|| "HotkeyState missing".to_string())?;
+    let plugin = app.global_shortcut();
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let mut count = 0;
+    for sc in s.active.keys() {
+        if plugin.unregister(*sc).is_ok() {
+            count += 1;
+        }
+    }
+    eprintln!("[hotkey] pause_combos: unregistered {count} shortcut(s)");
+    Ok(())
+}
+
+fn resume_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let state = app
+        .try_state::<SharedHotkeyState>()
+        .ok_or_else(|| "HotkeyState missing".to_string())?;
+    let plugin = app.global_shortcut();
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let mut count = 0;
+    for sc in s.active.keys() {
+        match plugin.register(*sc) {
+            Ok(()) => count += 1,
+            Err(e) => eprintln!("[hotkey] resume_combos: register {sc:?} failed: {e:?}"),
+        }
+    }
+    eprintln!("[hotkey] resume_combos: re-registered {count} shortcut(s)");
+    Ok(())
+}
+
+/// 前端 HotkeyField 进入/退出录入态时调用。两件事必须成对：
+/// 1. `modifier_only::set_recording` —— rdev 事件 pass-through 到
+///    `openspeech://hotkey-recording`，让 Fn 等 DOM 收不到的键可录入
+/// 2. `pause_combos` / `resume_combos` —— 反/重注册 OS 层的 combo 快捷键，
+///    避免用户按到已绑定的组合时误触发原功能
+#[tauri::command]
+pub fn set_hotkey_recording<R: Runtime>(app: AppHandle<R>, enabled: bool) {
+    modifier_only::set_recording(enabled);
+    let res = if enabled {
+        pause_combos(&app)
+    } else {
+        resume_combos(&app)
+    };
+    if let Err(e) = res {
+        eprintln!("[hotkey] set_hotkey_recording({enabled}) combo toggle failed: {e}");
+    }
 }

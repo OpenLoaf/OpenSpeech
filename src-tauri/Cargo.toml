@@ -34,7 +34,7 @@ keyring = "3.6.3"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "http2", "json", "multipart", "stream"] }
 enigo = "0.6.1"
-openloaf-saas = { path = "vendor/openloaf-saas" }
+openloaf-saas = "0.2.6"
 tiny_http = "0.12"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
@@ -43,11 +43,12 @@ url = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
-rdev = "0.5.3"
-# TODO(modifier-only): 真正实现 modifier_only.rs 时切到 rustdesk-org/rdev fork
-# 以获得 `Modifiers::FN` 与更稳的 macOS Accessibility 处理：
-#   rdev = { git = "https://github.com/rustdesk-org/rdev" }
-# 切换前务必确认网络能访问 github.com（国内直连常失败），否则走本地 clone + path dep。
+# RustDesk fork —— 修了 crates.io 0.5.3 在 macOS 上的致命 bug（子线程跑 listen
+# 遇到第一个 key event 就让进程静默 abort；Handy 项目切 fork 的真正原因）。
+# 按 commit 精确 pin，cargo 只查本地 `~/.cargo/git/db/rdev-*/`，不走网络——
+# 国内直连 GitHub 不稳时这点很关键。新环境首次 clone 项目若 db 里没此 commit
+# 才需要联网拉一次（或走代理 / 本地 clone 后改 path = "..."）。
+rdev = { git = "https://github.com/rustdesk-org/rdev", rev = "a90dbe11" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"

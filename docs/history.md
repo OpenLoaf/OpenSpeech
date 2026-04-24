@@ -1,19 +1,31 @@
 # 历史记录规则
 
+## 存储位置
+
+本地 SQLite：`openspeech.db` 的 `history` 表，落在 Tauri `app_data_dir` 下（各平台路径见 `docs/privacy.md`）。
+
 ## 每条记录包含
 
 | 字段 | 说明 |
 |---|---|
-| id | 唯一 ID |
+| id | 唯一 ID，格式 `YYYYMMDDHHMMSSmmm-xxxx`（17 位本地时间到毫秒 + 4 位 base36 随机）。字典序 == 时间序，便于按日期检索。生成逻辑见 `src/lib/ids.ts`。 |
 | type | 类型：`dictation`（听写） / `ask`（问 AI） / `translate`（翻译） |
 | text | 转写/生成的最终文字 |
 | status | `success` / `failed` / `cancelled` |
 | error | 失败原因（仅 failed 时有值） |
 | duration_ms | 录音时长 |
-| created_at | 时间戳 |
+| created_at | Unix 时间戳（毫秒） |
 | target_app | 注入目标应用的可识别名称（如 "VSCode"、"Chrome"）；若无法获取则为空 |
+| audio_path | 录音 WAV 文件的**相对路径**（如 `recordings/<id>.wav`，相对 `app_data_dir`）。未保存音频的记录（如 `cancelled`、或未来"关闭音频保存"设置开启时）该字段为 NULL |
 
-**不保存**：原始音频、模型请求/响应的完整内容。
+**不保存**：模型请求/响应的完整内容（仅保留最终 `text`）。
+
+## 录音文件
+
+- 每条 `success` / `failed` 记录对应一个 WAV 文件，路径由 `audio_path` 指向；实际文件落在 `app_data_dir/recordings/` 下。
+- 文件名即 `id`（带 `.wav` 后缀），因此文件系统和数据库始终通过同一 ID 对齐。
+- `cancelled` 记录按规则"请求未发出 ⇒ 不生成记录；请求已发出 ⇒ 生成记录但保留 text 不注入"；音频是否落盘取决于录音是否持续到 stop 点（当前实现：cancelled 不落盘，保留灵活度）。
+- 删除一条记录 / 清空历史 / retention 到期清理时，对应的 WAV 文件必须同步删除（由后端清理 orchestrator 负责，见 task #13）。
 
 ## 保留策略
 
@@ -41,6 +53,7 @@
 ## 操作
 
 每条记录支持：
+- **播放原始录音**（仅当 `audio_path` 非空）：直接在列表内播放本机 WAV 文件；同一时刻最多只有一条录音在播，切到别的行会自动暂停当前。右侧的状态图标（✓）在有录音时替换为 Play/Pause 按钮。
 - **复制**：复制 text 到剪贴板。
 - **重新注入**：把 text 写入当前焦点输入框。
 - **重试**（仅 failed 记录）：重新发送原始请求到大模型。

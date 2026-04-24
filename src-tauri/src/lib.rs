@@ -1,4 +1,10 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+
+// objc 0.2.x 的 msg_send! 宏内部仍在用 cfg(feature = "cargo-clippy")，新 rustc 在
+// 宏展开点报 unexpected_cfgs lint。函数级 / mod 级 #[allow] 都覆盖不到展开 token，
+// 必须 crate 级 inner attribute 才生效。upstream 不再维护，无法通过升级解决。
+#![allow(unexpected_cfgs)]
+
 use tauri::{
     Emitter, Manager, Runtime, WindowEvent,
     menu::{
@@ -14,10 +20,12 @@ use tauri_plugin_store::StoreExt;
 use tauri::ActivationPolicy;
 
 mod audio;
+mod db;
 mod hotkey;
 mod openloaf;
 mod overlay;
 mod secrets;
+mod stt;
 
 // 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
 const CLOSE_REQUESTED_EVENT: &str = "openspeech://close-requested";
@@ -251,7 +259,11 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_sql::Builder::new().build())
+        .plugin(
+            tauri_plugin_sql::Builder::new()
+                .add_migrations(db::DB_URL, db::migrations())
+                .build(),
+        )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -275,6 +287,14 @@ pub fn run() {
             if let Err(e) = overlay::ensure_overlay(&app.handle()) {
                 eprintln!("[overlay] ensure failed: {e:?}");
             }
+
+            // ---- modifier-only 全局键盘订阅（rdev::listen 跑在独立线程）----
+            // 负责 Fn / Ctrl+Win / Right Alt 等"按住即触发"绑定——
+            // tauri-plugin-global-shortcut 不接受这种绑定。依赖 rustdesk-org/rdev
+            // fork（见 Cargo.toml）。首启 macOS 会弹 Accessibility 权限；用户拒绝
+            // 时 listen 返回 Err，已在模块内打印并不影响主流程。
+            let mo_state = hotkey::modifier_only::init(app.handle().clone());
+            app.manage(mo_state);
 
             // ---- macOS：按 settings.showDockIcon 设置初始 ActivationPolicy ----
             // 默认 true（Regular / 显示 Dock 图标）；用户上次关过则启动后即切 Accessory，
@@ -437,6 +457,7 @@ pub fn run() {
             tray_refresh,
             sync_dock_icon,
             hotkey::apply_hotkey_config,
+            hotkey::set_hotkey_recording,
             overlay::overlay_show,
             overlay::overlay_hide,
             secrets::secret_set,
@@ -455,6 +476,13 @@ pub fn run() {
             audio::audio_level_start,
             audio::audio_level_stop,
             audio::audio_list_input_devices,
+            audio::audio_recording_start,
+            audio::audio_recording_stop,
+            audio::audio_recording_cancel,
+            audio::audio_recording_load,
+            stt::stt_start,
+            stt::stt_finalize,
+            stt::stt_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
