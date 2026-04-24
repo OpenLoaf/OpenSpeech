@@ -129,6 +129,15 @@ impl OpenLoafState {
         }
     }
 
+    /// 返回一个已登录状态的 `SaaSClient` 克隆（access_token 已设）。
+    /// 未登录返回 None。供 `stt` 等下游模块在不手搓 401 处理的前提下复用同一个客户端
+    /// —— SaaSClient 内部 token 是 Arc<RwLock<Option<String>>>，clone 后仍指向同一份，
+    /// 所以这里拿到的 client 跟 refresh 线程写入的 token 会自动同步。
+    pub fn authenticated_client(&self) -> Option<SaaSClient> {
+        self.client.access_token().as_ref()?;
+        Some(self.client.clone())
+    }
+
     fn current_user(&self) -> Option<PublicUser> {
         self.user.lock().ok().and_then(|g| g.clone())
     }
@@ -720,11 +729,6 @@ fn emit_login(app: &AppHandle, state: &str, result: Result<PublicUser, String>) 
 
 /// 在 setup 中调用。
 pub async fn bootstrap(app: &AppHandle) {
-    if let Err(e) = openloaf_saas::check_abi() {
-        log::error!("openloaf: ABI check failed: {e}");
-        return;
-    }
-
     // 启动本地回调 server。
     let shared: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
     match callback::start(app.clone()) {

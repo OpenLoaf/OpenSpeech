@@ -4,7 +4,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { BindingId, HotkeyBinding } from "@/lib/hotkey";
 import { useSettingsStore } from "@/stores/settings";
-import { startAudioLevel, stopAudioLevel } from "@/lib/audio";
+import { useHistoryStore } from "@/stores/history";
+import {
+  startAudioLevel,
+  stopAudioLevel,
+  startRecordingToFile,
+  stopRecordingAndSave,
+  cancelRecording,
+  type RecordingResult,
+} from "@/lib/audio";
+import {
+  startSttSession,
+  finalizeSttSession,
+  cancelSttSession,
+} from "@/lib/stt";
+import { newId } from "@/lib/ids";
 
 export type RecordingState =
   | "idle"
@@ -32,6 +46,18 @@ interface RecordingStore {
   lastPressAt: number;
   startedListening: boolean;
   audioLevels: number[];
+  /**
+   * 当前会话的 history.id——pressed 时前端生成（`newId()`），同时作为 WAV
+   * 文件名（`recordings/<id>.wav`）。落盘 / 写 history / 取消都走同一个 id。
+   * idle 态为 null。
+   */
+  recordingId: string | null;
+  /**
+   * 实时 ASR partial 文本：Rust 转发 `openspeech://asr-partial` 事件时更新。
+   * UI（悬浮录音条 / 设置预览）可以直接订阅这个字段展示流式转写结果。
+   * recording → idle 过渡时清空；Final 事件到达时替换为最终文字。
+   */
+  liveTranscript: string;
   initListeners: () => Promise<void>;
   syncBindings: (
     bindings: Record<BindingId, HotkeyBinding | null>,
@@ -61,6 +87,74 @@ const stopMic = () => {
   void stopAudioLevel();
 };
 
+// 下面几个带副作用的 recording helper 仅主窗口执行——overlay 也会跑状态机来
+// 驱动自身 UI，但 Rust 侧 recording_slot / stt session 都是进程全局单例，只允许
+// 一方写入。
+const startRecordingSession = (id: string) => {
+  if (!IS_MAIN_WINDOW) return;
+  void startRecordingToFile(id).then(() => {
+    // 录音 session 已建立（`audio_recording_start` 里读过 stream_info），
+    // 这时调 stt_start 最稳——Rust 侧也会再读一次 stream_info 拿 sampleRate/
+    // channels 塞给 realtime `send_start`。未登录 / stream 未就绪 / realtime
+    // connect 失败都只打警告不抛；本地录音继续，history 会以占位文字落盘。
+    startSttSession().catch((e) => {
+      console.warn("[stt] start failed (fallback to local-only recording):", e);
+    });
+  }).catch((e) => {
+    console.error("[recording] start recording failed:", e);
+  });
+};
+
+// STT 失败 / 超时时 history.text 的占位——保留之前"待转写"语义，区分 success 与 failed
+// 状态：有 Final 文字 → success；空串 → failed（此时 text 用占位，UI 可据 status 分别展示）。
+const TRANSCRIPT_PLACEHOLDER = "（未能获取转写结果）";
+
+type FinalizeOutcome = {
+  rec: RecordingResult | null;
+  text: string; // 最终转写文字，空串表示失败 / 超时
+};
+
+/**
+ * 主窗口独占：并行结束 Rust 录音 + ASR finalize，两者结果 merge 写 history。
+ * 顺序无强依赖（音频已在 cpal 回调里实时流给 realtime；stop_recording 只是
+ * flush WAV 文件），用 allSettled 让两边互不连累。
+ */
+const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
+  if (!IS_MAIN_WINDOW) return { rec: null, text: "" };
+  const [recSettled, sttSettled] = await Promise.allSettled([
+    stopRecordingAndSave(),
+    finalizeSttSession(),
+  ]);
+  const rec = recSettled.status === "fulfilled" ? recSettled.value : null;
+  const text =
+    sttSettled.status === "fulfilled" && sttSettled.value ? sttSettled.value : "";
+
+  if (sttSettled.status === "rejected") {
+    console.warn("[stt] finalize failed:", sttSettled.reason);
+  }
+  if (recSettled.status === "rejected") {
+    console.error("[recording] stop failed:", recSettled.reason);
+  }
+
+  if (rec) {
+    await useHistoryStore.getState().add({
+      type: "dictation",
+      text: text || TRANSCRIPT_PLACEHOLDER,
+      status: text ? "success" : "failed",
+      error: text ? undefined : "no final transcript",
+      duration_ms: rec.duration_ms,
+      audio_path: rec.audio_path,
+    });
+  }
+  return { rec, text };
+};
+
+const discardRecording = () => {
+  if (!IS_MAIN_WINDOW) return;
+  void cancelRecording();
+  void cancelSttSession();
+};
+
 export const useRecordingStore = create<RecordingStore>((set, get) => {
   const unlistens: UnlistenFn[] = [];
 
@@ -72,6 +166,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     lastPressAt: 0,
     startedListening: false,
     audioLevels: emptyLevels(),
+    recordingId: null,
+    liveTranscript: "",
 
     initListeners: async () => {
       if (get().startedListening) {
@@ -97,32 +193,44 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           ) {
             const duration = now - cur.lastPressAt;
             if (duration < PREPARING_MS) {
-              // < 300ms 算误触（快速双击），不进转写
+              // < 300ms 算误触（快速双击），丢弃 samples、不写 history
+              discardRecording();
               stopMic();
               set({
                 state: "idle",
                 activeId: null,
                 activeMode: null,
                 audioLevels: emptyLevels(),
+                recordingId: null,
+                liveTranscript: "",
               });
               return;
             }
-            // 正常结束：进入 transcribing → injecting → idle（占位，task #13 接入真实 STT）
+            // 正常结束：停录音 → 写 history → 占位 transcribing → injecting → idle
             stopMic();
             set({ state: "transcribing", audioLevels: emptyLevels() });
-            window.setTimeout(() => {
-              if (get().state !== "transcribing") return;
-              set({ state: "injecting" });
+            void finalizeAndWriteHistory().finally(() => {
               window.setTimeout(() => {
-                if (get().state !== "injecting") return;
-                set({ state: "idle", activeId: null, activeMode: null });
-              }, 200);
-            }, 800);
+                if (get().state !== "transcribing") return;
+                set({ state: "injecting" });
+                window.setTimeout(() => {
+                  if (get().state !== "injecting") return;
+                  set({
+                    state: "idle",
+                    activeId: null,
+                    activeMode: null,
+                    recordingId: null,
+                    liveTranscript: "",
+                  });
+                }, 200);
+              }, 800);
+            });
             return;
           }
 
           // Transcribing 态忽略新的触发（见 voice-input-flow.md）
           if (cur.state !== "idle" && cur.state !== "error") return;
+          const recordingId = newId();
           set({
             state: "preparing",
             activeId: id,
@@ -130,11 +238,17 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             errorMessage: null,
             lastPressAt: now,
             audioLevels: emptyLevels(),
+            recordingId,
+            liveTranscript: "",
           });
           startMic();
+          // 300ms 后 mic stream 已稳定才启动 Rust 录音 session——
+          // 避免 stream_info 为 None 导致 start 失败。若此时 user 已经松手
+          // 误触取消（< 300ms 分支），state 已经回到 idle，下面会 skip。
           window.setTimeout(() => {
             const s = get();
             if (s.state === "preparing" && s.activeId === id) {
+              startRecordingSession(recordingId);
               set({ state: "recording" });
             }
           }, PREPARING_MS);
@@ -151,40 +265,53 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         }
 
         if (duration < PREPARING_MS) {
-          // 误触：< 300ms
+          // 误触：< 300ms，丢弃 samples 不写 history
+          discardRecording();
           stopMic();
           set({
             state: "idle",
             activeId: null,
             activeMode: null,
             audioLevels: emptyLevels(),
+            recordingId: null,
+            liveTranscript: "",
           });
           return;
         }
 
-        // 正常：进入 transcribing → 暂时占位（task #13 接入真实 STT）
+        // 正常：停 Rust 录音 → 落盘 → 写 history → 占位 UI
         stopMic();
         set({ state: "transcribing", audioLevels: emptyLevels() });
-        // 模拟转写 + 注入的占位延迟，保证 UI 可观察
-        window.setTimeout(() => {
-          if (get().state !== "transcribing") return;
-          set({ state: "injecting" });
+        void finalizeAndWriteHistory().finally(() => {
           window.setTimeout(() => {
-            if (get().state !== "injecting") return;
-            set({ state: "idle", activeId: null, activeMode: null });
-          }, 200);
-        }, 800);
+            if (get().state !== "transcribing") return;
+            set({ state: "injecting" });
+            window.setTimeout(() => {
+              if (get().state !== "injecting") return;
+              set({
+                state: "idle",
+                activeId: null,
+                activeMode: null,
+                recordingId: null,
+                liveTranscript: "",
+              });
+            }, 200);
+          }, 800);
+        });
       });
 
       const u2 = await listen<{ id: string; error: string }>(
         "openspeech://hotkey/register-failed",
         (evt) => {
           console.warn("[recording] register-failed:", evt.payload);
+          discardRecording();
           stopMic();
           set({
             state: "error",
             errorMessage: `注册失败：${evt.payload.id}（${evt.payload.error}）`,
             audioLevels: emptyLevels(),
+            recordingId: null,
+            liveTranscript: "",
           });
         },
       );
@@ -210,9 +337,47 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      unlistens.push(u1, u2, u3);
+      // 实时 ASR 事件——Rust stt worker 把 RealtimeEvent 转成这些 Tauri emit。
+      // partial / final 更新 liveTranscript（UI 可订阅）；error / closed
+      // （尤其 insufficient_credits）切到 error 态。
+      const u4 = await listen<string>("openspeech://asr-partial", (evt) => {
+        set({ liveTranscript: String(evt.payload ?? "") });
+      });
+      const u5 = await listen<string>("openspeech://asr-final", (evt) => {
+        set({ liveTranscript: String(evt.payload ?? "") });
+      });
+      const u6 = await listen<{ code: string; message: string }>(
+        "openspeech://asr-error",
+        (evt) => {
+          console.warn("[stt] asr-error:", evt.payload);
+          // 不直接切 error 态——finalize 结果会被 allSettled 捕获，history 按
+          // status=failed 落盘；若用户正在按键中（recording 态），保留继续录音
+          // 的机会，由用户松手后走 failed 分支。
+        },
+      );
+      const u7 = await listen<{ reason: string; totalCredits: number }>(
+        "openspeech://asr-closed",
+        (evt) => {
+          const { reason } = evt.payload ?? { reason: "unknown", totalCredits: 0 };
+          if (reason === "insufficient_credits") {
+            discardRecording();
+            stopMic();
+            set({
+              state: "error",
+              errorMessage: "余额不足，已取消本次转写",
+              audioLevels: emptyLevels(),
+              recordingId: null,
+              liveTranscript: "",
+            });
+          } else if (reason === "idle_timeout" || reason === "max_duration") {
+            console.warn("[stt] session closed by server:", reason);
+          }
+        },
+      );
+
+      unlistens.push(u1, u2, u3, u4, u5, u6, u7);
       console.log(
-        "[recording] listeners attached (hotkey + register-failed + audio-level)",
+        "[recording] listeners attached (hotkey + register-failed + audio-level + asr-*)",
       );
     },
 
@@ -239,16 +404,21 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         activeMode: null,
         errorMessage: null,
         audioLevels: emptyLevels(),
+        recordingId: null,
+        liveTranscript: "",
       });
     },
 
     simulateCancel: () => {
+      discardRecording();
       stopMic();
       set({
         state: "idle",
         activeId: null,
         activeMode: null,
         audioLevels: emptyLevels(),
+        recordingId: null,
+        liveTranscript: "",
       });
     },
 
@@ -257,14 +427,22 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       if (cur.state !== "recording" && cur.state !== "preparing") return;
       stopMic();
       set({ state: "transcribing", audioLevels: emptyLevels() });
-      window.setTimeout(() => {
-        if (get().state !== "transcribing") return;
-        set({ state: "injecting" });
+      void finalizeAndWriteHistory().finally(() => {
         window.setTimeout(() => {
-          if (get().state !== "injecting") return;
-          set({ state: "idle", activeId: null, activeMode: null });
-        }, 200);
-      }, 800);
+          if (get().state !== "transcribing") return;
+          set({ state: "injecting" });
+          window.setTimeout(() => {
+            if (get().state !== "injecting") return;
+            set({
+              state: "idle",
+              activeId: null,
+              activeMode: null,
+              recordingId: null,
+              liveTranscript: "",
+            });
+          }, 200);
+        }, 800);
+      });
     },
   };
 });

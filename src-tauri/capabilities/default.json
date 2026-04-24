@@ -11,6 +11,18 @@
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
     "opener:default",
-    "store:default"
+    "store:default",
+    {
+      "identifier": "sql:allow-load",
+      "allow": [{ "url": "sqlite:openspeech.db" }]
+    },
+    {
+      "identifier": "sql:allow-execute",
+      "allow": [{ "url": "sqlite:openspeech.db" }]
+    },
+    {
+      "identifier": "sql:allow-select",
+      "allow": [{ "url": "sqlite:openspeech.db" }]
+    }
   ]
 }

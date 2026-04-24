@@ -10,42 +10,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SearchBox } from "@/components/SearchBox";
-
-type Source = "manual" | "auto";
-
-interface DictEntry {
-  id: string;
-  term: string;
-  aliases?: string[];
-  source: Source;
-}
+import { useDictionaryStore, type DictEntry } from "@/stores/dictionary";
 
 type FilterKey = "all" | "auto" | "manual";
-
-const SEED_ENTRIES: DictEntry[] = [
-  {
-    id: "t-01",
-    term: "OpenSpeech",
-    aliases: ["open speech", "open-speech"],
-    source: "manual",
-  },
-  { id: "t-02", term: "Tauri", source: "manual" },
-  { id: "t-03", term: "cpal", source: "manual" },
-  { id: "t-04", term: "enigo", source: "manual" },
-  {
-    id: "t-05",
-    term: "shadcn/ui",
-    aliases: ["shadcn ui", "shad-cn"],
-    source: "manual",
-  },
-  { id: "t-06", term: "TypeLess", source: "auto" },
-  { id: "t-07", term: "Whisper", source: "auto" },
-  { id: "t-08", term: "Deepgram", source: "manual" },
-  { id: "t-09", term: "SQLite", source: "manual" },
-  { id: "t-10", term: "Keychain", source: "manual" },
-  { id: "t-11", term: "ydotool", source: "auto" },
-  { id: "t-12", term: "Wayland", source: "manual" },
-];
 
 const FILTERS: { key: FilterKey; label: string; Icon?: typeof Sparkles }[] = [
   { key: "all", label: "全部" },
@@ -54,20 +21,16 @@ const FILTERS: { key: FilterKey; label: string; Icon?: typeof Sparkles }[] = [
 ];
 
 export default function DictionaryPage() {
-  const [entries, setEntries] = useState<DictEntry[]>(SEED_ENTRIES);
+  const entries = useDictionaryStore((s) => s.entries);
+  const addToDb = useDictionaryStore((s) => s.add);
+  const removeFromDb = useDictionaryStore((s) => s.remove);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
   const [newOpen, setNewOpen] = useState(false);
 
-  const addEntry = (term: string) =>
-    setEntries((prev) => [
-      {
-        id: `t-${Date.now().toString(36)}`,
-        term,
-        source: "manual",
-      },
-      ...prev,
-    ]);
+  const addEntry = async (term: string) => {
+    await addToDb({ term });
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -75,12 +38,13 @@ export default function DictionaryPage() {
       if (filter !== "all" && e.source !== filter) return false;
       if (!q) return true;
       if (e.term.toLowerCase().includes(q)) return true;
-      return e.aliases?.some((a) => a.toLowerCase().includes(q)) ?? false;
+      return e.aliases.some((a) => a.toLowerCase().includes(q));
     });
   }, [entries, filter, query]);
 
-  const removeEntry = (id: string) =>
-    setEntries((prev) => prev.filter((e) => e.id !== id));
+  const removeEntry = async (id: string) => {
+    await removeFromDb(id);
+  };
 
   return (
     <section className="flex h-full flex-col bg-te-bg">
@@ -177,7 +141,9 @@ export default function DictionaryPage() {
                     key={entry.id}
                     entry={entry}
                     index={index}
-                    onDelete={() => removeEntry(entry.id)}
+                    onDelete={() => {
+                      void removeEntry(entry.id);
+                    }}
                   />
                 ))}
               </div>
@@ -205,7 +171,7 @@ export default function DictionaryPage() {
 interface NewWordDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onAdd: (term: string) => void;
+  onAdd: (term: string) => Promise<void>;
   existingTerms: string[];
 }
 
@@ -217,10 +183,12 @@ function NewWordDialog({
 }: NewWordDialogProps) {
   const [term, setTerm] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const reset = () => {
     setTerm("");
     setError(null);
+    setSubmitting(false);
   };
 
   const handleOpenChange = (v: boolean) => {
@@ -228,7 +196,8 @@ function NewWordDialog({
     onOpenChange(v);
   };
 
-  const submit = () => {
+  const submit = async () => {
+    if (submitting) return;
     const normalized = term.trim().replace(/\s+/g, " ");
     if (!normalized) {
       setError("term 不能为空");
@@ -238,9 +207,15 @@ function NewWordDialog({
       setError("该词条已存在");
       return;
     }
-    onAdd(normalized);
-    reset();
-    onOpenChange(false);
+    setSubmitting(true);
+    try {
+      await onAdd(normalized);
+      reset();
+      onOpenChange(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -269,7 +244,7 @@ function NewWordDialog({
                 if (error) setError(null);
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
+                if (e.key === "Enter") void submit();
               }}
               placeholder="例如 OpenSpeech"
               className="border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg placeholder:text-te-light-gray focus:border-te-accent focus:outline-none"
@@ -293,10 +268,11 @@ function NewWordDialog({
           </button>
           <button
             type="button"
-            onClick={submit}
-            className="bg-te-accent px-4 py-1.5 font-mono text-xs uppercase tracking-wider text-te-accent-fg transition-[filter] hover:brightness-110"
+            onClick={() => void submit()}
+            disabled={submitting}
+            className="bg-te-accent px-4 py-1.5 font-mono text-xs uppercase tracking-wider text-te-accent-fg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            添加
+            {submitting ? "添加中…" : "添加"}
           </button>
         </DialogFooter>
       </DialogContent>

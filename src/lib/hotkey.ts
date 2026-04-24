@@ -19,11 +19,11 @@ export interface HotkeyBinding {
 }
 
 export const MOD_ORDER: readonly HotkeyMod[] = [
+  "fn",
   "ctrl",
   "alt",
   "shift",
   "meta",
-  "fn",
 ];
 
 // 听写合并为单一 binding：hold / toggle 模式由 UI 开关切换 → 写回

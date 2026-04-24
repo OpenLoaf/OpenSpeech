@@ -1,7 +1,18 @@
-import { Fragment, useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { cn } from "@/lib/utils";
+import { useHotkeysStore } from "@/stores/hotkeys";
+import { useRecordingStore, type RecordingState } from "@/stores/recording";
+import {
+  codeToMod,
+  formatCode,
+  normalizeMods,
+  type HotkeyBinding,
+  type HotkeyMod,
+} from "@/lib/hotkey";
+import { detectPlatform, type Platform } from "@/lib/platform";
 
 /* ──────────────────────────────────────────────────────────────── */
 /*  Hotkey preview — 按键监听                                        */
@@ -9,11 +20,88 @@ import { cn } from "@/lib/utils";
 
 type KeyToken = { id: string; label: string };
 
-// 首页展示的"默认快捷键"是视觉占位（真实绑定由 hotkeys store 管，详见 docs/hotkeys.md）
-const DEFAULT_KEYS: readonly KeyToken[] = [
-  { id: "Fn", label: "Fn" },
-  { id: "ControlLeft", label: "Left Ctrl" },
-];
+// 首页的听写快捷键 token：与 settings 里的 dictate_ptt binding 保持同源。
+type HotkeyToken =
+  | { kind: "mod"; mod: HotkeyMod; label: string; icon: string | null }
+  | { kind: "main"; code: string; label: string; icon: string | null }
+  | { kind: "prefix"; label: string };
+
+function modLabel(mod: HotkeyMod, platform: Platform): string {
+  if (mod === "fn") return "Fn";
+  if (mod === "shift") return "Shift";
+  if (mod === "alt") return platform === "macos" ? "Option" : "Alt";
+  if (mod === "ctrl") return "Ctrl";
+  if (platform === "macos") return "Cmd";
+  if (platform === "windows") return "Win";
+  return "Super";
+}
+
+// 修饰键的视觉图标：macOS 用传统符号 (⌃⌥⇧⌘)，Windows 用 ⊞（Win 键），Linux 用 ◆（Super）
+// fn 没有通用图形符号，label 已经写着 "Fn"，不再重复渲染图标
+function modIcon(mod: HotkeyMod, platform: Platform): string | null {
+  if (mod === "fn") return null;
+  if (mod === "ctrl") return "⌃";
+  if (mod === "shift") return "⇧";
+  if (mod === "alt") return "⌥";
+  // meta
+  if (platform === "macos") return "⌘";
+  if (platform === "windows") return "⊞";
+  return "◆";
+}
+
+// 非字母数字主键的图标（箭头已经由 formatCode 返回图形字符，这里补 Enter / Esc 等）
+const MAIN_ICON: Record<string, string> = {
+  Enter: "↵",
+  Escape: "⎋",
+  Tab: "⇥",
+  Backspace: "⌫",
+  Delete: "⌦",
+  Space: "␣",
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+};
+
+function mainIcon(code: string): string | null {
+  return MAIN_ICON[code] ?? null;
+}
+
+function tokensFromBinding(
+  binding: HotkeyBinding | null,
+  platform: Platform,
+): HotkeyToken[] {
+  if (!binding) return [];
+  const tokens: HotkeyToken[] = [];
+  if (binding.kind === "doubleTap") {
+    tokens.push({ kind: "prefix", label: "2×" });
+  }
+  // 应用当前 MOD_ORDER，确保 fn 排最前（老存档也会重新排序）
+  for (const mod of normalizeMods(binding.mods)) {
+    tokens.push({
+      kind: "mod",
+      mod,
+      label: modLabel(mod, platform),
+      icon: modIcon(mod, platform),
+    });
+  }
+  if (binding.kind === "combo" && binding.code) {
+    tokens.push({
+      kind: "main",
+      code: binding.code,
+      label: formatCode(binding.code),
+      icon: mainIcon(binding.code),
+    });
+  }
+  return tokens;
+}
+
+function tokenMatches(token: HotkeyToken, pressed: KeyToken | null): boolean {
+  if (!pressed) return false;
+  if (token.kind === "mod") return codeToMod(pressed.id) === token.mod;
+  if (token.kind === "main") return token.code === pressed.id;
+  return false;
+}
 
 const CODE_LABEL: Record<string, string> = {
   ControlLeft: "Left Ctrl",
@@ -74,6 +162,116 @@ function Kbd({
   );
 }
 
+/* ──────────────────────────────────────────────────────────────── */
+/*  Live dictation panel — 按下听写快捷键后替换快捷键卡片            */
+/* ──────────────────────────────────────────────────────────────── */
+
+/**
+ * 波形：把 recording store 里的 audioLevels（0..1 peak，20Hz 滑动窗口）画成 bars。
+ * 选用 60 条刚好对应 ~3 秒历史；每帧 CSS height transition 做柔化，省 canvas。
+ */
+function Waveform({
+  levels,
+  active,
+}: {
+  levels: number[];
+  active: boolean;
+}) {
+  return (
+    <div className="flex h-16 w-full items-center gap-[2px]">
+      {levels.map((v, i) => {
+        // 0..1 映射到 8..100%；对数曲线让轻声的细微波动也可见
+        const height = Math.max(8, Math.min(100, Math.pow(v, 0.55) * 110));
+        return (
+          <div
+            key={i}
+            className={cn(
+              "flex-1 rounded-[1px] transition-[height] duration-75 ease-out",
+              active ? "bg-te-accent" : "bg-te-gray/60",
+            )}
+            style={{ height: `${height}%` }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function statusCopy(state: RecordingState): { tag: string; hint: string } {
+  switch (state) {
+    case "preparing":
+      return { tag: "// READY", hint: "准备中，开始说话…" };
+    case "recording":
+      return { tag: "// LISTENING", hint: "松开快捷键结束录音" };
+    case "transcribing":
+      return { tag: "// TRANSCRIBING", hint: "正在转写…" };
+    case "injecting":
+      return { tag: "// INJECTING", hint: "正在写入当前输入框…" };
+    case "error":
+      return { tag: "// ERROR", hint: "出错了，检查日志或重试" };
+    default:
+      return { tag: "// IDLE", hint: "" };
+  }
+}
+
+/**
+ * Live 面板：state ≠ idle 时替换 HOTKEY CARD 主体。三栏布局：
+ *   ┌──────────────┬───────────────────────────────┐
+ *   │ 波形         │ 实时转写文字（占位，待接入） │
+ *   └──────────────┴───────────────────────────────┘
+ * 实时文字接入 STT 流后从 recording store 里拿对应字段填入即可。
+ */
+function LiveDictationPanel({
+  state,
+  audioLevels,
+}: {
+  state: RecordingState;
+  audioLevels: number[];
+}) {
+  const { tag, hint } = statusCopy(state);
+  const waveActive = state === "preparing" || state === "recording";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between">
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-widest md:text-xs",
+            state === "error" ? "text-te-accent" : "text-te-accent",
+            waveActive && "animate-[pulse_1.2s_ease-in-out_infinite]",
+          )}
+        >
+          {tag}
+        </span>
+        <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
+          LIVE
+        </span>
+      </div>
+
+      <div className="grid grid-cols-[minmax(0,40%)_minmax(0,1fr)] gap-4 md:gap-6">
+        {/* 左：音频波形 */}
+        <div className="flex flex-col gap-2">
+          <Waveform levels={audioLevels} active={waveActive} />
+          <span className="font-mono text-[9px] uppercase tracking-widest text-te-light-gray md:text-[10px]">
+            AUDIO · {audioLevels.length} SAMPLES
+          </span>
+        </div>
+
+        {/* 右：实时文字（占位；STT 接入后把流式结果填在这里） */}
+        <div className="flex min-h-[4rem] flex-col justify-between border-l border-te-gray/40 pl-4 md:pl-6">
+          <p className="font-sans text-xs text-te-light-gray md:text-sm">
+            {/* TODO(stt): 接入流式转写后，把 partial 文字渲染在此处；accent 色高亮正在听的词 */}
+            <span className="text-te-fg/40">实时转写文字将出现在这里…</span>
+          </p>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+            {hint}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type StatProps = {
   index: string;
   label: string;
@@ -118,27 +316,98 @@ function StatCard({ index, label, value, unit }: StatProps) {
 
 export default function HomePage() {
   const [pressed, setPressed] = useState<KeyToken | null>(null);
+  // 首页快捷键展示与 settings 同源：读取 dictate_ptt 的实时 binding
+  const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
+  const platform = detectPlatform();
+  const tokens = useMemo(
+    () => tokensFromBinding(binding, platform),
+    [binding, platform],
+  );
+  // hold / toggle 模式决定副标题文案
+  const modeHint =
+    binding?.mode === "toggle" ? "单击切换 · 再按停止" : "按住说话 · 松开插入";
+
+  // 录音状态：非 idle 时 HOTKEY CARD 主体换成 Live 面板（波形 + 实时文字占位）。
+  // audioLevels 由 Rust `openspeech://audio-level` 事件驱动，recording store 维护。
+  const recState = useRecordingStore((s) => s.state);
+  const audioLevels = useRecordingStore((s) => s.audioLevels);
+  const isLive = recState !== "idle";
+
+  // 按键预览：优先走 Rust `openspeech://key-preview`（rdev 无条件 emit，macOS 下
+  // Fn 键只有这条路能拿到）；DOM keydown 作为兜底，覆盖 rdev 权限未授予 / Rust
+  // 还没初始化好的极短窗口。两路写同一个 pressed state，以最后一个为准足够用。
+  //
+  // 防抖：短按（press/release 间隔很短）时高亮态只闪一帧就消失，看起来很抖；
+  // 释放延迟 ~180ms 再清除 pressed，同时任何新的按下都会取消 pending 清除，
+  // 连续按键也能平滑过渡。
+  const clearTimerRef = useRef<number | null>(null);
+  const applyPressed = useCallback((next: KeyToken | null) => {
+    if (clearTimerRef.current !== null) {
+      window.clearTimeout(clearTimerRef.current);
+      clearTimerRef.current = null;
+    }
+    if (next !== null) {
+      setPressed(next);
+      return;
+    }
+    clearTimerRef.current = window.setTimeout(() => {
+      setPressed(null);
+      clearTimerRef.current = null;
+    }, 180);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (clearTimerRef.current !== null) {
+        window.clearTimeout(clearTimerRef.current);
+        clearTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      setPressed(keyFromEvent(e));
+      applyPressed(keyFromEvent(e));
     };
-    const clear = () => setPressed(null);
+    const clear = () => applyPressed(null);
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", clear);
-    // 窗口失焦 / 隐藏时清空，避免卡在高亮态
     window.addEventListener("blur", clear);
     return () => {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", clear);
       window.removeEventListener("blur", clear);
     };
-  }, []);
+  }, [applyPressed]);
 
-  const matchedDefault = pressed
-    ? DEFAULT_KEYS.find((k) => k.id === pressed.id)
-    : undefined;
+  useEffect(() => {
+    let cancelled = false;
+    let unsub: UnlistenFn | null = null;
+    listen<{ code: string; phase: "pressed" | "released" }>(
+      "openspeech://key-preview",
+      (ev) => {
+        const { code, phase } = ev.payload;
+        if (phase === "pressed") {
+          applyPressed({ id: code, label: CODE_LABEL[code] ?? code });
+        } else {
+          applyPressed(null);
+        }
+      },
+    ).then((un) => {
+      if (cancelled) un();
+      else unsub = un;
+    });
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [applyPressed]);
+
+  const pressedMatchesBinding = pressed
+    ? tokens.some((t) => tokenMatches(t, pressed))
+    : false;
 
   return (
     <section className="relative flex h-full flex-col overflow-hidden bg-te-bg">
@@ -200,47 +469,83 @@ export default function HomePage() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.4, delay: 0.03 }}
-              className="w-full border border-te-gray/60 bg-te-surface p-4 md:p-5"
+              className={cn(
+                "w-full border bg-te-surface p-4 transition-colors md:p-5",
+                isLive ? "border-te-accent/80" : "border-te-gray/60",
+              )}
             >
-              <div className="flex items-start justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
-                  默认快捷键 / PUSH-TO-TALK
-                </span>
-                <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
-                  01
-                </span>
-              </div>
+              <AnimatePresence mode="wait" initial={false}>
+                {isLive ? (
+                  <motion.div
+                    key="live"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.18 }}
+                  >
+                    <LiveDictationPanel
+                      state={recState}
+                      audioLevels={audioLevels}
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="preview"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.18 }}
+                  >
+                    <div className="flex items-start justify-between">
+                      <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
+                        听写快捷键 / PUSH-TO-TALK
+                      </span>
+                      <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
+                        01
+                      </span>
+                    </div>
 
-              <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div className="flex items-center gap-3">
-                  {pressed === null || matchedDefault ? (
-                    DEFAULT_KEYS.map((k, i) => (
-                      <Fragment key={k.id}>
-                        {i > 0 && (
-                          <span className="font-mono text-xl text-te-light-gray">
-                            +
-                          </span>
+                    <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="flex items-center gap-3">
+                        {tokens.length === 0 ? (
+                          <Kbd>未绑定</Kbd>
+                        ) : pressed === null || pressedMatchesBinding ? (
+                          tokens.map((t, i) => (
+                            <Fragment key={i}>
+                              {i > 0 && (
+                                <span className="font-mono text-xl text-te-light-gray">
+                                  +
+                                </span>
+                              )}
+                              <Kbd highlight={tokenMatches(t, pressed)}>
+                                {/* 特殊按键（修饰键 / 非字母主键）前缀一个图标 */}
+                                {t.kind !== "prefix" && t.icon ? (
+                                  <span aria-hidden className="mr-1.5 opacity-60">
+                                    {t.icon}
+                                  </span>
+                                ) : null}
+                                {t.label}
+                              </Kbd>
+                            </Fragment>
+                          ))
+                        ) : (
+                          <Kbd>{pressed.label}</Kbd>
                         )}
-                        <Kbd highlight={matchedDefault?.id === k.id}>
-                          {k.label}
-                        </Kbd>
-                      </Fragment>
-                    ))
-                  ) : (
-                    <Kbd>{pressed.label}</Kbd>
-                  )}
-                </div>
+                      </div>
 
-                <div className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
-                  按住说话 · 松开插入
-                </div>
-              </div>
+                      <div className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+                        {modeHint}
+                      </div>
+                    </div>
 
-              <p className="mt-3 max-w-2xl font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
-                按住开始录音，松开即把转写结果写入当前输入框。按
-                <span className="mx-1 font-mono text-te-fg">Esc</span>
-                取消；焦点必须在可编辑区域。
-              </p>
+                    <p className="mt-3 max-w-2xl font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
+                      按住开始录音，松开即把转写结果写入当前输入框。按
+                      <span className="mx-1 font-mono text-te-fg">Esc</span>
+                      取消；焦点必须在可编辑区域。
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           </div>
 

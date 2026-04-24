@@ -39,27 +39,24 @@
 4. **必须存在可写入的光标焦点**才会开始录音；若系统焦点在不可编辑的区域（桌面、菜单栏、只读窗口），触发时给出轻提示"当前位置无输入框"，不进入 Recording。
 
 ### 录音
-1. 默认采样率 16 kHz、单声道、16-bit PCM（符合主流 STT API 要求）。
-2. 录音最长时长默认 60 秒；超过时长自动结束并触发转写。
-3. 录音过程中按 `Esc` 立即取消，不发送到大模型；若大模型请求已发出并返回，按 [history.md](./history.md#cancelled-状态规则) 规则处理（保留转写进历史、不注入）。
-4. 录音文件不落盘；仅在内存中持有，转写完成后立即释放。
-5. **内存音频必须 zeroize**：使用 `Zeroizing<Vec<u8>>` 容器，panic/崩溃 handler 显式清零，避免 crash dump / swap 泄露。
+1. 采样率 / 声道数**跟随系统默认输入设备**（多数 Mac/Win 会是 44.1 kHz 或 48 kHz 立体声）；**不做重采样**，采集到的 f32 原样进 WAV（16-bit PCM 编码）。送到 SaaS realtime ASR 的帧在 cpal 回调里临时做 mono downmix + PCM16 量化，不影响落盘文件。
+2. 录音最长时长默认 60 秒；超过时长自动结束并触发 finalize。
+3. 录音过程中按 `Esc` 立即取消：同时 `audio_recording_cancel`（丢 PCM buffer）+ `stt_cancel`（关 realtime WebSocket，丢弃已到达的 Partial / Final）；**本次不写 history**。
+4. 录音采集阶段在内存缓冲（`Zeroizing<Vec<f32>>`），**松开快捷键时并行**：Rust 落盘 `recordings/<id>.wav` + realtime session 发 `send_finish` 等 Final。路径与 DB schema 见 [privacy.md](./privacy.md#录音文件落盘路径) 与 [history.md](./history.md#录音文件)。
+5. **内存音频必须 zeroize**：`Zeroizing<Vec<u8>>` 容器承载采集期的 PCM；落盘到 WAV 文件后，内存副本立即 drop（zeroize 自动触发）。panic/崩溃 handler 同样显式清零，避免 crash dump / swap 泄露。
 6. **松开事件丢失兜底**：PTT 模式下若用户按下后立即 Cmd+Tab 切走应用，`tauri-plugin-global-shortcut` 的 Released 事件可能丢失。应用在进入 Recording 时，全局键事件监听线程（`rdev`）同时订阅所有已注册快捷键的修饰键 keystate；每 200 ms 查询一次当前物理键状态，若检测到原组合已全部释放则主动触发"松开"逻辑。该机制 + 最长录音时长双重兜底。
 7. **录音设备变更**：录音中若系统默认输入设备切换（拔耳机 / 切蓝牙），cpal 会发出 device change 事件；静默 rebind 到新默认设备，悬浮条闪一下 `DEVICE SWITCHED` 提示，录音不中断；若 rebind 失败则进入 Error。
 8. **麦克风被其他应用抢占**：cpal stream error → 立即进入 Error，错误文案"麦克风被其他应用占用"。
 
-### 转写
-1. 通过用户在设置中配置的 REST 端点调用大模型。
-2. 请求中附带：音频数据、词典 hints（若启用）、上下文风格提示（若启用 F16；包含当前前台应用名）。
-3. **语种由模型自动检测**，用户无需在录音前手动切换语言；如用户在设置中强制指定，则以用户指定为准。
-4. 超时默认 30 秒；超时视为失败，进入 Error 状态。
-5. 转写失败时，保留用户录音的内存副本 **不超过 10 秒**，仅用于"点击重试"按钮，超时即丢弃并 zeroize。
-6. AI 自动润色（F15）在转写完成后作为可选后处理阶段进行；用户可全局关闭。润色不得改变数字、专有名词、命令指令的原始含义。
-7. **请求发出后用户改了 STT 配置**：以请求发出时的配置快照为准，in-flight 请求用旧配置直到完成或超时；设置 UI 上对已变更配置显示"将在下次录音生效"提示。
-8. **Transcribing 态 Esc 的精确语义**：Esc 立即对 in-flight `reqwest::Request` 调用 `AbortController::abort()`：
-   - 若 abort 成功（响应尚未完全返回）→ 丢弃，不写历史，状态机回 Idle。
-   - 若 abort 失败（响应体已完整接收并开始反序列化）→ 仍完成反序列化，按 `cancelled-with-text` 写入历史，**不执行注入**（见 [history.md](./history.md#cancelled-状态规则)）。
-   - 两种情况悬浮条都立刻 fade out；用户感知一致。
+### 转写（通过 OpenLoaf SaaS realtime ASR）
+1. **走 `openloaf-saas` Rust SDK 的 `client.realtime().connect("realtimeASR")` WebSocket 通道**，不是传统 REST 批量上传。cpal 回调边录边把 PCM16 帧喂给 session，服务端边识别边下发 Partial/Final/Credits 事件。实现见 `src-tauri/src/stt/mod.rs`；SDK 用法见 skill `.claude/skills/openloaf-saas-sdk-rust/`。
+2. 按下快捷键 → `startRecordingToFile(id)` 成功后立刻 `startSttSession()` 建连并发 start 帧（`lang=zh / sampleRate=<设备原生> / channels=<设备原生> / encoding=pcm16`），cpal 回调自此把每帧都转发到 realtime worker。
+3. 松开快捷键 → `stopRecordingAndSave` 与 `finalizeSttSession` **并行** `allSettled`：前者落 WAV，后者发 `send_finish` 等最多 `FINALIZE_WAIT_MS = 3s` 拿 Final。Final 非空 → history.status=success；空串 / 超时 / session 异常 → history.status=failed（text 占位 `（未能获取转写结果）`）。
+4. **未登录直接拒**：`stt_start` 会先检查 `OpenLoafState::authenticated_client()`；未登录则只本地录音 + 落 history 占位文字，不建 WS 连接。UI 由 Account 流程引导登录。
+5. **余额不足**：服务端下发 `closed{reason:"insufficient_credits"}`；前端 `openspeech://asr-closed` 监听到后立即切 Error 态，文案"余额不足，已取消本次转写"。
+6. **idle 60s / 2h max-duration** 服务端会主动关 session——OpenSpeech 的 hold-to-speak + 60s 录音上限远低于此，正常不会触发；若真的触发，视为会话结束、history 按 failed 落。
+7. **语种**：MVP 固定 `lang=zh`；未来在 Settings "听写 → 语言" 里提供下拉覆盖 start 帧 `lang` 字段。
+8. **Transcribing 态 Esc 的精确语义**：UI 立即调 `stt_cancel` 关会话，丢弃任何已到达的 Partial / Final；history 不落盘（等同"用户没完成一次完整说话"）。
 
 ### 注入
 1. 注入目标 = **按下**快捷键时快照的焦点应用 + 焦点输入框（不是松开时，避免用户说话过程中切换焦点造成不确定性）。

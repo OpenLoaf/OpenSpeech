@@ -2,19 +2,31 @@
 
 ## 承诺
 
-1. **录音不落盘**：音频仅在内存中存在，转写完成或失败丢弃后立即释放。
+1. **录音落盘仅限本机**：每次录音可选落盘到应用数据目录下的 `recordings/<id>.wav`（见下方路径规则）。文件永不上传；随对应历史记录的保留策略一并清理；用户可在设置中关闭音频保存或手动清空。
 2. **不上传遥测**：除用户主动配置的大模型 REST 端点外，OpenSpeech **不向任何服务器发送数据**（包括不做匿名使用统计）。
-3. **数据本地化**：历史记录、词典、设置均存储在本地设备。
+3. **数据本地化**：历史记录、词典、设置、录音音频均存储在本地设备。
 4. **API Key 加密**：大模型密钥存储在系统密钥管理服务中（macOS Keychain / Windows Credential Manager / Linux Secret Service），不明文存储。
+
+## 录音文件落盘路径
+
+落在 Tauri `app_data_dir` 下的 `recordings/` 子目录，具体位置因 OS 而异：
+
+| OS | 路径 |
+|---|---|
+| macOS | `~/Library/Application Support/com.openspeech.app/recordings/<id>.wav` |
+| Windows | `%APPDATA%\com.openspeech.app\recordings\<id>.wav` |
+| Linux | `~/.local/share/com.openspeech.app/recordings/<id>.wav` |
+
+文件名即 `history.id`（格式 `YYYYMMDDHHMMSSmmm-xxxx`，字典序 = 时间序），方便按日期检索。数据库 `history.audio_path` 存相对路径（如 `"recordings/20260424140521438-a3b9.wav"`），跨机备份/还原时不依赖绝对路径。
 
 ## 数据分类
 
 | 数据 | 存储位置 | 保留策略 |
 |---|---|---|
-| 录音音频 | 内存 | 转写完成立即释放；失败保留 ≤10 秒用于重试 |
-| 转写文字 | 本地 SQLite | 按用户设置的历史保留策略 |
-| 历史元数据（时间、目标应用、时长） | 本地 SQLite | 同上 |
-| 词典条目 | 本地 SQLite | 由用户手动管理 |
+| 录音音频 | 本地文件系统（`recordings/<id>.wav`） | 跟随历史记录保留策略；删除记录或清空历史时一并删除文件 |
+| 转写文字 | 本地 SQLite（`openspeech.db` 的 `history` 表） | 按用户设置的历史保留策略 |
+| 历史元数据（时间、目标应用、时长、音频文件引用） | 本地 SQLite | 同上 |
+| 词典条目 | 本地 SQLite（`dictionary` 表） | 由用户手动管理 |
 | 设置偏好 | 本地配置文件 | 永久 |
 | API Key | 系统密钥服务 | 由用户手动管理 |
 

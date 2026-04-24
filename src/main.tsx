@@ -8,6 +8,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import OverlayPage from "@/pages/Overlay";
 import { useAuthStore } from "@/stores/auth";
+import { useDictionaryStore } from "@/stores/dictionary";
+import { useHistoryStore } from "@/stores/history";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
@@ -38,6 +40,8 @@ const bootPromise = (async () => {
       useHotkeysStore.getState().init(),
       useSettingsStore.getState().init(),
       useAuthStore.getState().init(),
+      useHistoryStore.getState().init(),
+      useDictionaryStore.getState().init(),
     ]);
     console.log("[boot] stores ready; bindings =", useHotkeysStore.getState().bindings);
 

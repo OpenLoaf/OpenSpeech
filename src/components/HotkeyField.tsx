@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, AlertCircle } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
   BINDING_LABELS,
@@ -15,6 +17,13 @@ import {
   type HotkeyMod,
 } from "@/lib/hotkey";
 import { detectPlatform } from "@/lib/platform";
+
+// Rust 侧 emit 的事件名（见 src-tauri/src/hotkey/modifier_only.rs）
+const RECORDING_EVENT = "openspeech://hotkey-recording";
+interface RecordingPayload {
+  code: string;
+  phase: "pressed" | "released";
+}
 
 interface Props {
   id: BindingId;
@@ -32,7 +41,13 @@ interface Props {
 type FieldState =
   | { kind: "idle" }
   | { kind: "settling"; until: number }
-  | { kind: "recording"; startedAt: number; pressedMods: HotkeyMod[] }
+  | {
+      kind: "recording";
+      startedAt: number;
+      pressedMods: HotkeyMod[];
+      everPressedMods: HotkeyMod[];
+      sawMainKey: boolean;
+    }
   | { kind: "error"; message: string }
   | { kind: "conflict"; with: BindingId; candidate: HotkeyBinding };
 
@@ -56,28 +71,64 @@ export function HotkeyField({
 
   // pressedMods 的真实来源——避免 keydown 闭包捕获旧值。
   const pressedModsRef = useRef<HotkeyMod[]>([]);
+  // 本次录入过程中按下过的所有修饰键（即使已松开），用于 modifier-only 完成判定。
+  const everPressedModsRef = useRef<HotkeyMod[]>([]);
+  // 录入中是否按过非修饰主键（按过 → 走 combo 路径；否则松开时作为 modifier-only）。
+  const sawMainKeyRef = useRef<boolean>(false);
+  // 避免组件卸载后 invoke(false) / state 更新引发 warning。
+  const recordingActiveRef = useRef<boolean>(false);
+
+  const startRustRecording = () => {
+    if (recordingActiveRef.current) return;
+    recordingActiveRef.current = true;
+    invoke("set_hotkey_recording", { enabled: true }).catch((e) =>
+      console.warn("[HotkeyField] set_hotkey_recording(true) failed:", e),
+    );
+  };
+
+  const stopRustRecording = () => {
+    if (!recordingActiveRef.current) return;
+    recordingActiveRef.current = false;
+    invoke("set_hotkey_recording", { enabled: false }).catch((e) =>
+      console.warn("[HotkeyField] set_hotkey_recording(false) failed:", e),
+    );
+  };
 
   // 进入录入态
   const enterRecording = () => {
     if (state.kind !== "idle") return;
     pressedModsRef.current = [];
+    everPressedModsRef.current = [];
+    sawMainKeyRef.current = false;
     setState({ kind: "settling", until: Date.now() + SETTLING_MS });
     window.setTimeout(() => {
-      setState({ kind: "recording", startedAt: Date.now(), pressedMods: [] });
+      setState({
+        kind: "recording",
+        startedAt: Date.now(),
+        pressedMods: [],
+        everPressedMods: [],
+        sawMainKey: false,
+      });
+      startRustRecording();
       // 5 秒超时取消
       timeoutRef.current = window.setTimeout(() => {
+        stopRustRecording();
         setState({ kind: "idle" });
       }, RECORDING_TIMEOUT_MS);
     }, SETTLING_MS);
   };
 
   const exitToIdle = () => {
+    stopRustRecording();
     if (timeoutRef.current) {
       window.clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
     setState({ kind: "idle" });
   };
+
+  // 组件卸载时确保 Rust 侧录入模式关闭（防 panel 被关掉后 rdev 仍吞事件）。
+  useEffect(() => stopRustRecording, []);
 
   const flashError = (message: string) => {
     setState({ kind: "error", message });
@@ -106,64 +157,108 @@ export function HotkeyField({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.kind]);
 
-  // 键盘监听
-  useEffect(() => {
-    if (state.kind !== "recording") return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.code === "Escape") {
-        exitToIdle();
-        return;
-      }
-      if (isModifierCode(e.code)) {
-        const mod = codeToMod(e.code);
-        if (!mod) return;
+  // DOM 和 Rust 两路事件共用的核心逻辑。纯基于 code 字符串（Rust 侧也归一化成
+  // KeyboardEvent.code 风格；Fn 用约定 token "Fn"）。
+  const handlePressRef = useRef<(code: string) => void>(() => {});
+  const handleReleaseRef = useRef<(code: string) => void>(() => {});
+  handlePressRef.current = (code: string) => {
+    if (code === "Escape") {
+      exitToIdle();
+      return;
+    }
+    if (isModifierCode(code)) {
+      const mod = codeToMod(code);
+      if (!mod) return;
+      if (!pressedModsRef.current.includes(mod)) {
         pressedModsRef.current = normalizeMods([
           ...pressedModsRef.current,
           mod,
         ]);
-        setState((s) =>
-          s.kind === "recording"
-            ? { ...s, pressedMods: pressedModsRef.current }
-            : s,
-        );
-        return;
       }
-      // 主键按下——读 ref 拿到最新的 pressedMods，避免闭包捕获旧值
-      const mods = normalizeMods(pressedModsRef.current);
-      const legal = isLegalMainKey(e.code, mods, allowSpecialKeys);
-      if (!legal.ok) {
-        flashError(legal.reason ?? "非法组合");
-        return;
+      if (!everPressedModsRef.current.includes(mod)) {
+        everPressedModsRef.current = normalizeMods([
+          ...everPressedModsRef.current,
+          mod,
+        ]);
       }
+      setState((s) =>
+        s.kind === "recording"
+          ? {
+              ...s,
+              pressedMods: pressedModsRef.current,
+              everPressedMods: everPressedModsRef.current,
+            }
+          : s,
+      );
+      return;
+    }
+    // 主键按下 → 走 combo 判定
+    sawMainKeyRef.current = true;
+    const mods = normalizeMods(pressedModsRef.current);
+    const legal = isLegalMainKey(code, mods, allowSpecialKeys);
+    if (!legal.ok) {
+      flashError(legal.reason ?? "非法组合");
+      return;
+    }
+    const candidate: HotkeyBinding = {
+      kind: "combo",
+      mods,
+      code,
+      mode: value?.mode ?? DEFAULT_MODE[id],
+    };
+    const conflictId = onConflictCheck(candidate);
+    if (conflictId && conflictId !== id) {
+      setState({ kind: "conflict", with: conflictId, candidate });
+      stopRustRecording();
+      return;
+    }
+    onChange(candidate);
+    exitToIdle();
+  };
+  handleReleaseRef.current = (code: string) => {
+    if (!isModifierCode(code)) return;
+    const mod = codeToMod(code);
+    if (!mod) return;
+    pressedModsRef.current = pressedModsRef.current.filter((m) => m !== mod);
+    setState((s) =>
+      s.kind === "recording"
+        ? { ...s, pressedMods: pressedModsRef.current }
+        : s,
+    );
+    // 全部修饰键松开 + 录入期间没按过主键 + 至少按过 1 个修饰键 → modifier-only
+    if (
+      pressedModsRef.current.length === 0 &&
+      !sawMainKeyRef.current &&
+      everPressedModsRef.current.length > 0
+    ) {
+      const mods = everPressedModsRef.current;
       const candidate: HotkeyBinding = {
-        kind: "combo",
+        kind: "modifierOnly",
         mods,
-        code: e.code,
+        code: "",
         mode: value?.mode ?? DEFAULT_MODE[id],
       };
       const conflictId = onConflictCheck(candidate);
       if (conflictId && conflictId !== id) {
         setState({ kind: "conflict", with: conflictId, candidate });
+        stopRustRecording();
         return;
       }
       onChange(candidate);
       exitToIdle();
+    }
+  };
+
+  // DOM 键盘监听（普通 combo 路径；Fn 键在 macOS 上 DOM 收不到，由下方 Tauri 事件补齐）
+  useEffect(() => {
+    if (state.kind !== "recording") return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handlePressRef.current(e.code);
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (isModifierCode(e.code)) {
-        const mod = codeToMod(e.code);
-        if (!mod) return;
-        pressedModsRef.current = pressedModsRef.current.filter(
-          (m) => m !== mod,
-        );
-        setState((s) =>
-          s.kind === "recording"
-            ? { ...s, pressedMods: pressedModsRef.current }
-            : s,
-        );
-      }
+      handleReleaseRef.current(e.code);
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     window.addEventListener("keyup", onKeyUp, { capture: true });
@@ -171,8 +266,27 @@ export function HotkeyField({
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       window.removeEventListener("keyup", onKeyUp, { capture: true });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.kind, allowSpecialKeys]);
+  }, [state.kind]);
+
+  // Tauri rdev 通道——macOS 上 Fn 键只有这条路能收到。
+  // Rust 侧在录入模式下把所有 press/release pass-through 过来（不参与 binding 匹配）。
+  useEffect(() => {
+    if (state.kind !== "recording") return;
+    let cancelled = false;
+    let unsub: UnlistenFn | null = null;
+    listen<RecordingPayload>(RECORDING_EVENT, (ev) => {
+      const { code, phase } = ev.payload;
+      if (phase === "pressed") handlePressRef.current(code);
+      else handleReleaseRef.current(code);
+    }).then((un) => {
+      if (cancelled) un();
+      else unsub = un;
+    });
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [state.kind]);
 
   const confirmReplace = () => {
     if (state.kind !== "conflict") return;
@@ -234,8 +348,8 @@ export function HotkeyField({
                     state.kind === "error" &&
                       "border-te-accent/70 text-te-accent animate-[shake_0.25s]",
                     !value && "text-te-light-gray",
-                    // 预留右侧空间给嵌入的 × 清除按钮（始终保留，避免 hover 进出时文字跳动）
-                    showClear && "pr-7",
+                    // 预留两侧空间给嵌入的 × 清除按钮，对称 padding 保证文字居中（始终保留，避免 hover 进出时文字跳动）
+                    showClear && "px-7",
                   )}
                 >
                   {formatBinding(value, platform)}

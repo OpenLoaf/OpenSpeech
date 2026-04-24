@@ -39,3 +39,48 @@ export async function stopAudioLevel(): Promise<void> {
     console.warn("[audio] stop failed:", e);
   }
 }
+
+export interface RecordingResult {
+  /** 相对 app_data_dir 的路径（如 "recordings/<id>.wav"）——直接写进 history.audio_path */
+  audio_path: string;
+  duration_ms: number;
+  sample_rate: number;
+  channels: number;
+  samples: number;
+}
+
+/**
+ * 开始采集 PCM 到内存 buffer。调用前必须已经 `startAudioLevel`（stream 需要在跑）。
+ * id 同时作为 history.id 与 WAV 文件名，由调用方从 `newId()` 生成后传入。
+ */
+export async function startRecordingToFile(id: string): Promise<void> {
+  await invoke("audio_recording_start", { id });
+}
+
+/**
+ * 停止采集并把 WAV 编码落盘；返回 RecordingResult。无激活 session 时抛错——
+ * 调用方据此走"不写历史"分支。
+ */
+export async function stopRecordingAndSave(): Promise<RecordingResult> {
+  return await invoke<RecordingResult>("audio_recording_stop");
+}
+
+/** 取消录音（丢弃 samples，不写文件）。用户 Esc / 误触走这条。 */
+export async function cancelRecording(): Promise<void> {
+  try {
+    await invoke("audio_recording_cancel");
+  } catch (e) {
+    console.warn("[audio] cancel recording failed:", e);
+  }
+}
+
+/**
+ * 读取一条历史记录的 WAV 字节用于回放。Rust 端返回 `tauri::ipc::Response`，
+ * 前端收到的是 `ArrayBuffer`，直接 new Blob 丢给 `<audio>` 即可，无需 base64。
+ *
+ * `audioPath` 必须形如 `"recordings/<id>.wav"`——Rust 侧会拒绝任何其他形式，
+ * 避免变成任意文件读取漏洞。
+ */
+export async function loadRecordingBytes(audioPath: string): Promise<ArrayBuffer> {
+  return await invoke<ArrayBuffer>("audio_recording_load", { audioPath });
+}

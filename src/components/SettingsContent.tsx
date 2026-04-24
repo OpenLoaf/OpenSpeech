@@ -422,22 +422,25 @@ function HotkeysSection() {
                         : "按住说话模式：按住说话、松开插入"
                     }
                   >
+                    <span
+                      className={cn(
+                        "font-mono text-[11px] uppercase tracking-[0.15em] transition-colors",
+                        toggleMode ? "text-te-fg" : "text-te-light-gray/50",
+                      )}
+                    >
+                      长按
+                    </span>
                     <Switch
                       checked={toggleMode}
                       onChange={(v) => void setToggleMode(v)}
                     />
-                  </div>
-                }
-                bottomSlot={
-                  // label 下方的副行：一行小字提示当前处于哪种模式；对齐 label 左缘
-                  <div className="mt-1 flex items-center gap-2 font-sans text-[11px] text-te-light-gray/70">
-                    <span className="font-mono uppercase tracking-[0.15em] text-te-light-gray">
-                      {toggleMode ? "单击切换" : "按住说话"}
-                    </span>
-                    <span>
-                      {toggleMode
-                        ? "· 按一下开始、再按一下停止"
-                        : "· 按住说话，松开插入"}
+                    <span
+                      className={cn(
+                        "font-mono text-[11px] uppercase tracking-[0.15em] transition-colors",
+                        toggleMode ? "text-te-light-gray/50" : "text-te-fg",
+                      )}
+                    >
+                      保持
                     </span>
                   </div>
                 }

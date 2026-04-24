@@ -8,6 +8,8 @@ import {
   Download,
   Minus,
   MoreHorizontal,
+  Pause,
+  Play,
   RotateCcw,
   Trash2,
   X,
@@ -21,126 +23,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SearchBox } from "@/components/SearchBox";
-
-// ─────────────────────────────────────────────────────────────
-// Types & placeholder data
-// ─────────────────────────────────────────────────────────────
-
-type HistoryType = "dictation" | "ask" | "translate";
-type HistoryStatus = "success" | "failed" | "cancelled";
-
-interface HistoryItem {
-  id: string;
-  type: HistoryType;
-  text: string;
-  status: HistoryStatus;
-  error?: string;
-  duration_ms: number;
-  created_at: string; // ISO string
-  target_app?: string;
-}
-
-// 基于 2026-04-24 构造的占位数据
-const historyItems: HistoryItem[] = [
-  {
-    id: "h-001",
-    type: "dictation",
-    text: "继续把这一段的结构调整为先摆结论，再给出证据，然后再讲我们为什么能做得比别人更好。",
-    status: "success",
-    duration_ms: 8400,
-    created_at: "2026-04-24T03:08:12Z",
-    target_app: "VSCode",
-  },
-  {
-    id: "h-002",
-    type: "ask",
-    text: "React 19 和 18 有哪些不兼容改动？重点讲讲 ref 的变化和 use() 这个新 hook。",
-    status: "success",
-    duration_ms: 5200,
-    created_at: "2026-04-24T02:41:55Z",
-    target_app: "Chrome",
-  },
-  {
-    id: "h-003",
-    type: "dictation",
-    text: "回一下这封邮件：David 你好，感谢你发来的方案，整体时间线我觉得可以接受，不过预算这一块希望下周一我们再一起过一遍。",
-    status: "success",
-    duration_ms: 11800,
-    created_at: "2026-04-24T01:12:03Z",
-    target_app: "Mail",
-  },
-  {
-    id: "h-004",
-    type: "dictation",
-    text: "网络超时了，这一段还没来得及注入就断了。",
-    status: "failed",
-    error: "network timeout",
-    duration_ms: 3600,
-    created_at: "2026-04-23T22:17:40Z",
-  },
-  {
-    id: "h-005",
-    type: "translate",
-    text: "把这段翻译成英文：我认为我们应该把核心流程先跑通再谈优化。→ I think we should get the core flow working end-to-end before we talk about optimization.",
-    status: "success",
-    duration_ms: 6100,
-    created_at: "2026-04-23T15:04:22Z",
-    target_app: "Notion",
-  },
-  {
-    id: "h-006",
-    type: "dictation",
-    text: "呃……算了这段不要了。",
-    status: "cancelled",
-    duration_ms: 1400,
-    created_at: "2026-04-23T09:47:18Z",
-  },
-  {
-    id: "h-007",
-    type: "ask",
-    text: "帮我想一个产品名字，是给程序员用的语音输入工具，英文名，要有工业感，三到四个字母。",
-    status: "success",
-    duration_ms: 4700,
-    created_at: "2026-04-22T18:30:55Z",
-    target_app: "Figma",
-  },
-  {
-    id: "h-008",
-    type: "translate",
-    text: "翻译成中文：The team shipped a quiet but meaningful refactor this week. → 团队这周悄悄做了一次小但很关键的重构。",
-    status: "success",
-    duration_ms: 5500,
-    created_at: "2026-04-21T14:22:11Z",
-    target_app: "Slack",
-  },
-  {
-    id: "h-009",
-    type: "dictation",
-    text: "会议纪要：1. 下周发布内测；2. Anson 负责安装包签名；3. 词典功能延期到 v0.3。",
-    status: "success",
-    duration_ms: 9200,
-    created_at: "2026-04-18T10:05:33Z",
-    target_app: "Obsidian",
-  },
-  {
-    id: "h-010",
-    type: "ask",
-    text: "Tauri 2 里 global shortcut 插件在 macOS 上需要什么权限？",
-    status: "failed",
-    error: "LLM rate limit",
-    duration_ms: 2800,
-    created_at: "2026-04-15T21:48:09Z",
-  },
-  {
-    id: "h-011",
-    type: "dictation",
-    text: "这段是给设计师的反馈：图标再小半号，间距保持不变，视觉重心往左偏一点。",
-    status: "success",
-    duration_ms: 7300,
-    created_at: "2026-04-12T11:19:27Z",
-    target_app: "Linear",
-  },
-];
+import {
+  useHistoryStore,
+  type HistoryItem,
+  type HistoryStatus,
+  type HistoryType,
+} from "@/stores/history";
+import { usePlaybackStore } from "@/stores/playback";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -179,22 +68,28 @@ const BUCKET_LABEL: Record<Bucket, string> = {
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-const TODAY = new Date("2026-04-24T00:00:00Z");
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-function bucketOf(iso: string): Bucket {
-  const d = new Date(iso);
-  const dayMs = 24 * 60 * 60 * 1000;
-  const diff = Math.floor((TODAY.getTime() - d.getTime()) / dayMs);
-  if (diff <= 0) return "TODAY";
-  if (diff === 1) return "YESTERDAY";
-  if (diff <= 7) return "THIS WEEK";
+// 相对"今天 00:00（本地时区）"分桶；比直接用 Date.now 更稳——例如凌晨 00:05 的
+// 记录应该算"今天"而不是"不到 24 小时前"。
+function todayMidnightLocal(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function bucketOf(ts: number): Bucket {
+  const diffDays = Math.floor((todayMidnightLocal() - ts) / DAY_MS);
+  if (diffDays < 1) return "TODAY";
+  if (diffDays < 2) return "YESTERDAY";
+  if (diffDays < 7) return "THIS WEEK";
   return "EARLIER";
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
 }
 
@@ -356,6 +251,35 @@ function StatusBadge({ status }: { status: HistoryStatus }) {
   );
 }
 
+// 有录音文件的成功 / 取消记录展示此按钮：点击 = 播放原始 WAV；再次点击 = 暂停。
+// 切到别的行时，此行自动从 Pause 图标回落到 Play。
+function PlayButton({ id, audioPath }: { id: string; audioPath: string }) {
+  const playingId = usePlaybackStore((s) => s.playingId);
+  const toggle = usePlaybackStore((s) => s.toggle);
+  const isPlaying = playingId === id;
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void toggle(id, audioPath);
+      }}
+      className={`inline-flex size-7 items-center justify-center border transition-colors ${
+        isPlaying
+          ? "border-te-accent bg-te-accent text-te-bg"
+          : "border-te-gray/40 text-te-accent hover:border-te-accent hover:bg-te-accent hover:text-te-bg"
+      }`}
+      title={isPlaying ? "暂停" : "播放原始录音"}
+    >
+      {isPlaying ? (
+        <Pause className="size-3.5" strokeWidth={2.5} />
+      ) : (
+        <Play className="size-3.5" strokeWidth={2.5} fill="currentColor" />
+      )}
+    </button>
+  );
+}
+
 function TypeChip({ type }: { type: HistoryType }) {
   return (
     <span className="inline-flex items-center border border-te-gray/40 px-1.5 py-px font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
@@ -465,7 +389,12 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
       {/* 状态 + 操作 */}
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
         <RowActions status={item.status} />
-        {!isFailed && <StatusBadge status={item.status} />}
+        {!isFailed &&
+          (item.audio_path ? (
+            <PlayButton id={item.id} audioPath={item.audio_path} />
+          ) : (
+            <StatusBadge status={item.status} />
+          ))}
       </div>
     </motion.div>
   );
@@ -502,7 +431,8 @@ function EmptyState() {
 // ─────────────────────────────────────────────────────────────
 
 export default function HistoryPage() {
-  const [items, setItems] = useState<HistoryItem[]>(historyItems);
+  const items = useHistoryStore((s) => s.items);
+  const clearAllInDb = useHistoryStore((s) => s.clearAll);
   const [filter, setFilter] = useState<FilterValue>("all");
   const [retention, setRetention] = useState<RetentionValue>("forever");
   const [query, setQuery] = useState("");
@@ -534,8 +464,9 @@ export default function HistoryPage() {
     URL.revokeObjectURL(url);
   };
 
-  const clearAll = () => {
-    setItems([]);
+  const clearAll = async () => {
+    usePlaybackStore.getState().stop();
+    await clearAllInDb();
     setConfirmClearOpen(false);
   };
 
@@ -549,12 +480,9 @@ export default function HistoryPage() {
     for (const it of filtered) {
       map[bucketOf(it.created_at)].push(it);
     }
-    // 每组内按时间倒序
+    // 每组内按时间倒序（id 是日期增量，直接字典序倒排即时间倒序）
     for (const k of BUCKET_ORDER) {
-      map[k].sort(
-        (a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      );
+      map[k].sort((a, b) => (b.id < a.id ? -1 : b.id > a.id ? 1 : 0));
     }
     return map;
   }, [filtered]);
