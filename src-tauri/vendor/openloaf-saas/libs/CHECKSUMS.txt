@@ -1,1 +1,0 @@
-85e78eb2ae98ae2ff0e370670d0ddb3d009237819fff314a45587e921fcda391  ./aarch64-apple-darwin/libopenloaf_saas_core.a
