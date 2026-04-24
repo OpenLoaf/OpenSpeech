@@ -106,6 +106,7 @@ jobs:
       # Tauri 2 的 Linux bundler 要产出 **deb + rpm + AppImage** 三种包（由
       # `bundle.targets: "all"` 控制），需要一套比纯运行时依赖更完整的工具链：
       #   - 运行时/编译：webkit2gtk-4.1（不是 4.0）、gtk-3、ayatana appindicator、librsvg2、openssl
+      #   - 音频：libasound2-dev（cpal 经 alsa-sys 要求 alsa.pc，缺则 build.rs 直接 panic）
       #   - 打包：patchelf（AppImage 动态库路径修复）、rpm（rpmbuild 生成 .rpm）、fakeroot
       #   - AppImage 下载执行：file、wget、libfuse2（Ubuntu 22.04 默认自带，22.04-arm 显式装一遍保险）
       # x86_64 和 arm64 的 apt 包名一致，Ubuntu 按当前架构自动解析 arm64 版本。
@@ -119,6 +120,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
+            libasound2-dev \
             patchelf \
             rpm \
             fakeroot \
