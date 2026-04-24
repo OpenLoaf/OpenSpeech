@@ -10,9 +10,24 @@ name: Release
 #    - TAURI_SIGNING_PRIVATE_KEY           (整个 key 文件内容)
 #    - TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (生成时输入的密码，无密码就留空)
 #
-# 产物：三端 installer (.app.tar.gz / .nsis.zip / .AppImage.tar.gz) + 对应 .sig +
-# latest.json（tauri-action 自动聚合三端），发布为 **draft** Release。确认无误后
-# 在 GitHub UI 手动点 "Publish release"，客户端的 updater 才会看见新版本。
+# 构建矩阵（6 个 target，全部为 native 构建，不走 cross-compile）：
+#   | 平台           | runner              | Rust target                 |
+#   | macOS ARM64   | macos-latest         | aarch64-apple-darwin        |
+#   | macOS Intel   | macos-13             | x86_64-apple-darwin         |
+#   | Linux x86_64  | ubuntu-22.04         | x86_64-unknown-linux-gnu    |
+#   | Linux ARM64   | ubuntu-22.04-arm     | aarch64-unknown-linux-gnu   |
+#   | Windows x64   | windows-latest       | x86_64-pc-windows-msvc      |
+#   | Windows ARM64 | windows-11-arm       | aarch64-pc-windows-msvc     |
+#
+# 产物：每个 target 的 installer（.app.tar.gz / .AppImage.tar.gz / .nsis.zip）+ 对应
+# .sig 签名 + latest.json（tauri-action 按 platform-arch 合并到同一个 draft Release），
+# 发布为 **draft** Release。确认无误后在 GitHub UI 手动点 "Publish release"，客户端的
+# updater 才会看见新版本。
+#
+# GitHub 官方 ARM runner（`ubuntu-22.04-arm` / `windows-11-arm`）在 2025 年 GA。
+# 如果未来某个 job 因 runner 未启用 / 配额不足跑不起来，可以临时改成 cross-compile：
+# 把 platform 换回 x86_64 host，在 args 里追加 `--target <arm target>`，并在 dtolnay
+# action 的 targets 里装上对应 target。
 
 on:
   push:
@@ -28,14 +43,39 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS 打 universal (arm64 + x86_64) 单产物，省得前端做架构探测。
-          - platform: macos-latest
-            args: '--target universal-apple-darwin'
-          - platform: ubuntu-22.04
+          # ---- macOS ----
+          - name: macOS ARM64
+            platform: macos-latest
+            rust-target: aarch64-apple-darwin
+            args: '--target aarch64-apple-darwin'
+          - name: macOS Intel
+            platform: macos-13
+            rust-target: x86_64-apple-darwin
+            args: '--target x86_64-apple-darwin'
+
+          # ---- Linux ----
+          - name: Linux x86_64
+            platform: ubuntu-22.04
+            rust-target: ''
             args: ''
-          - platform: windows-latest
+          - name: Linux ARM64
+            platform: ubuntu-22.04-arm
+            rust-target: ''
             args: ''
+
+          # ---- Windows ----
+          - name: Windows x86_64
+            platform: windows-latest
+            rust-target: ''
+            args: ''
+          - name: Windows ARM64
+            platform: windows-11-arm
+            rust-target: ''
+            args: ''
+
+    name: Build · ${{ matrix.name }}
     runs-on: ${{ matrix.platform }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -53,16 +93,20 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust-target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          # target + platform 一起进 key，避免 x86_64 缓存污染 arm64 构建（rust-cache
+          # 默认已按 host 分，这里显式加 target 做双保险）。
+          key: ${{ matrix.rust-target || matrix.platform }}
 
-      # Tauri 2 的 Linux 依赖：webkit2gtk-4.1（不是 4.0）、ayatana appindicator、librsvg2。
+      # Tauri 2 的 Linux 依赖：webkit2gtk-4.1（不是 4.0）、ayatana appindicator、
+      # librsvg2、patchelf。x86_64 和 arm64 包名相同，Ubuntu 自动按架构解析。
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -85,10 +129,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'OpenSpeech ${{ github.ref_name }}'
           releaseBody: |
-            Auto-generated release.
+            Auto-generated release for **${{ github.ref_name }}**.
 
-            See commit log for changes. Binaries below will be picked up by the in-app
-            auto-updater once this draft is published.
+            Downloads below cover six targets (macOS ARM64 / macOS Intel /
+            Linux x86_64 / Linux ARM64 / Windows x86_64 / Windows ARM64).
+            The in-app auto-updater will pick up the matching binary once this
+            draft is published.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
