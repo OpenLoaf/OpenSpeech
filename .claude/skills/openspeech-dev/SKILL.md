@@ -286,7 +286,22 @@ cargo add --manifest-path src-tauri/Cargo.toml <crate>
 - 如果未来把"账户"内容做大（例如需要子路由），再评估是否拆回独立页面。
 
 ### 提交与测试
-- 目前未接入 CI / 测试框架。加入时同步更新本节与"技术栈"表。
+- 目前未接入测试框架。加入时同步更新本节与"技术栈"表。
+- CI 仅有 `.github/workflows/release.yml`（tag `v*` 触发发版），见下一节。
+
+### 版本号 SSoT 与发版流程
+- **版本号单一事实来源 = `package.json.version`**。不要手改 `src-tauri/Cargo.toml` 或 `src-tauri/tauri.conf.json` 的 version：
+  - `tauri.conf.json.version` 已设为 `"../package.json"`，Tauri build 时自动 resolve。
+  - `Cargo.toml` 通过 `scripts/sync-version.mjs` 在 `pnpm version <bump>` 的 lifecycle hook 里同步（`package.json` 的 `"version"` script 已配）。
+- **发版动作** = `pnpm version patch|minor|major` → 自动改 `package.json` + `Cargo.toml`、commit、打 tag `v<x.y.z>` → `git push && git push --tags`。tag `v*` 被 `.github/workflows/release.yml` 捕获，在 macOS universal / Ubuntu 22.04 / Windows 三端并行构建，通过 `tauri-apps/tauri-action@v0` 产出 installers + `.sig` + `latest.json`，发布为 **草稿 Release**。手动在 GitHub UI 点 "Publish release" 后，客户端 updater 才能看到新版本。
+- **首次启用 updater 前必做的一次性配置**（没做完之前 `pnpm tauri build` 会因 `createUpdaterArtifacts` 缺签名失败；客户端 `check()` 会抛 pubkey 为空的错）：
+  1. `pnpm tauri signer generate -w ~/.tauri/openspeech.key`（或不 `-w` 就默认 `~/.tauri/tauri.key`），设一个密码。
+  2. 把生成的 **public key** 内容粘到 `src-tauri/tauri.conf.json → plugins.updater.pubkey`。
+  3. GitHub 仓库 Secrets 里加两条：`TAURI_SIGNING_PRIVATE_KEY`（整个 key 文件内容）+ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`（生成时输入的密码，无则空串）。
+  4. **私钥** `*.key` 文件已被根 `.gitignore` 兜底排除，千万不要 commit。
+- **更新端点**：`plugins.updater.endpoints` 指向 `https://github.com/OpenLoaf/OpenSpeech/releases/latest/download/latest.json`，跟随每次 published Release 自动切换。换 CDN / 自建只需改这一处。
+- **客户端自动更新**（`src/main.tsx` bootPromise）：默认 `settings.autoUpdate = true`；启动时 `check()` 带 5s 超时，发现新版本直接 `downloadAndInstall()`——macOS/Linux 原地替换 + relaunch，Windows 调起 NSIS installer。失败静默，不打扰启动。用户在"设置 → 行为 → 自动更新"里可以关，关闭后只能通过托盘"检查更新"手动触发（走 sonner toast 回显结果）。
+- **macOS / Windows 代码签名公证**尚未做；MVP 阶段用户首次打开会被系统拦截，需要右键 → 打开（macOS）或点 "更多信息 → 仍要运行"（Windows SmartScreen）。商业化节奏到了再加 Apple Developer ID / EV code signing。
 
 ---
 
