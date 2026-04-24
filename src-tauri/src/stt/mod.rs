@@ -111,6 +111,18 @@ pub fn stt_start<R: Runtime>(
     app: AppHandle<R>,
     lang: Option<String>,
 ) -> Result<(), String> {
+    stt_start_impl(app, lang).map_err(|e| {
+        // 所有失败路径都打印到终端——前端 console.warn 只能在 DevTools 里看到，
+        // 终端日志更方便调试 realtime 连接 / auth 问题。
+        log::warn!("[stt] start failed: {e}");
+        e
+    })
+}
+
+fn stt_start_impl<R: Runtime>(
+    app: AppHandle<R>,
+    lang: Option<String>,
+) -> Result<(), String> {
     let ol = app.state::<SharedOpenLoaf>();
     let client = ol
         .authenticated_client()
