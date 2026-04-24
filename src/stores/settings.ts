@@ -1,0 +1,214 @@
+import { create } from "zustand";
+import { Store } from "@tauri-apps/plugin-store";
+
+// settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
+// API Key 等机密走 keyring，见 src/lib/secrets.ts。
+const STORE_FILE = "settings.json";
+const SCHEMA_VERSION = 2;
+
+export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
+export type InjectMethod = "CLIPBOARD + PASTE" | "SIMULATE KEYBOARD";
+export type Sensitivity = "LOW" | "NORMAL" | "HIGH";
+
+export interface GeneralSettings {
+  interfaceLang: string;
+  dictationLang: string;
+  translationTarget: string;
+  langVariant: string;
+  // 空串 = 跟随系统默认麦克风；非空 = cpal 枚举出的设备名
+  inputDevice: string;
+  cueSound: boolean;
+  endpoint: string;
+  modelName: string;
+  timeout: string;
+  audioFormat: string;
+  injectMethod: InjectMethod;
+  restoreClipboard: boolean;
+  launchStartup: boolean;
+  // 听写快捷键左侧的开关：开启后悬浮录音条常驻显示（即使 idle 态也在屏幕上）
+  overlayAlwaysVisible: boolean;
+  // 仅 macOS：是否在 Dock 中显示应用图标。off ⇒ 应用变成纯菜单栏应用（Accessory
+  // activation policy），仍可通过托盘打开主窗口。其他平台无效果。
+  showDockIcon: boolean;
+  // 自动更新：启动时静默 check + 下载；发现新版本直接 downloadAndInstall
+  // 触发一次 relaunch，用户感知 ≈ 启动时多了一小段"升级中"。off 则完全不检查，
+  // 只能手动通过托盘"检查更新"触发。
+  autoUpdate: boolean;
+  // 关闭行为（Cmd+Q / 红叉）：
+  //   ASK  — 每次弹 CloseToBackgroundDialog
+  //   HIDE — 直接隐藏到托盘（= 原"关闭时最小化到托盘"打开）
+  //   QUIT — 直接退出（由对话框勾"不再提醒 + 退出"写入）
+  closeBehavior: CloseBehavior;
+}
+
+export interface PersonalizationSettings {
+  autoPolish: boolean;
+  contextStyle: boolean;
+  sensitivity: Sensitivity;
+}
+
+interface PersistShape {
+  schemaVersion: number;
+  general: GeneralSettings;
+  personalization: PersonalizationSettings;
+}
+
+const DEFAULT_GENERAL: GeneralSettings = {
+  interfaceLang: "跟随系统",
+  dictationLang: "自动检测",
+  translationTarget: "EN",
+  langVariant: "EN-US",
+  inputDevice: "",
+  cueSound: true,
+  endpoint: "",
+  modelName: "",
+  timeout: "30",
+  audioFormat: "WAV",
+  injectMethod: "CLIPBOARD + PASTE",
+  restoreClipboard: true,
+  launchStartup: false,
+  overlayAlwaysVisible: false,
+  showDockIcon: true,
+  autoUpdate: true,
+  closeBehavior: "ASK",
+};
+
+const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
+  autoPolish: true,
+  contextStyle: false,
+  sensitivity: "NORMAL",
+};
+
+interface SettingsState {
+  general: GeneralSettings;
+  personalization: PersonalizationSettings;
+  loaded: boolean;
+  init: () => Promise<void>;
+  setGeneral: <K extends keyof GeneralSettings>(
+    key: K,
+    value: GeneralSettings[K],
+  ) => Promise<void>;
+  setPersonalization: <K extends keyof PersonalizationSettings>(
+    key: K,
+    value: PersonalizationSettings[K],
+  ) => Promise<void>;
+}
+
+let storePromise: Promise<Store> | null = null;
+
+function store(): Promise<Store> {
+  if (!storePromise) storePromise = Store.load(STORE_FILE);
+  return storePromise;
+}
+
+// v1 → v2：删除 maxRec / closeAction / minimizeTray，合成 closeBehavior。
+// 老字段若存在：minimizeTray=true ⇒ HIDE；closeAction="QUIT" ⇒ QUIT；其余 ASK。
+// 老的"System Default (MacBook Pro Microphone)" 这类硬编码设备名一律清成空串，
+// 让 UI 回落到"系统默认"。
+function migrateV1(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
+  const cleaned: Record<string, unknown> = { ...oldGeneral };
+  const minimizeTray = cleaned.minimizeTray === true;
+  const closeAction = cleaned.closeAction;
+  delete cleaned.maxRec;
+  delete cleaned.closeAction;
+  delete cleaned.minimizeTray;
+
+  let closeBehavior: CloseBehavior = "ASK";
+  if (minimizeTray) closeBehavior = "HIDE";
+  else if (closeAction === "QUIT") closeBehavior = "QUIT";
+
+  // 老的默认设备字符串没法在新设备枚举里匹配，清掉回落到系统默认。
+  if (
+    typeof cleaned.inputDevice === "string" &&
+    cleaned.inputDevice.startsWith("System Default")
+  ) {
+    cleaned.inputDevice = "";
+  }
+
+  return { ...(cleaned as Partial<GeneralSettings>), closeBehavior };
+}
+
+async function readPersisted(): Promise<PersistShape> {
+  const s = await store();
+  const raw = await s.get<unknown>("root");
+  const defaults: PersistShape = {
+    schemaVersion: SCHEMA_VERSION,
+    general: { ...DEFAULT_GENERAL },
+    personalization: { ...DEFAULT_PERSONALIZATION },
+  };
+  if (!raw || typeof raw !== "object") return defaults;
+  const r = raw as Partial<PersistShape> & { schemaVersion?: number };
+
+  // 迁移：v1 → v2
+  if (r.schemaVersion === 1) {
+    const migratedGeneral = migrateV1(
+      (r.general ?? {}) as Record<string, unknown>,
+    );
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...migratedGeneral },
+      personalization: {
+        ...DEFAULT_PERSONALIZATION,
+        ...(r.personalization ?? {}),
+      },
+    };
+  }
+
+  if (r.schemaVersion !== SCHEMA_VERSION) return defaults;
+
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    general: { ...DEFAULT_GENERAL, ...(r.general ?? {}) },
+    personalization: {
+      ...DEFAULT_PERSONALIZATION,
+      ...(r.personalization ?? {}),
+    },
+  };
+}
+
+async function writePersisted(shape: PersistShape): Promise<void> {
+  const s = await store();
+  await s.set("root", shape);
+  await s.save();
+}
+
+export const useSettingsStore = create<SettingsState>((set, get) => ({
+  general: { ...DEFAULT_GENERAL },
+  personalization: { ...DEFAULT_PERSONALIZATION },
+  loaded: false,
+
+  init: async () => {
+    const p = await readPersisted();
+    set({
+      general: p.general,
+      personalization: p.personalization,
+      loaded: true,
+    });
+    // 若读到是 v1，writePersisted 一次把 v2 结构固化到磁盘
+    await writePersisted({
+      schemaVersion: SCHEMA_VERSION,
+      general: p.general,
+      personalization: p.personalization,
+    });
+  },
+
+  setGeneral: async (key, value) => {
+    const next = { ...get().general, [key]: value };
+    set({ general: next });
+    await writePersisted({
+      schemaVersion: SCHEMA_VERSION,
+      general: next,
+      personalization: get().personalization,
+    });
+  },
+
+  setPersonalization: async (key, value) => {
+    const next = { ...get().personalization, [key]: value };
+    set({ personalization: next });
+    await writePersisted({
+      schemaVersion: SCHEMA_VERSION,
+      general: get().general,
+      personalization: next,
+    });
+  },
+}));

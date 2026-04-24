@@ -1,0 +1,202 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+@import "@fontsource/space-mono/400.css";
+@import "@fontsource/space-mono/700.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Space Mono', ui-monospace, monospace;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+
+    /* TE industrial tokens — map CSS vars to Tailwind colors */
+    --color-te-bg: var(--te-bg);
+    --color-te-fg: var(--te-fg);
+    --color-te-accent: var(--te-accent);
+    --color-te-accent-fg: var(--te-accent-fg);
+    --color-te-gray: var(--te-gray);
+    --color-te-light-gray: var(--te-light-gray);
+    --color-te-surface: var(--te-surface);
+    --color-te-surface-hover: var(--te-surface-hover);
+    --color-te-dialog-bg: var(--te-dialog-bg);
+    --color-te-dialog-border: var(--te-dialog-border);
+}
+
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+
+    /* TE Light Theme — 对比度已提高（边框加深、次要文字变深、surface 分层更强） */
+    --te-bg: #ffffff;
+    --te-fg: #0a0a0a;
+    --te-accent: #c49600;
+    --te-accent-fg: #ffffff;
+    --te-gray: #c9c9c9;
+    --te-light-gray: #555555;
+    --te-surface: #f0f0f0;
+    --te-surface-hover: #e4e4e4;
+    /* Dialog 专用层（比 surface 更区分于 bg） */
+    --te-dialog-bg: #fafafa;
+    --te-dialog-border: #999999;
+    --te-overlay: rgba(0, 0, 0, 0.6);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+
+    /* TE Dark Theme — 对比度已提高（边框更亮、次要文字更亮、surface 分层更强） */
+    --te-bg: #000000;
+    --te-fg: #ffffff;
+    --te-accent: #ffcc00;
+    --te-accent-fg: #000000;
+    --te-gray: #3a3a3a;
+    --te-light-gray: #b5b5b5;
+    --te-surface: #141414;
+    --te-surface-hover: #222222;
+    /* Dialog 专用层（比 surface 更亮，和主窗口分层明确） */
+    --te-dialog-bg: #1a1a1a;
+    --te-dialog-border: #5a5a5a;
+    --te-overlay: rgba(0, 0, 0, 0.85);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  /* 桌面应用风格：彻底移除 WebKit 默认的蓝色 :focus outline（macOS 系统强调色）。
+     交互元素的 focus 反馈由各自 hover/active/ring 类名承担。 */
+  *:focus,
+  *:focus-visible {
+    outline: none;
+  }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+  html,
+  body,
+  #root {
+    overscroll-behavior: none;
+    height: 100%;
+    /* 桌面应用级外层严格不滚动，滚动由内部容器各自声明；避免窗口收窄时出现浏览器级滚动条 */
+    overflow: hidden;
+  }
+  /* 全局禁用文本选择（桌面应用风格）；input/textarea/contenteditable 显式豁免 */
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+  input,
+  textarea,
+  [contenteditable="true"],
+  [contenteditable=""] {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+}
