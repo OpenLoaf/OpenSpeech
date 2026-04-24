@@ -134,6 +134,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS 代码签名 + 公证（env 只在 macOS runner 上真正生效，其它平台 tauri-action
+          # 忽略；所有 secrets 为空时自动跳过签名回退到未签名包）。
+          #
+          # GitHub Secrets 命名跟 OpenLoaf 仓库对齐（同一个 Apple Developer 账户跨项目复用）：
+          #   MAC_CER_BASE64             = Developer ID Application 证书 .p12 的 base64
+          #   MAC_CER_PASSWORD           = 上述 .p12 的导出密码
+          #   APPLE_SIGNING_IDENTITY     = "Developer ID Application: 你的名字 (TEAMID)"（Tauri 独有）
+          #   APPLE_ID                   = Apple ID 邮箱
+          #   APPLE_APP_SPECIFIC_PASSWORD= App-Specific Password（appleid.apple.com 生成）
+          #   APPLE_TEAM_ID              = 10 位 Team ID
+          #
+          # 右侧是 tauri-action / Tauri CLI 认的 env 名，左侧是 GitHub Secrets 名——这一层映射
+          # 让 OpenSpeech 可以跟 OpenLoaf（electron-builder，认 CSC_LINK/CSC_KEY_PASSWORD）
+          # 共用同一个 Secrets 池。
+          APPLE_CERTIFICATE: ${{ secrets.MAC_CER_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CER_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'OpenSpeech ${{ github.ref_name }}'

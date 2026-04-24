@@ -32,3 +32,11 @@ dist-ssr
 
 # Tauri signing key（若开发者把 key 放在项目内，避免误提交）
 *.key
+
+# 本地密钥 / 环境变量（Apple 签名公证密码、App-Specific Password、.p12 证书等）
+.env
+.env.*
+!.env.example
+*.p12
+*.cer
+*.p8
