@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/macOS-schema.json",
+  "identifier": "macos-only",
+  "description": "macOS-only capabilities (e.g. tauri-plugin-macos-permissions, which is not compiled on other platforms).",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": [
+    "macos-permissions:default"
+  ]
+}
