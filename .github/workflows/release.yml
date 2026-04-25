@@ -1,33 +1,38 @@
 name: Release
 
-# 触发方式：本地 `pnpm version <major|minor|patch>` 会自动改 package.json + Cargo.toml
-# 并 commit + 打 tag；`git push && git push --tags` 之后这条 workflow 被 `v*` tag 触发。
+# 触发：本地 `pnpm version <major|minor|patch>` 自动改 package.json + Cargo.toml + commit + tag；
+# 之后 `git push && git push --tags`，tag `v*` 推上来这条 workflow 被触发。
+#
+# 工作流被拆成两阶段，满足 "全部成功才发布 / 任一失败整体中止"：
+#   1. `build` 矩阵（6 平台并行，fail-fast: true）—— 直接调 `pnpm tauri build`，产物 upload-artifact
+#      到 Actions 私有缓存。**不动 Release**。任一 platform 失败立即取消其他 jobs，避免"半成品 draft"
+#      被部分 upload 出去。
+#   2. `release` job（needs: build, if: success()）—— 下载所有 6 个 artifact，给 installer 加平台
+#      前缀，自己合成 `latest.json`，最后用 softprops/action-gh-release 一次性创建 draft Release +
+#      上传所有 asset。
+#
+# 为什么不用 tauri-apps/tauri-action：它把 build + 创建 release + upload + 合并 latest.json 全打包
+# 到一个 step，无法在多 matrix job 之间做 "全部成功才上传" 的原子切片。直接调 Tauri CLI 损失的只是
+# keychain import 的便利——Tauri 2 CLI 自身已经认 `APPLE_CERTIFICATE` 等 env 自动处理 keychain。
 #
 # 首次启用前必做（一次性）：
-# 1. `pnpm tauri signer generate -w ~/.tauri/openspeech.key` 生成签名密钥
-# 2. 把输出的 pub key 贴到 src-tauri/tauri.conf.json → plugins.updater.pubkey
-# 3. 把 ~/.tauri/openspeech.key 的内容和设置时的密码配到 GitHub → Settings → Secrets:
-#    - TAURI_SIGNING_PRIVATE_KEY           (整个 key 文件内容)
-#    - TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (生成时输入的密码，无密码就留空)
+# 1. `pnpm tauri signer generate -w ~/.tauri/openspeech.key`（已完成）
+# 2. 把输出 pubkey 贴到 src-tauri/tauri.conf.json → plugins.updater.pubkey（已完成）
+# 3. GitHub Secrets:
+#    - TAURI_SIGNING_PRIVATE_KEY            (整个 key 文件内容)
+#    - TAURI_SIGNING_PRIVATE_KEY_PASSWORD   (生成时输入的密码，无密码留空)
+# 4. **组织级权限**：OpenLoaf org → Settings → Actions → General → Workflow permissions 必须设
+#    "Read and write permissions"。否则 release job 创建 draft Release 时返回 "Resource not
+#    accessible by integration"。这是组织级配置，repo 改不了，也无法用 yml `permissions:` 提权。
 #
-# 构建矩阵（6 个 target，全部为 native 构建，不走 cross-compile）：
-#   | 平台           | runner              | Rust target                 |
-#   | macOS ARM64   | macos-latest         | aarch64-apple-darwin        |
-#   | macOS Intel   | macos-13             | x86_64-apple-darwin         |
-#   | Linux x86_64  | ubuntu-22.04         | x86_64-unknown-linux-gnu    |
-#   | Linux ARM64   | ubuntu-22.04-arm     | aarch64-unknown-linux-gnu   |
-#   | Windows x64   | windows-latest       | x86_64-pc-windows-msvc      |
-#   | Windows ARM64 | windows-11-arm       | aarch64-pc-windows-msvc     |
-#
-# 产物：每个 target 的 installer（.app.tar.gz / .AppImage.tar.gz / .nsis.zip）+ 对应
-# .sig 签名 + latest.json（tauri-action 按 platform-arch 合并到同一个 draft Release），
-# 发布为 **draft** Release。确认无误后在 GitHub UI 手动点 "Publish release"，客户端的
-# updater 才会看见新版本。
-#
-# GitHub 官方 ARM runner（`ubuntu-22.04-arm` / `windows-11-arm`）在 2025 年 GA。
-# 如果未来某个 job 因 runner 未启用 / 配额不足跑不起来，可以临时改成 cross-compile：
-# 把 platform 换回 x86_64 host，在 args 里追加 `--target <arm target>`，并在 dtolnay
-# action 的 targets 里装上对应 target。
+# macOS 代码签名 + 公证（Secrets 命名跟 OpenLoaf 仓库对齐，便于跨项目复用一套 Apple 证书）：
+#    MAC_CER_BASE64             = Developer ID Application 证书 .p12 的 base64
+#    MAC_CER_PASSWORD           = 上述 .p12 的导出密码
+#    APPLE_SIGNING_IDENTITY     = "Developer ID Application: 你的名字 (TEAMID)"
+#    APPLE_ID                   = Apple ID 邮箱
+#    APPLE_APP_SPECIFIC_PASSWORD= App-Specific Password（appleid.apple.com 生成）
+#    APPLE_TEAM_ID              = 10 位 Team ID
+# 全部为空时 Tauri CLI 自动跳过签名，回退到未签名包。
 
 on:
   push:
@@ -38,9 +43,12 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     strategy:
-      fail-fast: false
+      # 任一 platform 失败立即取消其他正在跑的 jobs，避免：
+      #   1. 部分 platform 跑一两个小时再因为已知失败而被人工 cancel，浪费配额；
+      #   2. release job 因为 needs: build 失败永远不会进，所以让 build 早死早超生。
+      fail-fast: true
       matrix:
         include:
           # ---- macOS ----
@@ -48,36 +56,42 @@ jobs:
             platform: macos-latest
             rust-target: aarch64-apple-darwin
             args: '--target aarch64-apple-darwin'
-            asset-prefix: macOS-arm64
+            artifact: macOS-arm64
+            arch-tag: aarch64
           - name: macOS Intel
             platform: macos-13
             rust-target: x86_64-apple-darwin
             args: '--target x86_64-apple-darwin'
-            asset-prefix: macOS-intel
+            artifact: macOS-intel
+            arch-tag: x64
 
           # ---- Linux ----
           - name: Linux x86_64
             platform: ubuntu-22.04
             rust-target: ''
             args: ''
-            asset-prefix: Linux-x86_64
+            artifact: Linux-x86_64
+            arch-tag: ''
           - name: Linux ARM64
             platform: ubuntu-22.04-arm
             rust-target: ''
             args: ''
-            asset-prefix: Linux-arm64
+            artifact: Linux-arm64
+            arch-tag: ''
 
           # ---- Windows ----
           - name: Windows x86_64
             platform: windows-latest
             rust-target: ''
             args: ''
-            asset-prefix: Windows-x86_64
+            artifact: Windows-x86_64
+            arch-tag: ''
           - name: Windows ARM64
             platform: windows-11-arm
             rust-target: ''
             args: ''
-            asset-prefix: Windows-arm64
+            artifact: Windows-arm64
+            arch-tag: ''
 
     name: Build · ${{ matrix.name }}
     runs-on: ${{ matrix.platform }}
@@ -105,17 +119,14 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
-          # target + platform 一起进 key，避免 x86_64 缓存污染 arm64 构建（rust-cache
-          # 默认已按 host 分，这里显式加 target 做双保险）。
           key: ${{ matrix.rust-target || matrix.platform }}
 
-      # Tauri 2 的 Linux bundler 要产出 **deb + rpm + AppImage** 三种包（由
-      # `bundle.targets: "all"` 控制），需要一套比纯运行时依赖更完整的工具链：
+      # Linux 打包 deb + rpm + AppImage 三件套需要的全套工具链：
       #   - 运行时/编译：webkit2gtk-4.1（不是 4.0）、gtk-3、ayatana appindicator、librsvg2、openssl
-      #   - 音频：libasound2-dev（cpal 经 alsa-sys 要求 alsa.pc，缺则 build.rs 直接 panic）
-      #   - 打包：patchelf（AppImage 动态库路径修复）、rpm（rpmbuild 生成 .rpm）、fakeroot
-      #   - AppImage 下载执行：file、wget、libfuse2（Ubuntu 22.04 默认自带，22.04-arm 显式装一遍保险）
-      # x86_64 和 arm64 的 apt 包名一致，Ubuntu 按当前架构自动解析 arm64 版本。
+      #   - 音频：libasound2-dev（cpal/alsa-sys 找 alsa.pc）
+      #   - 打包：patchelf / rpm / fakeroot / file / wget / libfuse2
+      #   - **xdg-utils**：tauri-plugin-opener 在 Linux 打包阶段会校验 `/usr/bin/xdg-open` 存在，
+      #     缺则直接 "failed to bundle project xdg-open binary not found"。
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'ubuntu-')
         run: |
@@ -132,92 +143,173 @@ jobs:
             fakeroot \
             file \
             wget \
-            libfuse2
+            libfuse2 \
+            xdg-utils
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@v0
+      # 直接调 Tauri CLI；macOS 签名 / 公证 / updater 签名都靠 env 透传给 CLI 自己处理。
+      # tauri-action 替你做的 keychain import 是 Tauri CLI 2.x 已经内置的能力，env 配齐即可。
+      - name: Tauri build
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS 代码签名 + 公证（env 只在 macOS runner 上真正生效，其它平台 tauri-action
-          # 忽略；所有 secrets 为空时自动跳过签名回退到未签名包）。
-          #
-          # GitHub Secrets 命名跟 OpenLoaf 仓库对齐（同一个 Apple Developer 账户跨项目复用）：
-          #   MAC_CER_BASE64             = Developer ID Application 证书 .p12 的 base64
-          #   MAC_CER_PASSWORD           = 上述 .p12 的导出密码
-          #   APPLE_SIGNING_IDENTITY     = "Developer ID Application: 你的名字 (TEAMID)"（Tauri 独有）
-          #   APPLE_ID                   = Apple ID 邮箱
-          #   APPLE_APP_SPECIFIC_PASSWORD= App-Specific Password（appleid.apple.com 生成）
-          #   APPLE_TEAM_ID              = 10 位 Team ID
-          #
-          # 右侧是 tauri-action / Tauri CLI 认的 env 名，左侧是 GitHub Secrets 名——这一层映射
-          # 让 OpenSpeech 可以跟 OpenLoaf（electron-builder，认 CSC_LINK/CSC_KEY_PASSWORD）
-          # 共用同一个 Secrets 池。
+          # macOS 签名+公证 env（其它平台无害；CLI 看到没填的 env 自动跳过对应步骤）
           APPLE_CERTIFICATE: ${{ secrets.MAC_CER_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CER_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'OpenSpeech ${{ github.ref_name }}'
-          releaseBody: |
-            Auto-generated release for **${{ github.ref_name }}**.
+        run: pnpm tauri build ${{ matrix.args }}
 
-            Downloads below cover six targets (macOS ARM64 / macOS Intel /
-            Linux x86_64 / Linux ARM64 / Windows x86_64 / Windows ARM64).
-            The in-app auto-updater will pick up the matching binary once this
-            draft is published.
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
-          includeUpdaterJson: true
-
-      # tauri-action 默认产物名形如 `OpenSpeech_0.2.0_aarch64.dmg`——只看得见 arch，看不出
-      # 是 macOS / Windows / Linux。这一步给 release 上**用户手动下载**用的 installer
-      # （dmg / exe / deb / rpm / AppImage）通过 `gh api PATCH releases/assets/:id` 加平台
-      # 前缀，重命名为 `macOS-arm64-OpenSpeech_0.2.0_aarch64.dmg` 之类，下载页一目了然。
-      #
-      # **重要**：updater 链路用的 `.app.tar.gz` / `.nsis.zip` / `.AppImage.tar.gz` 与对应
-      # `.sig` **不能 rename**——`latest.json` 里的 `url` 字段写死了原文件名，改名 = 自动
-      # 更新断链。下面 find 的 -name 白名单只圈 installer 扩展名，刻意排除 tar.gz/zip/sig。
-      #
-      # 仅 rename **本 job 自己产出**的 asset：用 disk 上 `bundle/` 目录下的真实文件名做
-      # 同名匹配，跨 job 上传到同一个 draft release 也不会误伤别人。
-      - name: Tag installer assets with platform prefix
-        if: success()
+      # macOS .app.tar.gz 默认命名是 `OpenSpeech.app.tar.gz` —— 不带 arch！ARM64 + Intel 两个 job
+      # 上传同名 artifact 互不影响（按 artifact name 分组），但下载到 release job 的 staging 目录
+      # 时会同名覆盖。因此在 upload 之前就给它加上 arch 后缀，跟 dmg/exe/AppImage 那种"自带 arch
+      # 后缀"的命名风格对齐。`.sig` 同步重命名（updater 拉 .app.tar.gz 时按同名找 sig）。
+      - name: Tag macOS updater artifact with arch
+        if: startsWith(matrix.platform, 'macos')
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PREFIX: ${{ matrix.asset-prefix }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          ARCH_TAG: ${{ matrix.arch-tag }}
+          RUST_TARGET: ${{ matrix.rust-target }}
         run: |
           set -euo pipefail
-          mapfile -t local_files < <(find src-tauri -path '*/release/bundle/*' -type f \
-            \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
-            -exec basename {} \; 2>/dev/null || true)
-          if [[ ${#local_files[@]} -eq 0 ]]; then
-            echo "[rename] no installer artifacts under bundle/; skip"
-            exit 0
+          version=$(node -p "require('./package.json').version")
+          dir="src-tauri/target/${RUST_TARGET}/release/bundle/macos"
+          if [[ -f "$dir/OpenSpeech.app.tar.gz" ]]; then
+            mv "$dir/OpenSpeech.app.tar.gz"     "$dir/OpenSpeech_${version}_${ARCH_TAG}.app.tar.gz"
+            mv "$dir/OpenSpeech.app.tar.gz.sig" "$dir/OpenSpeech_${version}_${ARCH_TAG}.app.tar.gz.sig"
+            echo "[mv] OpenSpeech.app.tar.gz -> OpenSpeech_${version}_${ARCH_TAG}.app.tar.gz"
           fi
-          release_id=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .id)
-          gh api "repos/$REPO/releases/$release_id/assets" --paginate \
-            --jq '.[] | [.id, .name] | @tsv' > /tmp/assets.tsv
-          while IFS=$'\t' read -r aid aname; do
-            for f in "${local_files[@]}"; do
-              if [[ "$aname" == "$f" ]]; then
-                new="${PREFIX}-${aname}"
-                if [[ "$aname" == "$new" ]]; then
-                  break
-                fi
-                gh api -X PATCH "repos/$REPO/releases/assets/$aid" -f name="$new" >/dev/null
-                echo "[rename] $aname -> $new"
-                break
-              fi
-            done
-          done < /tmp/assets.tsv
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 3
+          # 各平台只取实际产出的文件类型；nullglob 行为由 actions/upload-artifact 自己处理。
+          path: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/**/release/bundle/macos/*.app.tar.gz.sig
+            src-tauri/target/**/release/bundle/nsis/*-setup.exe
+            src-tauri/target/**/release/bundle/nsis/*-setup.nsis.zip
+            src-tauri/target/**/release/bundle/nsis/*-setup.nsis.zip.sig
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/rpm/*.rpm
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
+            src-tauri/target/**/release/bundle/appimage/*.AppImage.tar.gz
+            src-tauri/target/**/release/bundle/appimage/*.AppImage.tar.gz.sig
+
+  release:
+    name: Publish draft release
+    needs: build
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bundle-*
+
+      # staging/ 是即将上传到 Release 的扁平目录：
+      #   - installer（dmg/exe/deb/rpm/AppImage）加平台前缀，下载页一目了然
+      #   - updater 链路（.app.tar.gz / .nsis.zip / .AppImage.tar.gz + 各自 .sig）保持原名 —— 因为
+      #     latest.json 里 url 字段写死，改名 = 自动更新断链。
+      - name: Stage release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          for art in artifacts/bundle-*; do
+            [[ -d "$art" ]] || continue
+            prefix="${art##*/bundle-}"
+            while IFS= read -r f; do
+              [[ -f "$f" ]] || continue
+              base="$(basename "$f")"
+              # 注意 `*.tar.gz` / `*.tar.gz.sig` 的匹配要放在 `*.gz` 之前；这里用具体扩展规避歧义
+              case "$base" in
+                *.app.tar.gz|*.app.tar.gz.sig|*.nsis.zip|*.nsis.zip.sig|*.AppImage.tar.gz|*.AppImage.tar.gz.sig)
+                  cp "$f" "staging/${base}"
+                  ;;
+                *.dmg|*.exe|*.deb|*.rpm|*.AppImage)
+                  cp "$f" "staging/${prefix}-${base}"
+                  ;;
+                *)
+                  echo "::warning::unrecognized artifact, skipping: $f"
+                  ;;
+              esac
+            done < <(find "$art" -type f)
+          done
+          echo "--- staging/ ---"
+          ls -la staging/
+
+      # latest.json 是 Tauri updater 客户端 fetch 的入口（plugins.updater.endpoints 指向它）。
+      # 字段：version / pub_date / platforms[<platform-arch>].{signature, url}。
+      # signature 取 .sig 文件全文；url 指向 Release 上的对应 asset 直链（保留原名）。
+      - name: Generate latest.json
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd staging
+          pub_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          platforms='{}'
+          for sig in *.sig; do
+            [[ -f "$sig" ]] || continue
+            base="${sig%.sig}"
+            sig_content="$(cat "$sig")"
+            url="https://github.com/${REPO}/releases/download/${TAG}/${base}"
+            case "$base" in
+              *aarch64*.app.tar.gz)              key="darwin-aarch64"  ;;
+              *_x64*.app.tar.gz|*x86_64*.app.tar.gz) key="darwin-x86_64" ;;
+              *_amd64.AppImage.tar.gz)           key="linux-x86_64"    ;;
+              *_arm64.AppImage.tar.gz|*_aarch64.AppImage.tar.gz) key="linux-aarch64" ;;
+              *_x64-setup.nsis.zip|*_x86_64-setup.nsis.zip) key="windows-x86_64" ;;
+              *_arm64-setup.nsis.zip|*_aarch64-setup.nsis.zip) key="windows-aarch64" ;;
+              *)
+                echo "::warning::unknown sig pattern, skipping: $base"
+                continue
+                ;;
+            esac
+            platforms="$(jq -n --argjson p "$platforms" --arg key "$key" --arg sig "$sig_content" --arg url "$url" \
+              '$p + {($key): {signature: $sig, url: $url}}')"
+          done
+          jq -n \
+            --arg version "$TAG" \
+            --arg pub_date "$pub_date" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: "Auto-generated release", pub_date: $pub_date, platforms: $platforms}' \
+            > ../latest.json
+          echo "--- latest.json ---"
+          cat ../latest.json
+
+      - name: Publish draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 'OpenSpeech ${{ github.ref_name }}'
+          draft: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          body: |
+            Auto-generated release for **${{ github.ref_name }}**.
+
+            6 targets: macOS ARM64 / macOS Intel / Linux x86_64 / Linux ARM64 / Windows x86_64 / Windows ARM64.
+            Installer 文件名带 `macOS-arm64- / Windows-x86_64- / Linux-arm64-` 等平台前缀，方便手动下载。
+            Updater 链路（`*.app.tar.gz` / `*.nsis.zip` / `*.AppImage.tar.gz` + `.sig` + `latest.json`）
+            保持原名，应用内自动更新通过 `latest.json` 索引到对应平台。
+          files: |
+            staging/*
+            latest.json
