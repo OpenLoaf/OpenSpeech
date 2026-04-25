@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { HotkeyPreview } from "@/components/HotkeyPreview";
@@ -5,6 +6,33 @@ import { LiveDictationPanel } from "@/components/LiveDictationPanel";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
+import { useHistoryStore } from "@/stores/history";
+
+// 假设打字基线速度：用于"节省时间"估算。40 WPM 是普通用户中位打字速度。
+// （专业打字员 ~70+，纯中文拼音 ~30，混合 ~40）；该值为粗估，未来可放设置项。
+const TYPING_BASELINE_WPM = 40;
+
+function todayMidnightLocal(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+// 中英文混合字数：中文逐字算 1，连续拉丁/数字序列算 1 个词。
+// 注意 WPM 也用同一口径，避免单位不一致。
+function countWords(text: string): number {
+  if (!text) return 0;
+  const matches = text.match(/[一-鿿]|[A-Za-z0-9][A-Za-z0-9'_-]*/g);
+  return matches ? matches.length : 0;
+}
+
+function formatHHMM(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "00:00";
+  const totalMinutes = Math.floor(ms / 60_000);
+  const hh = Math.floor(totalMinutes / 60);
+  const mm = totalMinutes % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 
 /* ──────────────────────────────────────────────────────────────── */
 /*  Stat card                                                        */
@@ -58,6 +86,32 @@ export default function HomePage() {
   const audioLevels = useRecordingStore((s) => s.audioLevels);
   const liveTranscript = useRecordingStore((s) => s.liveTranscript);
   const isLive = recState !== "idle";
+
+  const historyItems = useHistoryStore((s) => s.items);
+  const stats = useMemo(() => {
+    const since = todayMidnightLocal();
+    let totalDurationMs = 0;
+    let totalWords = 0;
+    for (const it of historyItems) {
+      if (it.created_at < since) continue;
+      if (it.type !== "dictation" || it.status !== "success") continue;
+      totalDurationMs += it.duration_ms;
+      totalWords += countWords(it.text);
+    }
+    const minutes = totalDurationMs / 60_000;
+    const wpmValue = minutes > 0 ? totalWords / minutes : 0;
+    // 节省时间 = 同字数按 baseline 打字耗时 - 实际口述耗时；负值 clamp 到 0。
+    const savedMs = Math.max(
+      0,
+      (totalWords / TYPING_BASELINE_WPM) * 60_000 - totalDurationMs,
+    );
+    return {
+      duration: formatHHMM(totalDurationMs),
+      words: new Intl.NumberFormat().format(totalWords),
+      wpm: minutes > 0 ? String(Math.round(wpmValue)) : "—",
+      saved: formatHHMM(savedMs),
+    };
+  }, [historyItems]);
 
   return (
     <section className="relative flex h-full flex-col overflow-hidden bg-te-bg">
@@ -166,10 +220,10 @@ export default function HomePage() {
             </div>
 
             <div className="grid min-h-0 flex-1 grid-cols-4 gap-px bg-te-gray/40">
-              <StatCard index="01" label="口述时长" value="00:00" unit="HH:MM" />
-              <StatCard index="02" label="口述字数" value="0" unit="总计" />
-              <StatCard index="03" label="平均速度" value="—" unit="WPM" />
-              <StatCard index="04" label="节省时间" value="00:00" unit="HH:MM" />
+              <StatCard index="01" label="口述时长" value={stats.duration} unit="HH:MM" />
+              <StatCard index="02" label="口述字数" value={stats.words} unit="总计" />
+              <StatCard index="03" label="平均速度" value={stats.wpm} unit="WPM" />
+              <StatCard index="04" label="节省时间" value={stats.saved} unit="HH:MM" />
             </div>
           </div>
         </div>

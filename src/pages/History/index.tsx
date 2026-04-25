@@ -4,7 +4,6 @@ import {
   Check,
   ChevronDown,
   Copy,
-  CornerUpLeft,
   Download,
   Minus,
   MoreHorizontal,
@@ -14,6 +13,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -288,12 +289,32 @@ function TypeChip({ type }: { type: HistoryType }) {
   );
 }
 
-function RowActions({ status }: { status: HistoryStatus }) {
+function RowActions({
+  status,
+  text,
+}: {
+  status: HistoryStatus;
+  text: string;
+}) {
+  const [copied, setCopied] = useState(false);
   const isFailed = status === "failed";
   const baseBtn =
     "inline-flex size-7 items-center justify-center border border-transparent text-te-light-gray transition-colors hover:border-te-gray/60 hover:text-te-accent";
   const dangerBtn =
     "inline-flex size-7 items-center justify-center border border-transparent text-te-light-gray transition-colors hover:border-[#ff4d4d]/60 hover:text-[#ff4d4d]";
+
+  const handleCopy = async () => {
+    if (!text) return;
+    try {
+      await writeText(text);
+      setCopied(true);
+      toast.success("已复制到剪贴板");
+      setTimeout(() => setCopied(false), 1200);
+    } catch (e) {
+      console.error("[history] copy failed:", e);
+      toast.error("复制失败");
+    }
+  };
 
   // 失败态：只有「(hover) 删除 + 重试常显」，由外层 HistoryRow 在更右侧再放一个播放按钮。
   if (isFailed) {
@@ -318,11 +339,20 @@ function RowActions({ status }: { status: HistoryStatus }) {
 
   return (
     <div className="pointer-events-none flex items-center gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-      <button type="button" className={baseBtn} title="复制">
-        <Copy className="size-3.5" />
+      <button
+        type="button"
+        className={baseBtn}
+        title={copied ? "已复制" : "复制到剪贴板"}
+        onClick={handleCopy}
+      >
+        {copied ? (
+          <Check className="size-3.5" strokeWidth={2.5} />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
       </button>
       <button type="button" className={baseBtn} title="重新注入">
-        <CornerUpLeft className="size-3.5" />
+        <RotateCcw className="size-3.5" />
       </button>
       <button type="button" className={dangerBtn} title="删除">
         <Trash2 className="size-3.5" />
@@ -392,7 +422,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
 
       {/* 状态 + 操作（从右到左：播放、重试 / 操作组、(hover) 删除） */}
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
-        <RowActions status={item.status} />
+        <RowActions status={item.status} text={item.text} />
         {item.audio_path ? (
           <PlayButton id={item.id} audioPath={item.audio_path} />
         ) : !isFailed ? (
