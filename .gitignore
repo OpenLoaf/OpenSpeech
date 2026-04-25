@@ -29,6 +29,7 @@ dist-ssr
 !.claude/skills
 .claude/skills/*
 !.claude/skills/openspeech-dev
+!.claude/skills/openspeech-release
 
 # Tauri signing key（若开发者把 key 放在项目内，避免误提交）
 *.key
