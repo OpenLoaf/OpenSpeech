@@ -4,7 +4,6 @@ import { PulsarGrid } from "@/components/PulsarGrid";
 import { HotkeyPreview } from "@/components/HotkeyPreview";
 import { LiveDictationPanel } from "@/components/LiveDictationPanel";
 import { cn } from "@/lib/utils";
-import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
 import { useHistoryStore } from "@/stores/history";
 
@@ -81,7 +80,6 @@ function StatCard({ index, label, value, unit }: StatProps) {
 /* ──────────────────────────────────────────────────────────────── */
 
 export default function HomePage() {
-  const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
   const recState = useRecordingStore((s) => s.state);
   const audioLevels = useRecordingStore((s) => s.audioLevels);
   const liveTranscript = useRecordingStore((s) => s.liveTranscript);
@@ -150,7 +148,7 @@ export default function HomePage() {
             </h1>
 
             <p className="max-w-xl font-sans text-sm leading-relaxed text-te-light-gray md:text-base">
-              按住一个键，开口说话，文字即刻出现在任意应用中。不绑定编辑器，录音只留本机，无任何遥测。
+              按一下快捷键，开口说话，再按一下结束——文字即刻出现在任意应用中。不绑定编辑器，录音只留本机，无任何遥测。
             </p>
 
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
@@ -183,7 +181,6 @@ export default function HomePage() {
                   >
                     <LiveDictationPanel
                       state={recState}
-                      mode={binding?.mode ?? "hold"}
                       audioLevels={audioLevels}
                       liveTranscript={liveTranscript}
                     />
@@ -198,7 +195,7 @@ export default function HomePage() {
                   >
                     <HotkeyPreview />
                     <p className="mt-3 max-w-2xl font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
-                      按住开始录音，松开即把转写结果写入当前输入框。按
+                      按一下快捷键开始录音，再按一下结束并把文字写入当前输入框。按
                       <span className="mx-1 font-mono text-te-fg">Esc</span>
                       取消；焦点必须在可编辑区域。
                     </p>

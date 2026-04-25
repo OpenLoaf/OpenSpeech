@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState, useMemo } from "rea
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
+import { useRecordingStore } from "@/stores/recording";
 import {
   codeToMod,
   formatCode,
@@ -244,7 +245,10 @@ export function useKeyPreview(): KeyToken[] {
       (ev) => {
         const { code, phase } = ev.payload;
         if (phase === "pressed") {
-          const tok: KeyToken = { id: code, label: CODE_LABEL[code] ?? code };
+          const tok: KeyToken = {
+            id: code,
+            label: CODE_LABEL[code] ?? formatCode(code),
+          };
           if (!isDisplayableKey(tok)) return;
           press(tok);
         } else {
@@ -268,10 +272,13 @@ export function HotkeyPreview({
   hint,
   index = "01",
   title = "听写快捷键 / PUSH-TO-TALK",
+  stack = false,
 }: {
   hint?: string;
   index?: string;
   title?: string;
+  /** 强制纵向排版（hint 在快捷键下方换行）。默认 false，宽松容器里走横向。 */
+  stack?: boolean;
 }) {
   const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
   const platform = detectPlatform();
@@ -280,15 +287,20 @@ export function HotkeyPreview({
     [binding, platform],
   );
   const pressed = useKeyPreview();
-  // 任何被按下的键命中 binding token → 渲染 binding 行（每个 token 各自高亮）；
-  // 没有命中（用户按了 binding 之外的键）→ 把按下的键以 Kbd 列表回显。
+  // toggle 语义下，"当前是否处于录音流程"决定高亮：preparing / recording / transcribing
+  // 都视为"已激活"——按一下即进入并保持，再按一下才退出，物理按键松开不影响视觉状态。
+  const recState = useRecordingStore((s) => s.state);
+  const sessionActive =
+    recState === "preparing" ||
+    recState === "recording" ||
+    recState === "transcribing";
+  // 物理命中（用户按下时立即高亮，覆盖按下到 FSM 切到 preparing 之前的视觉空窗）
+  // OR 会话激活（toggle 模式下整个录音过程保持高亮，颜色不变）。
   const tokenIsHeld = (token: HotkeyToken) =>
-    pressed.some((p) => tokenMatches(token, p));
+    sessionActive || pressed.some((p) => tokenMatches(token, p));
   const anyMatch = tokens.some(tokenIsHeld);
-  const showBindingRow = pressed.length === 0 || anyMatch;
-  const modeHint =
-    hint ??
-    (binding?.mode === "toggle" ? "单击切换 · 再按停止" : "按住说话 · 松开插入");
+  const showBindingRow = pressed.length === 0 || anyMatch || sessionActive;
+  const modeHint = hint ?? "单击开始 · 再按一次结束";
 
   return (
     <div>
@@ -301,7 +313,12 @@ export function HotkeyPreview({
         </span>
       </div>
 
-      <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div
+        className={cn(
+          "mt-3 flex flex-col gap-3",
+          !stack && "md:flex-row md:items-center md:justify-between",
+        )}
+      >
         <div className="flex items-center gap-3">
           {tokens.length === 0 ? (
             <Kbd>未绑定</Kbd>

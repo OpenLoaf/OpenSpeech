@@ -26,7 +26,7 @@ use rdev::{Event, EventType, Key};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::hotkey::{BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload, HotkeyMode};
+use crate::hotkey::{BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload};
 
 /// 录入模式下，HotkeyField 订阅此事件拿到 press/release，代替 WebView DOM keydown
 /// （macOS 上 Fn 键不会产生 DOM 事件，所以 DOM 监听器录不到）。
@@ -157,7 +157,6 @@ struct ModBinding {
     id: BindingId,
     id_str: String,
     mods: HashSet<Mod>,
-    mode: HotkeyMode,
 }
 
 pub struct ModifierOnlyState {
@@ -188,12 +187,49 @@ fn parse_binding_id(s: &str) -> Option<BindingId> {
     }
 }
 
-/// 启动全局键盘订阅线程。整个进程生命周期只应调一次——`rdev::listen` 只能
-/// 被调一次，多次调用会 panic 或无效。失败（如 macOS Accessibility 权限
-/// 未授予）时只打日志不 panic，后续 apply 调用也不会崩，只是 Fn /
-/// modifier-only 绑定不工作。
-pub fn init<R: Runtime>(app: AppHandle<R>) -> SharedModifierOnlyState {
-    let state: SharedModifierOnlyState = Arc::new(Mutex::new(ModifierOnlyState::default()));
+/// 进程生命周期内 `rdev::listen` 是否已启动的幂等标志——`rdev::listen` 只能
+/// 被调一次，多次调用会 panic 或无效。前端 booted 后通过 invoke 触发启动，
+/// 后续重复触发（HMR / 用户操作）必须 short-circuit。
+static LISTEN_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// 创建空的 `SharedModifierOnlyState`，**不启动** rdev::listen 线程。在 setup
+/// 阶段调用，把空 state 注册到 Tauri Manager 让后续 `apply_bindings` 能安全
+/// no-op。真正的 listen 启动由 `start_listener` 做。
+///
+/// **为什么拆开**：`rdev::listen` 内部首次访问全局键盘流时，macOS 会立即
+/// 弹「Keystroke Receiving」授权对话框（IM 未授权时）或在已授权下重新校验。
+/// setup 阶段立即弹会被随后 show 的主窗口遮挡。改为前端 booted（主窗口完全
+/// 显示、loading 结束）后通过 `hotkey_init_listener` invoke 触发——此时弹框
+/// 会正常叠在主窗口之上。
+pub fn create_state() -> SharedModifierOnlyState {
+    Arc::new(Mutex::new(ModifierOnlyState::default()))
+}
+
+/// 启动 rdev::listen 线程。幂等：通过 `LISTEN_STARTED` AtomicBool 保证整个进程
+/// 生命周期内最多只启一次。**macOS 上仅在 Input Monitoring 已 granted 时启动**
+/// （IOHIDCheckAccess 静默查询，无副作用）；未授权时 short-circuit，后续用户
+/// 在系统设置授权 + 重启进程后下次再启。
+///
+/// 失败（如其它平台权限缺失）时只打日志不 panic，后续 apply 调用也不会崩，
+/// 只是 modifier-only 绑定不工作。
+pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlyState) {
+    if LISTEN_STARTED.swap(true, Ordering::SeqCst) {
+        eprintln!("[modifier_only] start_listener: already started, skip");
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    if !crate::permissions::input_monitoring_granted() {
+        eprintln!(
+            "[modifier_only] Input Monitoring not granted; deferring rdev::listen until \
+             user grants permission + relaunch. modifier-only bindings (Fn / Ctrl+Win / etc.) \
+             are inactive this session."
+        );
+        // 复位 flag，让用户授权重启后能再次尝试（同一进程不会，但保留语义清晰）。
+        LISTEN_STARTED.store(false, Ordering::SeqCst);
+        return;
+    }
+
     let state_clone = Arc::clone(&state);
     let app_clone = app.clone();
 
@@ -228,8 +264,8 @@ pub fn init<R: Runtime>(app: AppHandle<R>) -> SharedModifierOnlyState {
             };
 
             let (newly_pressed_ids, newly_released_ids): (
-                Vec<(BindingId, HotkeyMode, String)>,
-                Vec<(BindingId, HotkeyMode, String)>,
+                Vec<(BindingId, String)>,
+                Vec<(BindingId, String)>,
             ) = {
                 let mut s = match state_clone.lock() {
                     Ok(s) => s,
@@ -248,16 +284,16 @@ pub fn init<R: Runtime>(app: AppHandle<R>) -> SharedModifierOnlyState {
                     }
                 }
 
-                let mut newly_pressed: Vec<(BindingId, HotkeyMode, String)> = Vec::new();
-                let mut newly_released: Vec<(BindingId, HotkeyMode, String)> = Vec::new();
+                let mut newly_pressed: Vec<(BindingId, String)> = Vec::new();
+                let mut newly_released: Vec<(BindingId, String)> = Vec::new();
 
                 for b in &s.bindings {
                     let was_active = s.active_ids.contains(&b.id);
                     let is_active = matching.contains(&b.id);
                     if !was_active && is_active {
-                        newly_pressed.push((b.id, b.mode, b.id_str.clone()));
+                        newly_pressed.push((b.id, b.id_str.clone()));
                     } else if was_active && !is_active {
-                        newly_released.push((b.id, b.mode, b.id_str.clone()));
+                        newly_released.push((b.id, b.id_str.clone()));
                     }
                 }
 
@@ -265,26 +301,24 @@ pub fn init<R: Runtime>(app: AppHandle<R>) -> SharedModifierOnlyState {
                 (newly_pressed, newly_released)
             };
 
-            for (id, mode, id_str) in newly_pressed_ids {
-                eprintln!("[modifier_only] pressed: {id_str} id={id:?} mode={mode:?}");
+            for (id, id_str) in newly_pressed_ids {
+                eprintln!("[modifier_only] pressed: {id_str} id={id:?}");
                 // 与 combo 路径一致：按下立即 show overlay 消除感知延迟
                 if let Err(e) = crate::overlay::show(&app_clone) {
                     eprintln!("[overlay] show failed: {e:?}");
                 }
                 let payload = HotkeyEventPayload {
                     id,
-                    mode,
                     phase: "pressed",
                 };
                 if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
                     eprintln!("[modifier_only] emit pressed failed: {e:?}");
                 }
             }
-            for (id, mode, id_str) in newly_released_ids {
-                eprintln!("[modifier_only] released: {id_str} id={id:?} mode={mode:?}");
+            for (id, id_str) in newly_released_ids {
+                eprintln!("[modifier_only] released: {id_str} id={id:?}");
                 let payload = HotkeyEventPayload {
                     id,
-                    mode,
                     phase: "released",
                 };
                 if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
@@ -300,8 +334,6 @@ pub fn init<R: Runtime>(app: AppHandle<R>) -> SharedModifierOnlyState {
             );
         }
     });
-
-    state
 }
 
 /// 从 apply_bindings 调用：用当前快照替换已注册的 modifier-only bindings。
@@ -335,7 +367,6 @@ pub fn apply(
             id,
             id_str: id_str.clone(),
             mods,
-            mode: b.mode,
         });
     }
 
@@ -345,7 +376,7 @@ pub fn apply(
         new_bindings.len()
     );
     for b in &new_bindings {
-        eprintln!("[modifier_only]   - {} mods={:?} mode={:?}", b.id_str, b.mods, b.mode);
+        eprintln!("[modifier_only]   - {} mods={:?}", b.id_str, b.mods);
     }
     s.bindings = new_bindings;
     s.active_ids.clear();

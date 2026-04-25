@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, PartyPopper } from "lucide-react";
+import { Check, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { LiveDictationPanel } from "@/components/LiveDictationPanel";
 import { HotkeyPreview } from "@/components/HotkeyPreview";
-import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore, type RecordingState } from "@/stores/recording";
 
 // Step 4：默认订阅真实 useRecordingStore，让用户用真快捷键完整跑一遍流程；
@@ -34,23 +32,19 @@ function fakeWaveform(seed: number, len = 60): number[] {
 const SILENT_LEVELS = Array.from({ length: 60 }, () => 0);
 
 const CHECKLIST = [
-  "按住听写快捷键",
+  "按一下听写快捷键开始",
   "对着麦克风说一句话",
-  "松开快捷键",
+  "再按一下结束",
   "看到文字写入下方",
 ] as const;
 
 type Source = "real" | "mock";
 
 export function StepTryIt({
-  onBack,
   onComplete,
 }: {
-  onBack: () => void;
   onComplete: () => void;
 }) {
-  const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
-
   // 真实流：订阅 useRecordingStore（与 Home 页面一致）。
   const realState = useRecordingStore((s) => s.state);
   const realLevels = useRecordingStore((s) => s.audioLevels);
@@ -186,16 +180,14 @@ export function StepTryIt({
       >
         <div className="flex flex-col gap-2">
           <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-accent">
-            // step 04 / try it
+            // step 03 / try it
           </span>
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
-              试一次。
-            </h2>
-            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
-              按住下方显示的快捷键，说一句话，松开
-            </span>
-          </div>
+          <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
+            试一次。
+          </h2>
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+            按一下下方快捷键开始 · 说一句话 · 再按一下结束
+          </span>
         </div>
 
         {/* 上：checklist + 实时面板 / 下：目标输入框。所有文字提亮，避免"看不清"。 */}
@@ -242,33 +234,18 @@ export function StepTryIt({
               <HotkeyPreview
                 index="HOTKEY"
                 title="你的听写快捷键"
-                hint={
-                  binding?.mode === "toggle"
-                    ? "单击开始 · 再按结束"
-                    : "按住说 · 松开转写"
-                }
+                hint="单击开始 · 再按一次结束"
+                stack
               />
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 border border-te-gray/60 bg-te-surface p-4">
-            <LiveDictationPanel
-              state={state}
-              mode={binding?.mode ?? "hold"}
-              audioLevels={audioLevels}
-              liveTranscript={transcript}
-            />
+          {/* 右侧两行：上 = 音频波形，下 = 实时转写文字。grid-rows-[auto_1fr] 让
+              转写区独占剩余高度，避免之前下方留白。 */}
+          <div className="grid grid-rows-[auto_minmax(0,1fr)] gap-3 border border-te-gray/60 bg-te-surface p-4">
+            <TryItAudioRow state={state} audioLevels={audioLevels} />
+            <TryItTranscriptRow state={state} transcript={transcript} />
           </div>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-            // 目标输入框（焦点在这里时，松开快捷键文字会自动写入）
-          </span>
-          <textarea
-            placeholder="光标点进来 → 按住快捷键 → 说话 → 松开 → 文字会出现在这里…"
-            className="h-[3.75rem] resize-none border border-te-gray/60 bg-te-bg p-2.5 font-sans text-sm leading-relaxed text-te-fg placeholder:text-te-light-gray/70 focus:border-te-accent focus:outline-none"
-          />
         </div>
 
         {completed ? (
@@ -285,15 +262,7 @@ export function StepTryIt({
           </div>
         ) : null}
 
-        <div className="flex items-center justify-between">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex items-center gap-2 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
-          >
-            <ArrowLeft className="size-3" /> 上一步
-          </button>
-
+        <div className="flex items-center justify-end">
           <div className="flex items-center gap-2">
             {progress > 0 ? (
               <button
@@ -333,6 +302,129 @@ export function StepTryIt({
           </div>
         </div>
       </motion.div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/*  Step 4 实时面板：上 = 音频波形 / 下 = 实时转写文字                  */
+/* ──────────────────────────────────────────────────────────────── */
+
+function statusCopy(state: RecordingState): {
+  tag: string;
+  primary: string;
+  secondary?: string;
+} {
+  switch (state) {
+    case "preparing":
+      return { tag: "// READY", primary: "开始说话…", secondary: "Esc 取消" };
+    case "recording":
+      return {
+        tag: "// LISTENING",
+        primary: "再按一次快捷键 结束并转写",
+        secondary: "Esc 取消本次录音",
+      };
+    case "transcribing":
+      return {
+        tag: "// TRANSCRIBING",
+        primary: "正在转写…",
+        secondary: "Esc 放弃这次结果",
+      };
+    case "injecting":
+      return { tag: "// INJECTING", primary: "正在写入输入框…" };
+    case "error":
+      return { tag: "// ERROR", primary: "出错了，检查日志或重试" };
+    default:
+      return { tag: "// IDLE", primary: "" };
+  }
+}
+
+function TryItAudioRow({
+  state,
+  audioLevels,
+}: {
+  state: RecordingState;
+  audioLevels: number[];
+}) {
+  const { tag } = statusCopy(state);
+  const active = state === "preparing" || state === "recording";
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-widest text-te-accent",
+            active && "animate-[pulse_1.2s_ease-in-out_infinite]",
+          )}
+        >
+          {tag}
+        </span>
+        <span className="font-mono text-[9px] uppercase tracking-widest text-te-light-gray">
+          AUDIO · {audioLevels.length} SAMPLES
+        </span>
+      </div>
+      <div className="flex h-14 w-full items-center gap-[2px]">
+        {audioLevels.map((v, i) => {
+          const height = Math.max(8, Math.min(100, Math.pow(v, 0.55) * 110));
+          return (
+            <div
+              key={i}
+              className={cn(
+                "flex-1 rounded-[1px] transition-[height] duration-75 ease-out",
+                active ? "bg-te-accent" : "bg-te-gray/60",
+              )}
+              style={{ height: `${height}%` }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TryItTranscriptRow({
+  state,
+  transcript,
+}: {
+  state: RecordingState;
+  transcript: string;
+}) {
+  const { primary, secondary } = statusCopy(state);
+  const hasText = transcript.trim().length > 0;
+  const tone =
+    state === "recording" || state === "preparing"
+      ? "text-te-accent"
+      : "text-te-fg";
+  return (
+    <div className="flex min-h-0 flex-col justify-between gap-2 border-t border-te-gray/40 pt-2">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+          // LIVE TRANSCRIPT
+        </span>
+        <span className="font-mono text-[9px] text-te-light-gray">
+          {hasText ? `${transcript.length} CHARS` : "—"}
+        </span>
+      </div>
+      <p
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto font-sans text-sm leading-relaxed",
+          hasText ? tone : "text-te-fg/40",
+        )}
+      >
+        {hasText ? transcript : "实时转写文字将出现在这里…"}
+      </p>
+      <div className="flex flex-col gap-0.5">
+        {primary ? (
+          <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent">
+            {primary}
+          </span>
+        ) : null}
+        {secondary ? (
+          <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+            {secondary}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }

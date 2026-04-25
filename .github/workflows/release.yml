@@ -169,7 +169,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri build ${{ matrix.args }}
+        # tauri.conf.json 默认 `createUpdaterArtifacts: false`（让本地 / 协作者裸跑 build 不需要 updater 私钥）；
+        # 发版构建在这里临时 override 打开，CI 的 TAURI_SIGNING_PRIVATE_KEY 已注入。
+        run: pnpm tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       # macOS .app.tar.gz 默认命名是 `OpenSpeech.app.tar.gz` —— 不带 arch！ARM64 + Intel 两个 job
       # 上传同名 artifact 互不影响（按 artifact name 分组），但下载到 release job 的 staging 目录

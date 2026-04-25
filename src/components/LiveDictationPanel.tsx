@@ -1,9 +1,9 @@
 import { cn } from "@/lib/utils";
 import type { RecordingState } from "@/stores/recording";
-import type { HotkeyMode } from "@/lib/hotkey";
 
 // 实时听写面板：左波形 + 右 realtime 转写 + 状态文案。Home 与 Onboarding Try-It 共用。
 // audioLevels / liveTranscript 由调用方注入（通常来自 useRecordingStore）。
+// 全系统 toggle 语义：按一下开始、再按一下结束（不再有 hold / 长按模式）。
 
 function Waveform({
   levels,
@@ -33,22 +33,18 @@ function Waveform({
 
 function statusCopy(
   state: RecordingState,
-  mode: HotkeyMode,
 ): { tag: string; primary: string; secondary?: string } {
   switch (state) {
     case "preparing":
       return {
         tag: "// READY",
-        primary: mode === "hold" ? "继续按住，开始说话…" : "开始说话…",
+        primary: "开始说话…",
         secondary: "Esc 取消",
       };
     case "recording":
       return {
         tag: "// LISTENING",
-        primary:
-          mode === "hold"
-            ? "松开快捷键 结束并转写"
-            : "再按一次快捷键 结束并转写",
+        primary: "再按一次快捷键 结束并转写",
         secondary: "Esc 取消本次录音",
       };
     case "transcribing":
@@ -68,16 +64,14 @@ function statusCopy(
 
 export function LiveDictationPanel({
   state,
-  mode,
   audioLevels,
   liveTranscript,
 }: {
   state: RecordingState;
-  mode: HotkeyMode;
   audioLevels: number[];
   liveTranscript: string;
 }) {
-  const { tag, primary, secondary } = statusCopy(state, mode);
+  const { tag, primary, secondary } = statusCopy(state);
   const waveActive = state === "preparing" || state === "recording";
   const hasText = liveTranscript.trim().length > 0;
   const textToneClass =

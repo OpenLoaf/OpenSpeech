@@ -34,7 +34,6 @@ export type RecordingState =
 
 interface HotkeyEvent {
   id: BindingId;
-  mode: "hold" | "toggle";
   phase: "pressed" | "released";
 }
 
@@ -45,7 +44,6 @@ const LEVEL_BUFFER_LEN = 15;
 interface RecordingStore {
   state: RecordingState;
   activeId: BindingId | null;
-  activeMode: "hold" | "toggle" | null;
   errorMessage: string | null;
   lastPressAt: number;
   startedListening: boolean;
@@ -272,7 +270,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
   return {
     state: "idle",
     activeId: null,
-    activeMode: null,
     errorMessage: null,
     lastPressAt: 0,
     startedListening: false,
@@ -295,7 +292,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         const um1 = await listen<{
           state: RecordingState;
           activeId: BindingId | null;
-          activeMode: "hold" | "toggle" | null;
           errorMessage: string | null;
           recordingId: string | null;
           liveTranscript: string;
@@ -304,7 +300,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           set({
             state: p.state,
             activeId: p.activeId,
-            activeMode: p.activeMode,
             errorMessage: p.errorMessage,
             recordingId: p.recordingId,
             liveTranscript: p.liveTranscript,
@@ -356,7 +351,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         const snap = JSON.stringify({
           state: s.state,
           activeId: s.activeId,
-          activeMode: s.activeMode,
           errorMessage: s.errorMessage,
           recordingId: s.recordingId,
           liveTranscript: s.liveTranscript,
@@ -366,7 +360,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         void emitTo("overlay", "openspeech://overlay-fsm", {
           state: s.state,
           activeId: s.activeId,
-          activeMode: s.activeMode,
           errorMessage: s.errorMessage,
           recordingId: s.recordingId,
           liveTranscript: s.liveTranscript,
@@ -389,29 +382,29 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       );
       unlistens.push(ua);
 
-      const u1 = await listen<HotkeyEvent>("openspeech://hotkey", (evt) => {
+      const u1 = await listen<HotkeyEvent>("openspeech://hotkey", async (evt) => {
         console.log("[recording] event received:", evt.payload);
-        const { id, mode, phase } = evt.payload;
+        const { id, phase } = evt.payload;
         const now = performance.now();
         const cur = get();
 
+        // 全系统统一 toggle：released 不参与状态机推进（仅 pressed 触发开始 / 结束）。
+        if (phase === "released") return;
+
         if (phase === "pressed") {
-          // toggle 模式：同一绑定第二次按下 = hold 模式的 released（再按一次停）。
-          // 判定放在最前，否则会被下方"非 idle/error 一律忽略"吞掉。
+          // 同一绑定第二次按下 = 结束本次录音。判定放在最前，否则会被下方
+          // "非 idle/error 一律忽略"吞掉。< 300ms 视为快速双击误触，丢弃整段。
           if (
-            mode === "toggle" &&
             cur.activeId === id &&
             (cur.state === "recording" || cur.state === "preparing")
           ) {
             const duration = now - cur.lastPressAt;
             if (duration < PREPARING_MS) {
-              // < 300ms 算误触（快速双击），丢弃 samples、不写 history
               discardRecording();
               stopMic();
               set({
                 state: "idle",
                 activeId: null,
-                activeMode: null,
                 audioLevels: emptyLevels(),
                 recordingId: null,
                 liveTranscript: "",
@@ -430,7 +423,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                   set({
                     state: "idle",
                     activeId: null,
-                    activeMode: null,
                     recordingId: null,
                     liveTranscript: "",
                   });
@@ -440,7 +432,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             return;
           }
 
-          // Transcribing 态忽略新的触发（见 voice-input-flow.md）
+          // Transcribing / injecting 等中间态忽略新的触发（见 voice-input-flow.md）
           if (cur.state !== "idle" && cur.state !== "error") return;
 
           // Gate：转写后端必须至少一条可用，否则录了一段没人转的废录音是浪费。
@@ -450,12 +442,26 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           // 主窗 / overlay 都会跑到这里：overlay 没 init auth/settings，默认值
           // 也会判 blocked → return；openLogin 在 overlay 里写自己 store 没渲染 dialog，
           // 等价于 no-op，主窗弹窗由主窗 store 驱动。
-          const auth = useAuthStore.getState();
+          let auth = useAuthStore.getState();
           const settingsGeneral = useSettingsStore.getState().general;
-          const saasReady = auth.isAuthenticated;
+          let saasReady = auth.isAuthenticated;
           const byoReady =
             settingsGeneral.dictationSource === "BYO" &&
             settingsGeneral.endpoint.trim() !== "";
+          // 未登录但 keychain 里可能还有 refresh_token（启动时网络断或本地后端
+          // 没起导致 bootstrap 没恢复成功）——把"按下快捷键"当作主动重试信号，
+          // 静默尝试用 refresh_token 换一次 access_token。1.5s 超时兜底，避免
+          // 服务器很慢时让用户感觉"按了没反应"；超时后走原弹登录 dialog 路径。
+          if (!saasReady && !byoReady) {
+            const recovered = await Promise.race([
+              invoke<boolean>("openloaf_try_recover").catch(() => false),
+              new Promise<boolean>((r) => setTimeout(() => r(false), 1500)),
+            ]);
+            if (recovered) {
+              auth = useAuthStore.getState();
+              saasReady = auth.isAuthenticated;
+            }
+          }
           if (!saasReady && !byoReady) {
             console.log("[recording] gate blocked: no STT backend available");
             // Rust 在 pressed 那一刻已 invoke overlay::show；gate 拦截后 state 不
@@ -502,7 +508,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                   set({
                     state: "idle",
                     activeId: null,
-                    activeMode: null,
                     audioLevels: emptyLevels(),
                     recordingId: null,
                     liveTranscript: "",
@@ -520,7 +525,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           set({
             state: "preparing",
             activeId: id,
-            activeMode: mode,
             errorMessage: null,
             lastPressAt: now,
             audioLevels: emptyLevels(),
@@ -529,8 +533,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           });
           startMic();
           // 300ms 后 mic stream 已稳定才启动 Rust 录音 session——
-          // 避免 stream_info 为 None 导致 start 失败。若此时 user 已经松手
-          // 误触取消（< 300ms 分支），state 已经回到 idle，下面会 skip。
+          // 避免 stream_info 为 None 导致 start 失败。若此时用户已第二次按下
+          // （快速双击 < 300ms 分支），state 已经回到 idle，下面会 skip。
           window.setTimeout(() => {
             const s = get();
             if (s.state === "preparing" && s.activeId === id) {
@@ -540,50 +544,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }, PREPARING_MS);
           return;
         }
-
-        // released
-        if (cur.activeId !== id) return;
-        const duration = now - cur.lastPressAt;
-
-        if (mode === "toggle") {
-          // toggle 的 released 事件忽略，由下一次 pressed 触发停止
-          return;
-        }
-
-        if (duration < PREPARING_MS) {
-          // 误触：< 300ms，丢弃 samples 不写 history
-          discardRecording();
-          stopMic();
-          set({
-            state: "idle",
-            activeId: null,
-            activeMode: null,
-            audioLevels: emptyLevels(),
-            recordingId: null,
-            liveTranscript: "",
-          });
-          return;
-        }
-
-        // 正常：停 Rust 录音 → 落盘 → 写 history → 占位 UI
-        stopMic();
-        set({ state: "transcribing", audioLevels: emptyLevels() });
-        void finalizeAndWriteHistory().finally(() => {
-          window.setTimeout(() => {
-            if (get().state !== "transcribing") return;
-            set({ state: "injecting" });
-            window.setTimeout(() => {
-              if (get().state !== "injecting") return;
-              set({
-                state: "idle",
-                activeId: null,
-                activeMode: null,
-                recordingId: null,
-                liveTranscript: "",
-              });
-            }, 200);
-          }, 800);
-        });
       });
 
       const u2 = await listen<{ id: string; error: string }>(
@@ -688,7 +648,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           set({
             state: "idle",
             activeId: null,
-            activeMode: null,
             audioLevels: emptyLevels(),
             recordingId: null,
             liveTranscript: "",
@@ -722,7 +681,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       set({
         state: "idle",
         activeId: null,
-        activeMode: null,
         errorMessage: null,
         audioLevels: emptyLevels(),
         recordingId: null,
@@ -736,7 +694,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       set({
         state: "idle",
         activeId: null,
-        activeMode: null,
         audioLevels: emptyLevels(),
         recordingId: null,
         liveTranscript: "",
@@ -757,8 +714,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             set({
               state: "idle",
               activeId: null,
-              activeMode: null,
-              recordingId: null,
+                recordingId: null,
               liveTranscript: "",
             });
           }, 200);

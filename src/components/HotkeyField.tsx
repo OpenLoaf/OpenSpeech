@@ -6,7 +6,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
   BINDING_LABELS,
-  DEFAULT_MODE,
   codeToMod,
   formatBinding,
   isLegalMainKey,
@@ -204,7 +203,6 @@ export function HotkeyField({
       kind: "combo",
       mods,
       code,
-      mode: value?.mode ?? DEFAULT_MODE[id],
     };
     const conflictId = onConflictCheck(candidate);
     if (conflictId && conflictId !== id) {
@@ -236,7 +234,6 @@ export function HotkeyField({
         kind: "modifierOnly",
         mods,
         code: "",
-        mode: value?.mode ?? DEFAULT_MODE[id],
       };
       const conflictId = onConflictCheck(candidate);
       if (conflictId && conflictId !== id) {

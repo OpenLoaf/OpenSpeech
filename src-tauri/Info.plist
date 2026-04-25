@@ -4,5 +4,19 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>OpenSpeech 需要访问麦克风以进行语音输入。</string>
+
+  <!-- 输入监控：rdev::listen 监听全局快捷键（Fn / Ctrl+Win 等）。
+       macOS 不强制此 key，但部分系统设置 UI 会读它来展示授权说明文案；
+       提供之，体验更顺。 -->
+  <key>NSInputMonitoringUsageDescription</key>
+  <string>OpenSpeech 需要监听全局快捷键以触发听写录音。</string>
+
+  <!-- 辅助功能：enigo 模拟键盘把转写文字粘贴回当前焦点输入框时需要。 -->
+  <key>NSAccessibilityUsageDescription</key>
+  <string>OpenSpeech 需要辅助功能权限以将识别后的文字写入当前焦点的输入框。</string>
+
+  <!-- AppleEvents：模拟系统级粘贴快捷键（Cmd+V）需要 -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>OpenSpeech 需要 AppleEvents 权限以触发"粘贴"将文字写入当前 App。</string>
 </dict>
 </plist>

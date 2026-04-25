@@ -465,6 +465,66 @@ pub fn openloaf_is_authenticated(state: State<'_, SharedOpenLoaf>) -> bool {
     state.client.access_token().is_some()
 }
 
+/// 主动尝试用 Keychain 里的 refresh_token 静默恢复登录态。
+///
+/// 调用时机：
+///   - 用户按下听写快捷键、recording gate 发现未登录 → await 这个命令再判 gate；
+///   - 浏览器 `online` 事件触发（网络从断到通）；
+///   - 任何"我现在想用 SaaS、但内存里 access_token 是空的"场景。
+///
+/// 行为：
+///   - 已登录（内存有 access_token）→ 直接返回 true，不动网络；
+///   - 未登录但 Keychain 有 refresh_token → 调 `auth.refresh`，
+///       成功 → `apply_session` + emit `RESTORED_EVENT`，返回 true；
+///       明确认证失效（401/403）→ 清 Keychain，返回 false；
+///       其他错误（网络/超时/5xx/dev 后端没起）→ 保留 token，返回 false（下次还能再试）；
+///   - Keychain 也没 refresh_token → 直接返回 false。
+#[tauri::command]
+pub async fn openloaf_try_recover(
+    app: AppHandle,
+    state: State<'_, SharedOpenLoaf>,
+) -> Result<bool, String> {
+    let ol = state.inner().clone();
+
+    if ol.client.access_token().is_some() {
+        return Ok(true);
+    }
+
+    let Some(refresh_token) = load_refresh_token() else {
+        return Ok(false);
+    };
+
+    let client = ol.client.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        client.auth().refresh(&refresh_token, Some(&client_info()))
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?;
+
+    match result {
+        Ok(session) => {
+            let user = apply_session(&ol, session);
+            log::info!("openloaf: session recovered on demand");
+            if let Err(e) = app.emit(RESTORED_EVENT, user) {
+                log::warn!("openloaf: emit restored event failed: {e}");
+            }
+            Ok(true)
+        }
+        Err(err) => {
+            match &err {
+                SaaSError::Http { status: 401, .. } | SaaSError::Http { status: 403, .. } => {
+                    log::warn!("openloaf: refresh rejected on demand ({err}), clearing token");
+                    clear_refresh_token();
+                }
+                _ => {
+                    log::warn!("openloaf: on-demand refresh failed transiently: {err}");
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+
 /// 拼出 OpenLoaf Web 的页面 URL（订阅 / 充值等）。前端拿到后用 openUrl 打开。
 ///
 /// 例：`path = "/pricing"` → `https://openloaf.hexems.com/pricing`
@@ -682,8 +742,18 @@ pub async fn bootstrap(app: &AppHandle) {
             }
         }
         Ok(Err(err)) => {
-            log::warn!("openloaf: refresh failed, clearing stored token: {err}");
-            clear_refresh_token();
+            // 只在 refresh token 被服务端明确判定失效时清 Keychain。
+            // 网络故障 / 超时 / 5xx / 本地 dev 后端没起，都保留 token 等下次启动再试，
+            // 避免把"暂时连不上"误判成"登录失效"导致用户被静默踢出。
+            match &err {
+                SaaSError::Http { status: 401, .. } | SaaSError::Http { status: 403, .. } => {
+                    log::warn!("openloaf: refresh rejected ({err}), clearing stored token");
+                    clear_refresh_token();
+                }
+                _ => {
+                    log::warn!("openloaf: refresh failed transiently, keeping token: {err}");
+                }
+            }
         }
         Err(join_err) => {
             log::warn!("openloaf: bootstrap join error: {join_err}");

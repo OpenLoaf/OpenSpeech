@@ -5,23 +5,22 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
-import { StepWelcome } from "./StepWelcome";
 import { StepPermissions } from "./StepPermissions";
 import { StepLogin } from "./StepLogin";
 import { StepTryIt } from "./StepTryIt";
 import { STEP_TITLES, type OnboardingStep } from "./types";
 
-// Onboarding 主路由：4 步状态机 + 顶部进度条 + AnimatePresence 横滑切换。
-// 当前实现为纯 UI mock；完成后 navigate("/") 回主界面（不写 onboarding.completed —
-// 测试期需要每次启动都看到这个页面，见 main.tsx 的 force-redirect 注释）。
+// Onboarding 主路由：3 步状态机（权限 → 登录 → 试用）+ 顶部进度条 +
+// AnimatePresence 横滑切换。完成后 navigate("/") 回主界面，并写
+// `settings.general.onboardingCompleted = true` 持久化，下次启动直接进主界面。
 
 // 引导页直接用主窗口尺寸（tauri.conf.json 默认 1100×780，可调整），不再 lock。
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState<OnboardingStep>(1);
-  const [direction, setDirection] = useState<1 | -1>(1);
 
   // Cmd+Q / 红叉 / 菜单关闭：Rust 拦截后 emit close-requested，Layout 是默认监听者，
   // 但 onboarding 页不进 Layout，没人监听就会"按下没反应"。这里直接退出（onboarding
@@ -43,15 +42,14 @@ export default function OnboardingPage() {
   }, []);
 
   const goNext = () => {
-    if (step >= 4) return;
-    setDirection(1);
+    if (step >= 3) return;
+    // Step 1 → 已登录直接跳到 Step 3：用户都已经登录了就别再让登录页一闪而过
+    // （StepLogin 挂载时 600ms 自跳的过场没必要看）。
+    if (step === 1 && useAuthStore.getState().isAuthenticated) {
+      setStep(3);
+      return;
+    }
     setStep((s) => (s + 1) as OnboardingStep);
-  };
-
-  const goBack = () => {
-    if (step <= 1) return;
-    setDirection(-1);
-    setStep((s) => (s - 1) as OnboardingStep);
   };
 
   const finish = () => {
@@ -95,10 +93,10 @@ export default function OnboardingPage() {
 
         <div className="flex items-center gap-3">
           <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-            {String(step).padStart(2, "0")} / 04 · {STEP_TITLES[step]}
+            {String(step).padStart(2, "0")} / 03 · {STEP_TITLES[step]}
           </span>
-          <div className="flex w-44 gap-1">
-            {[1, 2, 3, 4].map((i) => (
+          <div className="flex w-36 gap-1">
+            {[1, 2, 3].map((i) => (
               <div
                 key={i}
                 className={cn(
@@ -116,24 +114,21 @@ export default function OnboardingPage() {
       </header>
 
       <main className="relative z-10 min-h-0 flex-1 overflow-hidden">
-        <AnimatePresence mode="wait" custom={direction} initial={false}>
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={step}
-            custom={direction}
-            initial={{ opacity: 0, x: direction === 1 ? 40 : -40 }}
+            initial={{ opacity: 0, x: 40 }}
             animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: direction === 1 ? -40 : 40 }}
+            exit={{ opacity: 0, x: -40 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
             className="absolute inset-0 overflow-hidden"
           >
             {step === 1 ? (
-              <StepWelcome onNext={goNext} />
+              <StepPermissions onNext={goNext} />
             ) : step === 2 ? (
-              <StepPermissions onNext={goNext} onBack={goBack} />
-            ) : step === 3 ? (
-              <StepLogin onNext={goNext} onBack={goBack} />
+              <StepLogin onNext={goNext} />
             ) : (
-              <StepTryIt onBack={goBack} onComplete={finish} />
+              <StepTryIt onComplete={finish} />
             )}
           </motion.div>
         </AnimatePresence>

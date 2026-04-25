@@ -25,6 +25,7 @@ mod hotkey;
 mod inject;
 mod openloaf;
 mod overlay;
+mod permissions;
 mod secrets;
 mod stt;
 
@@ -47,6 +48,15 @@ fn greet(name: &str) -> String {
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+// 用于权限授权后重启进程：macOS AXIsProcessTrusted 与 AVCaptureDevice
+// authorizationStatus 都是 per-process 缓存，用户在系统设置勾选后老进程
+// 仍读到 not-granted；必须重启进程才能拿到新值。Tauri 2 的 AppHandle.restart()
+// 会 spawn 一个新实例并干净退出当前进程。
+#[tauri::command]
+fn relaunch_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 #[tauri::command]
@@ -321,12 +331,17 @@ pub fn run() {
                 eprintln!("[overlay] ensure failed: {e:?}");
             }
 
-            // ---- modifier-only 全局键盘订阅（rdev::listen 跑在独立线程）----
+            // ---- modifier-only state 注册（rdev::listen 暂不启动）----
             // 负责 Fn / Ctrl+Win / Right Alt 等"按住即触发"绑定——
             // tauri-plugin-global-shortcut 不接受这种绑定。依赖 rustdesk-org/rdev
-            // fork（见 Cargo.toml）。首启 macOS 会弹 Accessibility 权限；用户拒绝
-            // 时 listen 返回 Err，已在模块内打印并不影响主流程。
-            let mo_state = hotkey::modifier_only::init(app.handle().clone());
+            // fork（见 Cargo.toml）。
+            //
+            // **启动时机**：setup 阶段只创建空 state，让 apply_bindings 能安全
+            // no-op；真正的 rdev::listen 由前端 booted（LoadingScreen 退场、
+            // 主窗口完全可见）后通过 `hotkey_init_listener` invoke 触发。
+            // 这样 macOS 首次访问全局键盘流触发的「Keystroke Receiving」弹框
+            // 不会被随后 show 的主窗口遮挡。
+            let mo_state = hotkey::modifier_only::create_state();
             app.manage(mo_state);
 
             // ---- macOS：按 settings.showDockIcon 设置初始 ActivationPolicy ----
@@ -494,6 +509,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             exit_app,
+            relaunch_app,
             hide_to_tray,
             show_main_window_cmd,
             tray_refresh,
@@ -501,6 +517,7 @@ pub fn run() {
             open_network_settings,
             hotkey::apply_hotkey_config,
             hotkey::set_hotkey_recording,
+            hotkey::hotkey_init_listener,
             overlay::overlay_show,
             overlay::overlay_hide,
             secrets::secret_set,
@@ -511,6 +528,7 @@ pub fn run() {
             openloaf::openloaf_logout,
             openloaf::openloaf_current_user,
             openloaf::openloaf_is_authenticated,
+            openloaf::openloaf_try_recover,
             openloaf::openloaf_fetch_profile,
             openloaf::openloaf_web_url,
             openloaf::openloaf_health_check,
@@ -525,6 +543,15 @@ pub fn run() {
             stt::stt_finalize,
             stt::stt_cancel,
             inject::inject_paste,
+            permissions::permission_check_microphone,
+            permissions::permission_check_accessibility,
+            permissions::permission_check_input_monitoring,
+            permissions::permission_request_microphone,
+            permissions::permission_request_input_monitoring,
+            permissions::permission_request_accessibility,
+            permissions::permission_open_settings,
+            permissions::permission_reset_tcc,
+            permissions::permission_reset_tcc_one,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

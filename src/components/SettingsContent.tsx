@@ -362,81 +362,23 @@ function HotkeysSection() {
           // HOW IT WORKS
         </div>
         <div className="mt-1.5 font-sans text-xs leading-relaxed text-te-light-gray">
-          按住快捷键说话，松开插入文字；打开听写行录入按钮左侧的开关即切换为"单击切换模式"——按一下开始、再按一下停止。按下 &lt; 300 ms 视为误触。
+          按一下快捷键开始说话，再按一下结束并把文字插入到当前焦点。两次按下间隔 &lt; 300 ms 视为快速双击误触，本次录音丢弃。
         </div>
       </div>
 
       <div className="divide-y divide-te-gray/30">
-        {BINDING_IDS.map((id) => {
-          // 听写行特殊处理：左侧挂"常驻显示"开关；下方挂"单击切换模式"副行。
-          // 其余行（问 AI / 翻译）保持最简渲染。
-          if (id === "dictate_ptt") {
-            const binding = bindings[id];
-            const toggleMode = binding?.mode === "toggle";
-            const setToggleMode = async (v: boolean) => {
-              if (!binding) return;
-              await setBinding(id, {
-                ...binding,
-                mode: v ? "toggle" : "hold",
-              });
-            };
-            return (
-              <HotkeyField
-                key={id}
-                id={id}
-                value={binding}
-                onChange={(v) => void commitChange(id, v)}
-                onConflictCheck={(c) => handleCheckConflict(c, id)}
-                // 听写至少保留一个可用绑定：不允许清空
-                canClear={false}
-                fieldLeadingSlot={
-                  <div
-                    className="flex items-center gap-2"
-                    title={
-                      toggleMode
-                        ? "单击切换模式：按一下开始、再按一下停止"
-                        : "按住说话模式：按住说话、松开插入"
-                    }
-                  >
-                    <span
-                      className={cn(
-                        "font-mono text-[11px] uppercase tracking-[0.15em] transition-colors",
-                        toggleMode ? "text-te-fg" : "text-te-light-gray/50",
-                      )}
-                    >
-                      长按
-                    </span>
-                    <Switch
-                      checked={toggleMode}
-                      onChange={(v) => void setToggleMode(v)}
-                    />
-                    <span
-                      className={cn(
-                        "font-mono text-[11px] uppercase tracking-[0.15em] transition-colors",
-                        toggleMode ? "text-te-light-gray/50" : "text-te-fg",
-                      )}
-                    >
-                      保持
-                    </span>
-                  </div>
-                }
-              />
-            );
-          }
-
-          return (
-            <HotkeyField
-              key={id}
-              id={id}
-              value={bindings[id]}
-              onChange={(v) => void commitChange(id, v)}
-              onConflictCheck={(c) => handleCheckConflict(c, id)}
-              canClear
-            />
-          );
-        })}
+        {BINDING_IDS.map((id) => (
+          <HotkeyField
+            key={id}
+            id={id}
+            value={bindings[id]}
+            onChange={(v) => void commitChange(id, v)}
+            onConflictCheck={(c) => handleCheckConflict(c, id)}
+            // 听写至少保留一个可用绑定：不允许清空
+            canClear={id !== "dictate_ptt"}
+          />
+        ))}
       </div>
-
     </div>
   );
 }

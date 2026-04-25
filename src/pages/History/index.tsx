@@ -540,7 +540,7 @@ export default function HistoryPage() {
                 历史记录
               </h1>
               <p className="mt-2 text-xs leading-relaxed text-te-light-gray">
-                你的数据仅存于本地 — 录音不会上传，历史记录只保留在本设备。
+                历史记录保存在本设备。
               </p>
             </div>
             <MoreMenu

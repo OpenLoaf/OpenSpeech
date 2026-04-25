@@ -1,21 +1,22 @@
 import { detectPlatform, type Platform } from "@/lib/platform";
 
 export type HotkeyMod = "ctrl" | "alt" | "shift" | "meta" | "fn";
-export type HotkeyMode = "hold" | "toggle";
 
 /**
  * 绑定形态：
  * - `combo`         —— 至少 1 修饰键 + 1 主键（`code` 非空），例：`Ctrl + Shift + Space`
- * - `modifierOnly`  —— 1 到 N 个修饰键，无主键（`code === ""`），例：`Fn` 单按 / `Ctrl + Win` 按住
+ * - `modifierOnly`  —— 1 到 N 个修饰键，无主键（`code === ""`），例：`Fn` 单按
  * - `doubleTap`     —— 双击单个修饰键（`mods.length === 1`，`code === ""`）
  */
 export type BindingKind = "combo" | "modifierOnly" | "doubleTap";
 
+/**
+ * 全系统统一为 toggle 语义（按一下开始 · 再按一下结束），不再有 hold（长按）模式。
+ */
 export interface HotkeyBinding {
   kind: BindingKind;
   mods: HotkeyMod[];
   code: string;
-  mode: HotkeyMode;
 }
 
 export const MOD_ORDER: readonly HotkeyMod[] = [
@@ -26,9 +27,8 @@ export const MOD_ORDER: readonly HotkeyMod[] = [
   "meta",
 ];
 
-// 听写合并为单一 binding：hold / toggle 模式由 UI 开关切换 → 写回
-// `bindings.dictate_ptt.mode`，不再有独立的 dictate_toggle 绑定。
-// 保留 "dictate_ptt" 的 id 名不动（Rust 侧解析与历史 settings.json 都用此名）。
+// 听写为单一 binding（id 名沿用 "dictate_ptt"，Rust 侧解析与历史 hotkeys.json
+// 都用此名）。统一为 toggle 行为：按一下开始、再按一下结束。
 export const BINDING_IDS = ["dictate_ptt", "ask_ai", "translate"] as const;
 export type BindingId = (typeof BINDING_IDS)[number];
 
@@ -45,28 +45,13 @@ export function getDefaultBindings(
 ): Record<BindingId, HotkeyBinding | null> {
   const ptt: HotkeyBinding =
     platform === "macos"
-      ? { kind: "modifierOnly", mods: ["fn"], code: "", mode: "hold" }
-      : {
-          kind: "modifierOnly",
-          mods: ["ctrl", "meta"],
-          code: "",
-          mode: "hold",
-        };
+      ? { kind: "modifierOnly", mods: ["fn"], code: "" }
+      : { kind: "modifierOnly", mods: ["ctrl", "meta"], code: "" };
 
   return {
     dictate_ptt: ptt,
-    ask_ai: {
-      kind: "combo",
-      mods: ["ctrl", "shift"],
-      code: "KeyA",
-      mode: "hold",
-    },
-    translate: {
-      kind: "combo",
-      mods: ["ctrl", "shift"],
-      code: "KeyT",
-      mode: "hold",
-    },
+    ask_ai: { kind: "combo", mods: ["ctrl", "shift"], code: "KeyA" },
+    translate: { kind: "combo", mods: ["ctrl", "shift"], code: "KeyT" },
   };
 }
 
@@ -89,12 +74,6 @@ export const DEFAULT_BINDINGS: Record<BindingId, HotkeyBinding | null> =
       return { enumerable: true, configurable: true };
     },
   });
-
-export const DEFAULT_MODE: Record<BindingId, HotkeyMode> = {
-  dictate_ptt: "hold",
-  ask_ai: "hold",
-  translate: "hold",
-};
 
 export const BINDING_LABELS: Record<BindingId, string> = {
   dictate_ptt: "听写",
@@ -283,7 +262,6 @@ export function bindingsEqual(
   if (a === null || b === null) return false;
   if (a.kind !== b.kind) return false;
   if (a.code !== b.code) return false;
-  if (a.mode !== b.mode) return false;
   if (a.mods.length !== b.mods.length) return false;
   return a.mods.every((m, i) => m === b.mods[i]);
 }
@@ -296,7 +274,7 @@ export function findConflict(
   for (const id of BINDING_IDS) {
     if (id === excludeId) continue;
     const b = bindings[id];
-    if (b && bindingsEqual(b, { ...candidate, mode: b.mode })) return id;
+    if (b && bindingsEqual(b, candidate)) return id;
   }
   return null;
 }

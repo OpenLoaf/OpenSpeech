@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FC } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, ArrowLeft, Loader2, Sparkles, ServerCog } from "lucide-react";
+import { ArrowRight, Loader2, Sparkles, ServerCog } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore, type LoginProvider } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
@@ -46,16 +46,14 @@ const METHODS: Array<{
   sub: string;
   Icon: FC<{ className?: string }>;
 }> = [
-  { id: "google", label: "使用 Google 账号登录", sub: "推荐 · 一键完成", Icon: GoogleIcon },
-  { id: "wechat", label: "微信扫码登录", sub: "国内用户首选", Icon: WechatIcon },
+  { id: "wechat", label: "微信登录", sub: "扫码即可登录", Icon: WechatIcon },
+  { id: "google", label: "Google 登录", sub: "浏览器跳转登录", Icon: GoogleIcon },
 ];
 
 export function StepLogin({
   onNext,
-  onBack,
 }: {
   onNext: () => void;
-  onBack: () => void;
 }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const loginStatus = useAuthStore((s) => s.loginStatus);
@@ -122,34 +120,32 @@ export function StepLogin({
         : "text-te-light-gray";
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden px-8 pt-24 pb-6">
+    <div className="flex h-full w-full flex-col overflow-hidden px-8 pt-40 pb-6">
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
         className="mx-auto flex h-full w-full max-w-2xl flex-col"
       >
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col items-center gap-2 text-center">
           <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-accent">
-            // step 03 / account
+            // step 02 / account
           </span>
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
-              登录 OpenLoaf 账号
-            </h2>
-            <div className="inline-flex items-center gap-2 border border-te-accent/40 bg-te-accent/5 px-3 py-1.5">
-              <Sparkles className="size-3.5 shrink-0 text-te-accent" />
-              <span className="font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-te-accent">
-                新用户立即到账 200 积分
-              </span>
-              <span className="font-sans text-xs text-te-light-gray">
-                · 约 <span className="font-mono text-te-fg">30 分钟</span> 语音
-              </span>
-            </div>
+          <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
+            登录 OpenLoaf 账号
+          </h2>
+          <div className="inline-flex w-fit items-center gap-2 border border-te-accent/40 bg-te-accent/5 px-3 py-1.5">
+            <Sparkles className="size-3.5 shrink-0 text-te-accent" />
+            <span className="font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-te-accent">
+              新用户立即到账 200 积分
+            </span>
+            <span className="font-sans text-xs text-te-light-gray">
+              · 约 <span className="font-mono text-te-fg">30 分钟</span> 语音
+            </span>
           </div>
         </div>
 
-        <div className="flex flex-1 flex-col justify-center gap-3">
+        <div className="mt-8 flex flex-col gap-6">
           {METHODS.map((m) => {
             const loading = pending === m.id && isBusy;
             const success = pending === m.id && isAuthenticated;
@@ -221,14 +217,7 @@ export function StepLogin({
           ) : null}
         </div>
 
-        <div className="flex items-center justify-between">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex items-center gap-2 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
-          >
-            <ArrowLeft className="size-3" /> 上一步
-          </button>
+        <div className="flex items-center justify-end">
           <button
             type="button"
             onClick={() => setAdvanced((v) => !v)}

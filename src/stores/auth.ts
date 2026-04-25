@@ -144,6 +144,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
       set({ loaded: true });
     }
+
+    // 网络从断到通时主动尝试恢复登录态：startup bootstrap 失败 / 之前掉过线
+    // 都靠这条路径"自愈"，不用等用户重启 app 或按快捷键。
+    // 已登录时 try_recover 直接返回 true 不动网络，所以无害。
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", () => {
+        void invoke("openloaf_try_recover").catch(() => {});
+      });
+    }
   },
 
   startLogin: async (provider) => {

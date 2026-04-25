@@ -57,15 +57,18 @@ function freshDefaults(): Record<BindingId, HotkeyBinding | null> {
 
 // 接受 unknown，返回归一化的 HotkeyBinding 或 null：v1 老数据没有 kind，按
 // code 是否为空推断（空 → modifierOnly，非空 → combo）。
+// v2/v3 迁移：旧字段 `mode: "hold" | "toggle"` 一律丢弃——系统统一为 toggle。
 function normalizeBinding(raw: unknown): HotkeyBinding | null {
   if (raw == null || typeof raw !== "object") return null;
-  const b = raw as Partial<HotkeyBinding> & { kind?: BindingKind };
+  const b = raw as Partial<HotkeyBinding> & {
+    kind?: BindingKind;
+    mode?: unknown;
+  };
   if (!Array.isArray(b.mods)) return null;
   if (typeof b.code !== "string") return null;
-  if (b.mode !== "hold" && b.mode !== "toggle") return null;
   const kind: BindingKind =
     b.kind ?? (b.code === "" ? "modifierOnly" : "combo");
-  return { kind, mods: b.mods, code: b.code, mode: b.mode };
+  return { kind, mods: b.mods, code: b.code };
 }
 
 // 只保留 BINDING_IDS 内的 key，把老版本里残留的（例如被移除的 dictate_toggle）
