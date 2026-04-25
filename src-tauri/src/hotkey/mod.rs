@@ -32,13 +32,6 @@ pub enum BindingId {
     Translate,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HotkeyMode {
-    Hold,
-    Toggle,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct HotkeyBinding {
     /// `"combo"` | `"modifierOnly"` | `"doubleTap"`。v1 老数据没有此字段，
@@ -47,7 +40,6 @@ pub struct HotkeyBinding {
     pub kind: String,
     pub mods: Vec<String>,
     pub code: String,
-    pub mode: HotkeyMode,
 }
 
 fn default_kind() -> String {
@@ -62,13 +54,12 @@ pub struct HotkeyConfigPayload {
 #[derive(Debug, Clone, Serialize)]
 pub struct HotkeyEventPayload {
     pub id: BindingId,
-    pub mode: HotkeyMode,
     pub phase: &'static str, // "pressed" | "released"
 }
 
 // 当前已注册的 shortcut → BindingId 的映射
 pub struct HotkeyState {
-    active: HashMap<Shortcut, (BindingId, HotkeyMode)>,
+    active: HashMap<Shortcut, BindingId>,
 }
 
 impl Default for HotkeyState {
@@ -158,7 +149,7 @@ pub fn apply_bindings<R: Runtime>(
     }
 
     // 1. 先计算 combo 目标集合，便于幂等判断。
-    let mut desired: HashMap<Shortcut, (String, BindingId, HotkeyMode)> = HashMap::new();
+    let mut desired: HashMap<Shortcut, (String, BindingId)> = HashMap::new();
     for (id_str, maybe) in &payload.bindings {
         let Some(id) = parse_binding_id(id_str) else {
             eprintln!("[hotkey]   skip unknown id: {id_str}");
@@ -189,13 +180,13 @@ pub fn apply_bindings<R: Runtime>(
             eprintln!("[hotkey]   duplicate shortcut skipped for {id_str}: {sc:?}");
             continue;
         }
-        desired.insert(sc, (id_str.clone(), id, binding.mode));
+        desired.insert(sc, (id_str.clone(), id));
     }
 
     // 幂等：如果目标与当前激活完全一致，跳过所有 OS 调用。
     let same = desired.len() == s.active.len()
-        && desired.iter().all(|(sc, (_, id, mode))| {
-            s.active.get(sc).is_some_and(|(aid, amode)| aid == id && amode == mode)
+        && desired.iter().all(|(sc, (_, id))| {
+            s.active.get(sc).is_some_and(|aid| aid == id)
         });
     if same {
         eprintln!(
@@ -213,8 +204,8 @@ pub fn apply_bindings<R: Runtime>(
     s.active.clear();
 
     // 3. register 新的
-    let mut next: HashMap<Shortcut, (BindingId, HotkeyMode)> = HashMap::new();
-    for (sc, (id_str, id, mode)) in desired {
+    let mut next: HashMap<Shortcut, BindingId> = HashMap::new();
+    for (sc, (id_str, id)) in desired {
         let result = plugin.register(sc).or_else(|first_err| {
             // OS 层可能残留（上次 crash / HMR 残留）；先 unregister 再重试一次。
             eprintln!(
@@ -226,8 +217,8 @@ pub fn apply_bindings<R: Runtime>(
 
         match result {
             Ok(()) => {
-                eprintln!("[hotkey]   registered {id_str} -> {sc:?} (mode={mode:?})");
-                next.insert(sc, (id, mode));
+                eprintln!("[hotkey]   registered {id_str} -> {sc:?}");
+                next.insert(sc, id);
             }
             Err(e) => {
                 eprintln!("[hotkey]   REGISTER FAILED for {id_str} -> {sc:?}: {e:?}");
@@ -259,7 +250,7 @@ pub fn handler<R: Runtime>(
         eprintln!("[hotkey] handler: lock poisoned");
         return;
     };
-    let Some(&(id, mode)) = s.active.get(shortcut) else {
+    let Some(&id) = s.active.get(shortcut) else {
         eprintln!("[hotkey] handler: unrecognized shortcut {shortcut:?}");
         return;
     };
@@ -280,7 +271,7 @@ pub fn handler<R: Runtime>(
         }
     }
 
-    let payload = HotkeyEventPayload { id, mode, phase };
+    let payload = HotkeyEventPayload { id, phase };
     if let Err(e) = app.emit(HOTKEY_EVENT, payload) {
         eprintln!("[hotkey] emit failed: {e:?}");
     }
@@ -292,6 +283,22 @@ pub async fn apply_hotkey_config<R: Runtime>(
     payload: HotkeyConfigPayload,
 ) -> Result<(), String> {
     apply_bindings(&app, &payload)
+}
+
+/// 前端 booted=true 后调用一次，启动 rdev::listen 全局键盘订阅线程。
+/// 幂等：模块内 `LISTEN_STARTED` AtomicBool 保证多次调用只启一次。
+/// **为什么不在 setup 阶段启动**：rdev::listen 首次访问全局键盘流会触发
+/// macOS「Keystroke Receiving」授权弹框，setup 阶段立即弹会被随后 show 的
+/// 主窗口遮挡。前端等 LoadingScreen 退场、主窗口完全可见后再 invoke 这条
+/// 命令——弹框正常叠在主窗口之上。
+#[tauri::command]
+pub fn hotkey_init_listener<R: Runtime>(app: AppHandle<R>) {
+    let Some(state) = app.try_state::<SharedModifierOnlyState>() else {
+        eprintln!("[hotkey] hotkey_init_listener: SharedModifierOnlyState missing");
+        return;
+    };
+    let state_arc: SharedModifierOnlyState = state.inner().clone();
+    modifier_only::start_listener(app.clone(), state_arc);
 }
 
 /// 录入期间从 OS 层反注册所有 combo——避免用户在录入框里按到 `Ctrl+Shift+Space`

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "set -a; [ -f src-tauri/.env ] && . src-tauri/.env; set +a; tauri",
     "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml"
   },
   "dependencies": {
