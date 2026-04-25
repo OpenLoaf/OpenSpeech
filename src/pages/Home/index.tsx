@@ -96,13 +96,13 @@ export default function HomePage() {
             </h1>
 
             <p className="max-w-xl font-sans text-sm leading-relaxed text-te-light-gray md:text-base">
-              按住一个键，开口说话，文字即刻出现在任意应用中。不绑定编辑器，无订阅，无遥测。
+              按住一个键，开口说话，文字即刻出现在任意应用中。不绑定编辑器，录音只留本机，无任何遥测。
             </p>
 
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
               <span>// PUSH-TO-TALK 按键听写</span>
-              <span>// BYO-MODEL</span>
-              <span>// 本地优先</span>
+              <span>// 模型自选 SAAS · BYO</span>
+              <span>// 跨平台 WIN · MAC · LINUX</span>
             </div>
           </motion.div>
 

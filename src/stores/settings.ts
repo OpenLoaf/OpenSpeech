@@ -50,6 +50,9 @@ export interface GeneralSettings {
   //   HIDE — 直接隐藏到托盘（= 原"关闭时最小化到托盘"打开）
   //   QUIT — 直接退出（由对话框勾"不再提醒 + 退出"写入）
   closeBehavior: CloseBehavior;
+  // 首次启动引导是否已完成。false ⇒ 启动时 main.tsx 会重定向到 /onboarding。
+  // 设置 → 关于 里可重新触发引导（清掉这个标记）。
+  onboardingCompleted: boolean;
 }
 
 export interface PersonalizationSettings {
@@ -84,6 +87,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   showDockIcon: true,
   autoUpdate: true,
   closeBehavior: "ASK",
+  onboardingCompleted: false,
 };
 
 const DEFAULT_PERSONALIZATION: PersonalizationSettings = {

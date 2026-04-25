@@ -458,6 +458,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             settingsGeneral.endpoint.trim() !== "";
           if (!saasReady && !byoReady) {
             console.log("[recording] gate blocked: no STT backend available");
+            // Rust 在 pressed 那一刻已 invoke overlay::show；gate 拦截后 state 不
+            // 离开 idle，FSM 广播也不会触发，overlay 会停在空黑框。显式收回。
+            void invoke("overlay_hide").catch(() => {});
             useUIStore.getState().openLogin();
             return;
           }
@@ -481,6 +484,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             navigator.onLine === false
           ) {
             console.log("[recording] gate blocked: offline (SAAS path)");
+            void invoke("overlay_hide").catch(() => {});
             useUIStore.getState().openNoInternet();
             return;
           }

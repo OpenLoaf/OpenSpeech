@@ -25,11 +25,9 @@ const WINDOW_LABEL = getCurrentWebviewWindow().label;
 const IS_OVERLAY = WINDOW_LABEL === "overlay";
 console.log("[boot] window label =", WINDOW_LABEL, "isOverlay =", IS_OVERLAY);
 
-// 测试期：每次启动都强制跳 /onboarding，方便走查 UI 而不用反复清权限 / 卸载。
-// 业务接好后改成读 settings.onboardingCompleted。
-// 用 router.navigate（在 Root 里 useEffect 调用），不能用 replaceState ——
-// ESM import 已经把 createBrowserRouter 跑过了，初始 location 已被 router 锁定。
-const FORCE_ONBOARDING_ON_BOOT = true;
+// 启动路由策略：boot 完成后读 settings.onboardingCompleted，false ⇒ 跳 /onboarding。
+// 用 router.navigate 而不是 replaceState：ESM import 时 createBrowserRouter 已锁定初始 location，
+// 修改 history 也不会影响 router 的 state。
 
 // top-level IIFE：仅执行一次（StrictMode 下 useEffect 会跑两次，因此启动逻辑必须放在模块作用域）。
 const bootPromise = (async () => {
@@ -122,10 +120,11 @@ function Root() {
     };
   }, []);
 
-  // boot 完且 force 模式开着 → 直接跳 /onboarding。RouterProvider 已挂载，navigate 安全。
+  // boot 完读 settings：未完成引导 ⇒ 跳 /onboarding；已完成则什么都不做（Layout/Home 正常加载）
   useEffect(() => {
     if (!booted || IS_OVERLAY) return;
-    if (!FORCE_ONBOARDING_ON_BOOT) return;
+    const completed = useSettingsStore.getState().general.onboardingCompleted;
+    if (completed) return;
     if (router.state.location.pathname !== "/onboarding") {
       void router.navigate("/onboarding", { replace: true });
     }

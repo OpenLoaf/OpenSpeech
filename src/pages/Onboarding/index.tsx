@@ -3,9 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { LogicalSize } from "@tauri-apps/api/dpi";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { PulsarGrid } from "@/components/PulsarGrid";
 import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings";
 import { StepWelcome } from "./StepWelcome";
 import { StepPermissions } from "./StepPermissions";
 import { StepLogin } from "./StepLogin";
@@ -16,35 +16,12 @@ import { STEP_TITLES, type OnboardingStep } from "./types";
 // 当前实现为纯 UI mock；完成后 navigate("/") 回主界面（不写 onboarding.completed —
 // 测试期需要每次启动都看到这个页面，见 main.tsx 的 force-redirect 注释）。
 
-// 引导期窗口尺寸：比主界面紧凑，让 4 步卡片视觉聚焦。完成 / 离开此页时恢复主界面尺寸。
-// 顺序：缩小时先 setMinSize（必须 ≤ 目标尺寸），再 setSize；放大时也是先 setMinSize 再 setSize。
-// 16:10 比例（880×560）：宽且不高，wizard 卡片不会被竖向拉空。
-// minH 调到 520 让小屏笔电也能塞下；MAIN_SIZE 退出时恢复主界面尺寸。
-const ONBOARDING_SIZE = { w: 880, h: 560, minW: 820, minH: 520 };
-const MAIN_SIZE = { w: 1100, h: 780, minW: 1000, minH: 680 };
-
-async function applyWindowSize(s: { w: number; h: number; minW: number; minH: number }) {
-  try {
-    const win = getCurrentWebviewWindow();
-    await win.setMinSize(new LogicalSize(s.minW, s.minH));
-    await win.setSize(new LogicalSize(s.w, s.h));
-  } catch (e) {
-    console.warn("[onboarding] window resize failed:", e);
-  }
-}
+// 引导页直接用主窗口尺寸（tauri.conf.json 默认 1100×780，可调整），不再 lock。
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState<OnboardingStep>(1);
   const [direction, setDirection] = useState<1 | -1>(1);
-
-  // mount 时缩到引导尺寸，unmount 时恢复主界面尺寸（finish/navigate 都会触发 unmount）
-  useEffect(() => {
-    void applyWindowSize(ONBOARDING_SIZE);
-    return () => {
-      void applyWindowSize(MAIN_SIZE);
-    };
-  }, []);
 
   // Cmd+Q / 红叉 / 菜单关闭：Rust 拦截后 emit close-requested，Layout 是默认监听者，
   // 但 onboarding 页不进 Layout，没人监听就会"按下没反应"。这里直接退出（onboarding
@@ -78,24 +55,40 @@ export default function OnboardingPage() {
   };
 
   const finish = () => {
-    // TODO: 接业务时调 settingsStore.setGeneral("onboardingCompleted", true)
+    // 引导走完 → 标记 onboardingCompleted=true 持久化到 settings.json，下次启动直接进主界面
+    void useSettingsStore.getState().setGeneral("onboardingCompleted", true);
     navigate("/", { replace: true });
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-te-bg text-te-fg">
-      {/* drag region：让窗口在 onboarding 页面也能从顶部拖动 */}
-      <div data-tauri-drag-region aria-hidden className="h-8 shrink-0" />
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-te-bg text-te-fg">
+      {/* 与首页同款的 PulsarGrid 动态背景 + 径向遮罩。pointer-events-none 让 header drag 区
+          与按钮交互全部正常透传；canvas 自身用 window 级 mousemove 不依赖 DOM 捕获事件 */}
+      <div className="pointer-events-none absolute inset-0">
+        <PulsarGrid />
+      </div>
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse 90% 70% at 50% 45%, transparent 30%, var(--te-bg) 95%)",
+        }}
+      />
 
-      {/* progress bar */}
-      <header className="flex shrink-0 items-center justify-between border-b border-te-gray/60 px-8 py-4">
+      {/* header 与红绿灯同行：整个 header 都是 drag 区，左侧 pl-20 给 macOS 红绿灯让位
+          （Windows / Linux 该 padding 也无害，只是稍空一点）。drag-region 在父级生效，
+          子级文字 / span 都自动可拖；如果未来加按钮，给那个按钮单独 data-tauri-drag-region="false" */}
+      <header
+        data-tauri-drag-region
+        className="relative z-10 flex h-12 shrink-0 items-center justify-between border-b border-te-gray/60 pl-20 pr-6"
+      >
         <div className="flex items-center gap-3">
           <span className="size-2 bg-te-accent" aria-hidden />
           <span className="font-mono text-sm font-bold tracking-[0.2em]">
             <span className="text-te-fg">OPEN</span>
             <span className="text-te-accent">SPEECH</span>
           </span>
-          <span className="ml-2 hidden font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:inline">
+          <span className="ml-2 font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
             // first run setup
           </span>
         </div>
@@ -122,7 +115,7 @@ export default function OnboardingPage() {
         </div>
       </header>
 
-      <main className="relative min-h-0 flex-1 overflow-hidden">
+      <main className="relative z-10 min-h-0 flex-1 overflow-hidden">
         <AnimatePresence mode="wait" custom={direction} initial={false}>
           <motion.div
             key={step}
@@ -131,7 +124,7 @@ export default function OnboardingPage() {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: direction === 1 ? -40 : 40 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
-            className="absolute inset-0 overflow-y-auto"
+            className="absolute inset-0 overflow-hidden"
           >
             {step === 1 ? (
               <StepWelcome onNext={goNext} />

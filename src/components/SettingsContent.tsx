@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@/stores/settings";
+import { useUIStore } from "@/stores/ui";
 import { SECRET_STT_API_KEY, getSecret, setSecret } from "@/lib/secrets";
 import {
   listInputDevices,
@@ -21,6 +23,7 @@ import {
   Sparkles,
   Info,
   Cloud,
+  Rocket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { syncAutostart } from "@/lib/autostart";
@@ -916,6 +919,18 @@ function AccountTab() {
 }
 
 function AboutTab() {
+  const navigate = useNavigate();
+  const setGeneral = useSettingsStore((s) => s.setGeneral);
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+
+  const rerunOnboarding = async () => {
+    // 把 onboardingCompleted 翻回 false 并跳到 /onboarding。SettingsDialog 与
+    // /settings 全屏页两种使用场景都覆盖：先关 dialog（如果开着），再 navigate。
+    await setGeneral("onboardingCompleted", false);
+    setSettingsOpen(false);
+    navigate("/onboarding", { replace: true });
+  };
+
   const deps = [
     { name: "Tauri", version: "2.x" },
     { name: "React", version: "19" },
@@ -946,13 +961,21 @@ function AboutTab() {
         </a>
       </Row>
 
-      <div className="py-4">
+      <div className="flex flex-wrap items-center gap-3 py-4">
         <button
           type="button"
           className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
         >
           <span className="size-1.5 bg-te-accent" />
           检查更新
+        </button>
+        <button
+          type="button"
+          onClick={() => void rerunOnboarding()}
+          className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+        >
+          <Rocket className="size-3.5" />
+          重新运行首次引导
         </button>
       </div>
 

@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, Check, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LiveDictationPanel } from "@/components/LiveDictationPanel";
+import { HotkeyPreview } from "@/components/HotkeyPreview";
 import { useHotkeysStore } from "@/stores/hotkeys";
-import type { RecordingState } from "@/stores/recording";
+import { useRecordingStore, type RecordingState } from "@/stores/recording";
 
-// Step 4：纯 mock 的 try-it 体验。点"模拟一次完整流程"按钮 → 时间线驱动状态机：
-// idle → preparing → recording (假波形 + 假 partial) → transcribing → injecting → done。
-// 用户的真实快捷键暂不接，只为视觉走查 UI。
+// Step 4：默认订阅真实 useRecordingStore，让用户用真快捷键完整跑一遍流程；
+// 不能 / 不愿按真快捷键的用户，点"模拟一次"走纯前端假状态机兜底。
+// checklist 4 项基于 state 单调推进（preparing→1、recording 持续≥800ms→2、
+// transcribing→3、injecting 走完→4）。
 
 const FAKE_TRANSCRIPT_SLICES = [
   "今",
@@ -38,6 +40,8 @@ const CHECKLIST = [
   "看到文字写入下方",
 ] as const;
 
+type Source = "real" | "mock";
+
 export function StepTryIt({
   onBack,
   onComplete,
@@ -46,195 +50,285 @@ export function StepTryIt({
   onComplete: () => void;
 }) {
   const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
-  const [state, setState] = useState<RecordingState>("idle");
-  const [transcript, setTranscript] = useState("");
-  const [stepDone, setStepDone] = useState<boolean[]>([false, false, false, false]);
-  const [playing, setPlaying] = useState(false);
-  const [waveSeed, setWaveSeed] = useState(0);
-  const [textareaContent, setTextareaContent] = useState("");
 
-  // 录音 / preparing 时刷新假波形
+  // 真实流：订阅 useRecordingStore（与 Home 页面一致）。
+  const realState = useRecordingStore((s) => s.state);
+  const realLevels = useRecordingStore((s) => s.audioLevels);
+  const realTranscript = useRecordingStore((s) => s.liveTranscript);
+
+  // 模拟流：本地状态机，仅在用户点"模拟一次"时驱动显示。
+  const [mockActive, setMockActive] = useState(false);
+  const [mockState, setMockState] = useState<RecordingState>("idle");
+  const [mockTranscript, setMockTranscript] = useState("");
+  const [mockSeed, setMockSeed] = useState(0);
+
+  // 当前展示来源：mock 跑完前完全接管，跑完后回到 real。
+  const source: Source = mockActive ? "mock" : "real";
+  const state = source === "mock" ? mockState : realState;
+  const transcript = source === "mock" ? mockTranscript : realTranscript;
+
+  // 真流的波形是 LEVEL_BUFFER_LEN=15（recording store 里），mock 用 60 直接驱动 fakeWaveform。
+  // 把两者都映射到 60 长度让 LiveDictationPanel 视觉一致。
+  const audioLevels = useMemo(() => {
+    if (source === "mock") {
+      return mockState === "recording" || mockState === "preparing"
+        ? fakeWaveform(mockSeed)
+        : SILENT_LEVELS;
+    }
+    // real：把 15 长度的 buffer pad 成 60，避免突然变窄/宽
+    if (realLevels.length >= 60) return realLevels.slice(-60);
+    const padLen = 60 - realLevels.length;
+    return [...Array(padLen).fill(0), ...realLevels];
+  }, [source, mockState, mockSeed, realLevels]);
+
+  // mock 录音时刷新假波形
   useEffect(() => {
-    if (state !== "recording" && state !== "preparing") return;
-    const t = window.setInterval(() => setWaveSeed((s) => s + 1), 70);
+    if (source !== "mock") return;
+    if (mockState !== "recording" && mockState !== "preparing") return;
+    const t = window.setInterval(() => setMockSeed((s) => s + 1), 70);
     return () => window.clearInterval(t);
+  }, [source, mockState]);
+
+  // checklist 单调推进。state 进入对应阶段后 lock，避免回到 idle 时被回吐。
+  const [progress, setProgress] = useState(0);
+  const recordingStartedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setProgress((cur) => {
+      let next = cur;
+      if (state === "preparing" || state === "recording") {
+        next = Math.max(next, 1);
+        if (state === "recording" && recordingStartedAtRef.current == null) {
+          recordingStartedAtRef.current = performance.now();
+        }
+      }
+      if (
+        state === "recording" &&
+        recordingStartedAtRef.current != null &&
+        performance.now() - recordingStartedAtRef.current >= 800
+      ) {
+        next = Math.max(next, 2);
+      }
+      if (state === "transcribing") {
+        next = Math.max(next, 2, 3);
+      }
+      if (state === "injecting") {
+        next = Math.max(next, 3);
+      }
+      // 注入完成：injecting → idle 时锁第 4 项
+      if (state === "idle" && cur >= 3) {
+        next = Math.max(next, 4);
+      }
+      return next;
+    });
+    if (state === "idle" && recordingStartedAtRef.current != null) {
+      recordingStartedAtRef.current = null;
+    }
+  }, [state, transcript]);
+
+  // recording 持续到 800ms 时补刷一次进度（useEffect 触发条件不会因时间流逝重新跑）
+  useEffect(() => {
+    if (state !== "recording") return;
+    const t = window.setTimeout(() => {
+      setProgress((cur) => Math.max(cur, 2));
+    }, 800);
+    return () => window.clearTimeout(t);
   }, [state]);
 
-  const audioLevels = useMemo(() => {
-    if (state === "recording" || state === "preparing") return fakeWaveform(waveSeed);
-    return SILENT_LEVELS;
-  }, [state, waveSeed]);
+  const stepDone = useMemo(
+    () => [progress >= 1, progress >= 2, progress >= 3, progress >= 4] as const,
+    [progress],
+  );
+  const completed = stepDone.every(Boolean);
 
+  // mock 跑完一次完整流程
   const runMock = () => {
-    if (playing) return;
-    setPlaying(true);
-    setTranscript("");
-    setStepDone([false, false, false, false]);
-    setTextareaContent("");
+    if (mockActive) return;
+    setProgress(0);
+    recordingStartedAtRef.current = null;
+    setMockActive(true);
+    setMockState("preparing");
+    setMockTranscript("");
 
-    // step 1: preparing → 200ms
-    setState("preparing");
-    setStepDone([true, false, false, false]);
-
-    let timeouts: number[] = [];
+    const timeouts: number[] = [];
     const at = (ms: number, fn: () => void) => {
       timeouts.push(window.setTimeout(fn, ms));
     };
 
-    at(220, () => {
-      setState("recording");
-      setStepDone([true, true, false, false]);
-    });
-
+    at(220, () => setMockState("recording"));
     FAKE_TRANSCRIPT_SLICES.forEach((slice, i) => {
-      at(280 + i * 280, () => setTranscript(slice));
+      at(280 + i * 280, () => setMockTranscript(slice));
     });
-
     const totalRecMs = 280 + FAKE_TRANSCRIPT_SLICES.length * 280;
-    at(totalRecMs + 200, () => {
-      setState("transcribing");
-      setStepDone([true, true, true, false]);
-    });
-    at(totalRecMs + 700, () => setState("injecting"));
+    at(totalRecMs + 200, () => setMockState("transcribing"));
+    at(totalRecMs + 700, () => setMockState("injecting"));
     at(totalRecMs + 1100, () => {
-      setTextareaContent(FAKE_TRANSCRIPT_SLICES[FAKE_TRANSCRIPT_SLICES.length - 1]);
-      setState("idle");
-      setStepDone([true, true, true, true]);
-      setPlaying(false);
+      setMockState("idle");
+      setMockActive(false);
     });
-
-    return () => timeouts.forEach((t) => window.clearTimeout(t));
   };
 
-  const completed = stepDone.every(Boolean);
+  const reset = () => {
+    setProgress(0);
+    recordingStartedAtRef.current = null;
+    setMockTranscript("");
+    setMockState("idle");
+    setMockActive(false);
+  };
 
   return (
-    <div className="flex h-full w-full flex-col px-8 py-6">
+    <div className="flex h-full w-full flex-col overflow-hidden px-8 pt-24 pb-6">
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
-        className="mx-auto flex w-full max-w-3xl flex-col gap-5"
+        className="mx-auto flex h-full w-full max-w-3xl flex-col gap-3"
       >
         <div className="flex flex-col gap-2">
           <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-accent">
             // step 04 / try it
           </span>
-          <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
-            试一次。
-          </h2>
-          <p className="font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
-            按下面的按钮模拟一次完整流程，看看 OpenSpeech 是怎么工作的。<br />
-            正式使用时只需按住快捷键说话。
-          </p>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
+              试一次。
+            </h2>
+            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+              按住下方显示的快捷键，说一句话，松开
+            </span>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-          <div className="flex flex-col gap-2">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-              checklist
+        {/* 上：checklist + 实时面板 / 下：目标输入框。所有文字提亮，避免"看不清"。 */}
+        <div className="grid flex-1 grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)] gap-3">
+          <div className="flex flex-col gap-3 border border-te-gray/60 bg-te-surface p-4">
+            <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
+              // CHECKLIST
             </span>
-            <div className="flex flex-col gap-2 border border-te-gray/60 bg-te-surface p-4">
-              {CHECKLIST.map((label, i) => (
-                <div
-                  key={i}
-                  className={cn(
-                    "flex items-center gap-3 transition-colors",
-                    stepDone[i] ? "text-te-accent" : "text-te-light-gray",
-                  )}
-                >
-                  <span
+            <div className="flex flex-col gap-2.5">
+              {CHECKLIST.map((label, i) => {
+                const done = stepDone[i];
+                const active = !done && progress === i;
+                return (
+                  <div
+                    key={i}
                     className={cn(
-                      "flex size-5 items-center justify-center border font-mono text-[10px]",
-                      stepDone[i]
-                        ? "border-te-accent bg-te-accent text-te-accent-fg"
-                        : "border-te-gray text-te-light-gray",
+                      "flex items-center gap-2.5 transition-colors",
+                      done
+                        ? "text-te-accent"
+                        : active
+                          ? "text-te-fg"
+                          : "text-te-light-gray",
                     )}
                   >
-                    {stepDone[i] ? <Check className="size-3" /> : i + 1}
-                  </span>
-                  <span className="font-sans text-xs md:text-sm">{label}</span>
-                </div>
-              ))}
+                    <span
+                      className={cn(
+                        "flex size-5 shrink-0 items-center justify-center border font-mono text-[10px] font-bold",
+                        done
+                          ? "border-te-accent bg-te-accent text-te-accent-fg"
+                          : active
+                            ? "border-te-accent text-te-accent"
+                            : "border-te-gray text-te-light-gray",
+                      )}
+                    >
+                      {done ? <Check className="size-3" /> : i + 1}
+                    </span>
+                    <span className="font-sans text-sm">{label}</span>
+                  </div>
+                );
+              })}
             </div>
-          </div>
 
-          <div className="flex flex-col gap-2">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-              live preview
-            </span>
-            <div className="border border-te-gray/60 bg-te-surface p-4">
-              <LiveDictationPanel
-                state={state}
-                mode={binding?.mode ?? "hold"}
-                audioLevels={audioLevels}
-                liveTranscript={transcript}
+            <div className="mt-auto border-t border-te-gray/40 pt-3">
+              <HotkeyPreview
+                index="HOTKEY"
+                title="你的听写快捷键"
+                hint={
+                  binding?.mode === "toggle"
+                    ? "单击开始 · 再按结束"
+                    : "按住说 · 松开转写"
+                }
               />
             </div>
           </div>
+
+          <div className="flex flex-col gap-2 border border-te-gray/60 bg-te-surface p-4">
+            <LiveDictationPanel
+              state={state}
+              mode={binding?.mode ?? "hold"}
+              audioLevels={audioLevels}
+              liveTranscript={transcript}
+            />
+          </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-            目标输入框（注入演示）
+        <div className="flex flex-col gap-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
+            // 目标输入框（焦点在这里时，松开快捷键文字会自动写入）
           </span>
           <textarea
-            value={textareaContent}
-            onChange={(e) => setTextareaContent(e.target.value)}
-            placeholder="文字会在松开快捷键后自动写到这里…"
-            className="min-h-[6rem] resize-none border border-te-gray/60 bg-te-bg p-3 font-sans text-sm leading-relaxed text-te-fg placeholder:text-te-light-gray/60 focus:border-te-accent focus:outline-none"
+            placeholder="光标点进来 → 按住快捷键 → 说话 → 松开 → 文字会出现在这里…"
+            className="h-[3.75rem] resize-none border border-te-gray/60 bg-te-bg p-2.5 font-sans text-sm leading-relaxed text-te-fg placeholder:text-te-light-gray/70 focus:border-te-accent focus:outline-none"
           />
         </div>
 
         {completed ? (
-          <div className="flex items-center gap-3 border border-te-accent bg-te-accent/5 p-4">
-            <PartyPopper className="size-5 shrink-0 text-te-accent" />
+          <div className="flex items-center gap-3 border border-te-accent bg-te-accent/10 p-2.5">
+            <PartyPopper className="size-4 shrink-0 text-te-accent" />
             <div className="flex flex-col gap-0.5">
               <span className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-te-accent">
-                你已经上路了
+                配置完成，可以开始使用了
               </span>
-              <span className="font-sans text-xs text-te-light-gray">
+              <span className="font-sans text-xs text-te-fg/80">
                 正式使用时光标在哪个 App，文字就写到哪个 App。
               </span>
             </div>
           </div>
         ) : null}
 
-        <div className="mt-1 flex items-center justify-between">
+        <div className="flex items-center justify-between">
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center gap-2 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
+            className="inline-flex items-center gap-2 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
           >
             <ArrowLeft className="size-3" /> 上一步
           </button>
 
           <div className="flex items-center gap-2">
+            {progress > 0 ? (
+              <button
+                type="button"
+                onClick={reset}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
+              >
+                重置
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={runMock}
-              disabled={playing}
+              disabled={mockActive}
               className={cn(
-                "inline-flex items-center gap-2 border px-4 py-2 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors",
-                playing
+                "inline-flex items-center gap-2 border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors",
+                mockActive
                   ? "cursor-not-allowed border-te-gray/40 text-te-light-gray/40"
                   : "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent",
               )}
             >
-              {playing ? "演示中…" : "▶ 模拟一次完整流程"}
+              {mockActive ? "演示中…" : "▶ 模拟一次"}
             </button>
             <button
               type="button"
               onClick={onComplete}
               className={cn(
-                "group inline-flex items-center gap-3 border px-6 py-3 font-mono text-sm font-bold uppercase tracking-[0.2em] transition-colors",
+                "group inline-flex items-center gap-2 border px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.2em] transition-colors",
                 completed
                   ? "border-te-accent bg-te-accent text-te-accent-fg hover:bg-te-accent/90"
                   : "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent",
               )}
             >
               <span>{completed ? "完成引导" : "跳过并完成"}</span>
-              <Check className="size-4 transition-transform group-hover:translate-x-1" />
+              <Check className="size-3.5 transition-transform group-hover:translate-x-1" />
             </button>
           </div>
         </div>

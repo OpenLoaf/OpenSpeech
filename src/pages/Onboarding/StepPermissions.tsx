@@ -97,18 +97,19 @@ function cardsForPlatform(platform: Platform): PermissionCard[] {
 
 function PermissionRow({
   card,
+  index,
   status,
   onSimulateGrant,
   onSimulateDeny,
   onOpenSystem,
 }: {
   card: PermissionCard;
+  index: number;
   status: PermissionStatus;
   onSimulateGrant: () => void;
   onSimulateDeny: () => void;
   onOpenSystem: () => void;
 }) {
-  const Icon = card.icon;
   const granted = status === "granted";
   const denied = status === "denied";
   const checking = status === "checking";
@@ -116,7 +117,9 @@ function PermissionRow({
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 border bg-te-surface p-4 transition-colors md:flex-row md:items-start md:gap-4",
+        // flex-1 让每张卡片均分父容器剩余高度；窗口现在是 1100×780，cards 区域很高，
+        // 卡片高度自然会扩大。items-center 让内容竖向居中。
+        "flex flex-1 flex-row items-center gap-5 border bg-te-surface px-6 transition-colors",
         granted
           ? "border-te-accent/60"
           : denied
@@ -124,70 +127,66 @@ function PermissionRow({
             : "border-te-gray/60",
       )}
     >
+      {/* 左侧序号方块：未授权 = 灰色边 + 数字；已授权 = accent + ✓ */}
       <div
         className={cn(
-          "flex size-10 shrink-0 items-center justify-center border",
+          "flex size-12 shrink-0 items-center justify-center border font-mono text-xl font-bold",
           granted ? "border-te-accent text-te-accent" : "border-te-gray text-te-light-gray",
         )}
       >
-        {granted ? <Check className="size-5" /> : <Icon className="size-5" />}
+        {granted ? <Check className="size-6" /> : index}
       </div>
 
-      <div className="flex flex-1 flex-col gap-1.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-te-fg">
+          <span className="font-mono text-sm font-bold uppercase tracking-[0.15em] text-te-fg">
             {card.title}
           </span>
           {card.required ? (
-            <span className="border border-te-accent/60 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.2em] text-te-accent">
+            <span className="shrink-0 border border-te-accent/60 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-accent">
               必需
             </span>
           ) : (
-            <span className="border border-te-gray/60 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.2em] text-te-light-gray">
+            <span className="shrink-0 border border-te-gray/60 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
               推荐
             </span>
           )}
         </div>
-        <p className="font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
+        <p className="font-sans text-sm leading-relaxed text-te-light-gray">
           {card.rationale}
         </p>
-        {card.systemTermHint ? (
-          <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray/70">
-            {card.systemTermHint}
-          </span>
-        ) : null}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         {checking ? (
-          <span className="inline-flex items-center gap-2 border border-te-gray/60 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-            <Loader2 className="size-3 animate-spin" /> 检测中
+          <span className="inline-flex items-center gap-2 border border-te-gray/60 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray">
+            <Loader2 className="size-3.5 animate-spin" /> 检测中
           </span>
         ) : granted ? (
-          <span className="inline-flex items-center gap-2 border border-te-accent px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-accent">
-            <Check className="size-3" /> 已授权
+          <span className="inline-flex items-center gap-2 border border-te-accent px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-accent">
+            <Check className="size-3.5" /> 已授权
           </span>
         ) : denied ? (
           <button
             type="button"
             onClick={onOpenSystem}
-            className="inline-flex items-center gap-2 border border-te-accent px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-accent transition-colors hover:bg-te-accent hover:text-te-accent-fg"
+            className="inline-flex items-center gap-2 border border-te-accent px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-accent transition-colors hover:bg-te-accent hover:text-te-accent-fg"
           >
-            去系统设置 <ExternalLink className="size-3" />
+            去系统设置 <ExternalLink className="size-3.5" />
           </button>
         ) : (
           <>
             <button
               type="button"
               onClick={onSimulateGrant}
-              className="inline-flex items-center gap-2 border border-te-accent bg-te-accent px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
+              className="inline-flex items-center gap-2 border border-te-accent bg-te-accent px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
             >
               授权
             </button>
             <button
               type="button"
               onClick={onSimulateDeny}
-              className="inline-flex items-center gap-1 border border-te-gray px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-fg hover:text-te-fg"
+              className="inline-flex items-center gap-1 border border-te-gray px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-fg hover:text-te-fg"
               title="测试用：模拟用户拒绝"
             >
               拒绝
@@ -227,31 +226,32 @@ export function StepPermissions({
     platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux";
 
   return (
-    <div className="flex h-full w-full flex-col px-8 py-6">
+    <div className="flex h-full w-full flex-col overflow-hidden px-8 pt-24 pb-6">
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
-        className="mx-auto flex w-full max-w-2xl flex-col gap-6"
+        className="mx-auto flex h-full w-full max-w-2xl flex-col gap-3"
       >
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
           <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-accent">
             // step 02 / permissions · {platformLabel}
           </span>
-          <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
+          <h2 className="font-mono text-xl font-bold tracking-tighter text-te-fg md:text-2xl">
             授权所需的系统权限
           </h2>
-          <p className="font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
+          <p className="font-sans text-xs leading-snug text-te-light-gray md:text-sm">
             OpenSpeech 是桌面应用，需要操作系统授予以下权限才能工作。下面用人话解释每一项 ——
             点"授权"会请求系统弹窗，点"拒绝"用于测试被拒后的引导路径。
           </p>
         </div>
 
-        <div className="flex flex-col gap-3">
-          {cards.map((card) => (
+        <div className="flex flex-1 flex-col gap-3">
+          {cards.map((card, idx) => (
             <PermissionRow
               key={card.id}
               card={card}
+              index={idx + 1}
               status={statuses[card.id]}
               onSimulateGrant={() => {
                 setStatus(card.id, "checking");
@@ -266,7 +266,7 @@ export function StepPermissions({
           ))}
         </div>
 
-        <div className="mt-2 flex items-center justify-between">
+        <div className="flex items-center justify-between">
           <button
             type="button"
             onClick={onBack}

@@ -129,12 +129,16 @@ function keyFromEvent(e: KeyboardEvent): KeyToken {
 
 // rdev 0.5 对未映射硬件键 fallback 成 Unknown(u32) / RawKey(...)；DOM 在 IME / 媒体键也会
 // 给 Unidentified。这些不该作为视觉反馈显示给用户。
+// CapsLock / NumLock / ScrollLock 是 toggle 键：macOS 只发 keydown 不发 keyup，
+// 一旦进入 held 就再也出不来，会把 binding 预览永久卡在"按下回显"模式。
+const TOGGLE_LOCK_CODES = new Set(["CapsLock", "NumLock", "ScrollLock"]);
 function isDisplayableKey(token: KeyToken): boolean {
   const id = token.id || "";
   const label = token.label || "";
   if (!id || !label) return false;
   if (id === "Unidentified" || label === "Unidentified") return false;
   if (id.startsWith("Unknown(") || id.startsWith("RawKey(")) return false;
+  if (TOGGLE_LOCK_CODES.has(id)) return false;
   return true;
 }
 
@@ -318,7 +322,9 @@ export function HotkeyPreview({
               </Fragment>
             ))
           ) : (
-            pressed.map((p, i) => (
+            // 同时按住超过 4 个键时只显示最近按下的 4 个，避免快速打字时
+            // debounce 窗口内 pressed 数组膨胀导致 UI 出现 5+ 个 Kbd。
+            pressed.slice(-4).map((p, i) => (
               <Fragment key={p.id}>
                 {i > 0 && (
                   <span className="font-mono text-xl text-te-light-gray">+</span>
