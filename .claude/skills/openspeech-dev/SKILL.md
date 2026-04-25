@@ -125,12 +125,15 @@ OpenSpeech/
 │   │   ├── AccountDialog.tsx   # 账户弹窗（侧边栏底部入口触发）
 │   │   ├── CloseToBackgroundDialog.tsx # 关闭主窗口时的"后台运行 / 退出"提示
 │   │   ├── LoadingScreen.tsx   # 启动 splash（TE 风：黑底 + 黄点缀 + Space Mono + PulsarGrid 背景）
-│   │   └── PulsarGrid.tsx      # LoadingScreen 专用的 TE 风脉冲网格 canvas 背景
+│   │   ├── PulsarGrid.tsx      # LoadingScreen 专用的 TE 风脉冲网格 canvas 背景
+│   │   ├── HotkeyPreview.tsx   # 听写快捷键的视觉预览 + DOM/rdev 双源按键监听 hook（Home + Onboarding Step 1 共用）
+│   │   └── LiveDictationPanel.tsx # 录音中的波形 + realtime 转写面板（Home + Onboarding Step 4 共用）
 │   ├── pages/                  # 页面（每页一个目录 + index.tsx）
 │   │   ├── Home/index.tsx
 │   │   ├── History/index.tsx
 │   │   ├── Dictionary/index.tsx
-│   │   └── Settings/index.tsx
+│   │   ├── Settings/index.tsx
+│   │   └── Onboarding/         # 首次启动 4 步引导（StepWelcome / StepPermissions / StepLogin / StepTryIt + types.ts）；当前为纯 UI mock，业务未接
 │   ├── router.tsx              # React Router v7 createBrowserRouter
 │   ├── lib/utils.ts            # cn() 等工具
 │   ├── assets/                 # 静态资源
@@ -168,6 +171,7 @@ OpenSpeech/
 - `src-tauri/src/openloaf/` —— OpenLoaf SaaS 登录 / token refresh / 用户档案 / 支付订单；`authenticated_client()` 对下游（如 stt）暴露已登录 `SaaSClient`
 - `src-tauri/src/db/` —— SQLite 迁移（`history` / `dictionary` 表）+ `recordings_dir()` / `ensure_recordings_dir()` 帮手
 - `src-tauri/src/inject/` —— 文本注入：当前实现为剪贴板写入 + 系统粘贴快捷键模拟（命令 `inject_paste`），由 `recording.ts` 在 final 文本到位后调用，把转写结果送回当前焦点输入框；enigo 直敲路径暂未启用
+- `src/pages/Onboarding/` —— 首次启动 4 步引导：Welcome（复用 `HotkeyPreview`）→ Permissions（按 `detectPlatform()` 平台分支 cards：mac 显示 Mic/Accessibility/Input Monitoring；Win 显示 Mic + UAC 警告；Linux 显示设备选择 + 注入工具检测）→ Login（强制 OpenLoaf SaaS，新户送 200 积分；底部折叠"自定义 STT 端点"高级口子）→ Try It（用本地状态机 + 假波形 + 假 partial 序列演示完整流程，复用 `LiveDictationPanel`）。**当前所有"授权 / 登录 / 录音"按钮都是 UI mock，不调 Rust 业务**——这样测试 UI 时不需反复清系统权限。完成后 `navigate("/", { replace: true })`。`main.tsx` 通过 `FORCE_ONBOARDING_ON_BOOT` 常量在 boot 完成后强制 `router.navigate("/onboarding")`，**测试期开关；接业务后改成读 `settings.onboardingCompleted`**。详见 `docs/onboarding.md`
 
 规划中但尚未建立（在开发对应功能时再建，并同步本表）：
 - `src/lib/tauri.ts` —— invoke 的统一封装（暂各功能自管自的 lib/\*.ts）
