@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { router } from "./router";
@@ -128,6 +129,20 @@ function Root() {
     if (router.state.location.pathname !== "/onboarding") {
       void router.navigate("/onboarding", { replace: true });
     }
+  }, [booted]);
+
+  // 主窗口完全可见 + LoadingScreen 退场后启动 rdev::listen 全局键盘订阅。
+  // 不在 Rust setup 阶段启动是因为 macOS 首次访问全局键盘流会触发系统
+  // 「Keystroke Receiving」授权弹框，setup 阶段立即弹会被随后 show 的主窗口
+  // 遮挡。等 booted=true 后 invoke 启动——此时主窗口已 visible 并 focused，
+  // 弹框正常叠在主窗口之上。
+  // 幂等：Rust 端 LISTEN_STARTED AtomicBool 保证多次调用只启一次（StrictMode dev
+  // 下会跑两次也无影响）。失败仅打印日志，不阻塞 UI。
+  useEffect(() => {
+    if (!booted || IS_OVERLAY) return;
+    void invoke("hotkey_init_listener").catch((e) =>
+      console.warn("[boot] hotkey_init_listener failed:", e),
+    );
   }, [booted]);
 
   if (IS_OVERLAY) return <OverlayPage />;

@@ -34,6 +34,18 @@ export function LoadingScreen() {
 
       {/* 主要内容 */}
       <div className="relative z-10 flex h-full flex-col items-center justify-center">
+        {/* 顶部 logo */}
+        <motion.img
+          src="/logo-write.png"
+          alt=""
+          aria-hidden
+          draggable={false}
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.2 }}
+          className="mb-6 size-16 select-none md:size-20"
+        />
+
         {/* 顶部标签 */}
         <motion.div
           initial={{ opacity: 0, y: -10 }}

@@ -1,8 +1,25 @@
-// 系统权限的 invoke 封装。Rust 命令位于 src-tauri/src/permissions/。
-// macOS 上是真检测；Windows / Linux 一律返回 "granted"（这两个平台没有等价
-// 的"未授权"概念，cpal/rdev 直接尝试即可）。
+// 系统权限的 invoke 封装。
+//
+// **职责分布（v2）**：
+//   - **检测（check_*）**：走我们自己的 invoke `permission_check_*`，返回精细
+//     5 值状态（granted / denied / notDetermined / restricted / unknown）。UI 文案
+//     需要区分 notDetermined（"请求授权"）vs denied（"去系统设置"）。
+//   - **请求 麦克风 / 辅助功能（request_*）**：直接调 `tauri-plugin-macos-permissions-api`
+//     暴露的 `requestMicrophonePermission` / `requestAccessibilityPermission`
+//     （plugin 内部用 Apple 官方 API + macos-accessibility-client，比我们之前的
+//     cpal probe / objc 0.2 hack 更稳）。
+//   - **请求 输入监控（requestInputMonitoring）**：plugin 的对应命令只 open settings，
+//     不调 IOHIDRequestAccess（无法写入「输入监控」列表）。所以这一条仍走我们自己的
+//     `permission_request_input_monitoring`（IOHIDRequestAccess）。
+//   - **TCC 重置 + open settings**：plugin 不暴露，走我们自己的命令。
+//
+// macOS 之外的平台没有等价"未授权"概念，check_* 一律返回 "granted"，request_* 静默 no-op。
 
 import { invoke } from "@tauri-apps/api/core";
+import {
+  requestMicrophonePermission as pluginRequestMicrophone,
+  requestAccessibilityPermission as pluginRequestAccessibility,
+} from "tauri-plugin-macos-permissions-api";
 
 export type PermissionStatus =
   | "granted"
@@ -28,14 +45,19 @@ export const checkAccessibility = () =>
 export const checkInputMonitoring = () =>
   invoke<PermissionStatus>("permission_check_input_monitoring");
 
-export const requestMicrophone = () =>
-  invoke<void>("permission_request_microphone");
+// 麦克风：plugin 调 `[AVCaptureDevice requestAccessForMediaType:soun completionHandler:NULL]`，
+// Apple 官方推荐的 API，比 cpal 起 stream 更轻、副作用更小。
+export const requestMicrophone = () => pluginRequestMicrophone();
+
+// 输入监控：plugin 不调 IOHIDRequestAccess（它只 open settings，无法把 App 写入列表），
+// 所以走我们自己的命令。
 export const requestInputMonitoring = () =>
   invoke<void>("permission_request_input_monitoring");
-// AXIsProcessTrustedWithOptions(prompt=YES)：把 OpenSpeech 写入系统设置
-// 「辅助功能」列表的唯一用户态 API。仅查询的 AXIsProcessTrusted 不会注册条目。
-export const requestAccessibility = () =>
-  invoke<void>("permission_request_accessibility");
+
+// 辅助功能：plugin 用 macos-accessibility-client 的 `application_is_trusted_with_prompt()`
+// 即 `AXIsProcessTrustedWithOptions(prompt=YES)`——把 App 写入「辅助功能」列表的唯一
+// 用户态 API。仅查询的 AXIsProcessTrusted 不会注册条目。
+export const requestAccessibility = () => pluginRequestAccessibility();
 
 export const openSystemSettings = (kind: PermissionKind) =>
   invoke<void>("permission_open_settings", { kind });

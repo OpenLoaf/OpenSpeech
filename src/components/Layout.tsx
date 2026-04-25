@@ -15,6 +15,13 @@ import { NoInternetDialog } from "@/components/NoInternetDialog";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
+import {
+  checkAccessibility,
+  checkInputMonitoring,
+  checkMicrophone,
+  type PermissionStatus,
+} from "@/lib/permissions";
+import { detectPlatform } from "@/lib/platform";
 
 type NavItem = {
   to: string;
@@ -226,6 +233,66 @@ export default function Layout() {
     return unsub;
   }, []);
 
+  // 运行时撤权检测（macOS / 已完成 onboarding）：用户在系统设置撤销了某项授权
+  // 后，已运行的进程内部 AVCaptureDevice / AXIsProcessTrusted / IOHIDCheckAccess
+  // 都仍读到旧值（per-process 缓存），所以无法实时感知。但 macOS 撤权后会自动
+  // 触发整个 App 重启——重启后 onboarding 已完成，前端不再走 StepPermissions。
+  // 这里在主窗口每次回到前台时静默 check 一次，发现"曾经 granted 的项现在不是
+  // granted"就 toast 提示用户去重新授权（参考 AltTab 的运行时轮询范式）。
+  // 不主动 reset/重启，因为 macOS 限制下唯一干净路径是用户去系统设置勾选 + 再
+  // 重启 App。提示完后用户自己决定。
+  useEffect(() => {
+    if (detectPlatform() !== "macos") return;
+    if (!useSettingsStore.getState().general.onboardingCompleted) return;
+
+    let cancelled = false;
+    const lastSeenGranted: Record<string, boolean> = {
+      microphone: true,
+      accessibility: true,
+      "input-monitoring": true,
+    };
+
+    const checkAll = async () => {
+      try {
+        const [m, a, i]: PermissionStatus[] = await Promise.all([
+          checkMicrophone(),
+          checkAccessibility(),
+          checkInputMonitoring(),
+        ]);
+        if (cancelled) return;
+        // 仅当此前观察到 granted、现在不是 granted 时才 toast——避免首次启动
+        // 还没授权时也跳出来提示。
+        const transitions: Array<[string, PermissionStatus, string]> = [
+          ["microphone", m, "麦克风"],
+          ["accessibility", a, "辅助功能"],
+          ["input-monitoring", i, "输入监控"],
+        ];
+        for (const [kind, status, label] of transitions) {
+          const wasGranted = lastSeenGranted[kind];
+          const nowGranted = status === "granted";
+          if (wasGranted && !nowGranted) {
+            toast.error(`${label}权限已撤销`, {
+              description: "请在系统设置重新授权后重启 OpenSpeech。",
+              duration: 8000,
+            });
+          }
+          lastSeenGranted[kind] = nowGranted;
+        }
+      } catch (e) {
+        console.warn("[layout] runtime permission check failed:", e);
+      }
+    };
+
+    // 挂载时跑一次（建立 baseline），然后窗口 focus 回到前台时再检测。
+    void checkAll();
+    const onFocus = () => void checkAll();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
   const handleCloseConfirm = async ({
     remember,
     action,
@@ -260,7 +327,13 @@ export default function Layout() {
         {/* Logo slot */}
         <div className="flex items-center justify-between gap-2 border-b border-te-gray px-5 py-5">
           <div className="flex items-center gap-2">
-            <span className="size-2 bg-te-accent" aria-hidden />
+            <img
+              src="/logo-black.png"
+              alt=""
+              aria-hidden
+              className="size-5 shrink-0 select-none"
+              draggable={false}
+            />
             <span className="font-mono text-sm font-bold tracking-[0.2em]">
               <span className="text-te-fg">OPEN</span>
               <span className="text-te-accent">SPEECH</span>

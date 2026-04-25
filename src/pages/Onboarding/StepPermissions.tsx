@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Check,
   ExternalLink,
-  Eraser,
   KeyRound,
   Loader2,
   Mic,
@@ -25,7 +24,6 @@ import {
   requestAccessibility,
   requestMicrophone,
   requestInputMonitoring,
-  resetTccPermissions,
   resetTccPermissionOne,
   type PermissionKind,
   type PermissionStatus,
@@ -147,25 +145,6 @@ function headerSummary(platform: Platform): string {
   return "Linux 不需要授权弹窗：选择一个 PipeWire / PulseAudio 输入设备，并确保安装了 ydotool / wtype（Wayland）或 xdotool（X11）即可。";
 }
 
-function statusLabel(s: PermissionUiStatus): string {
-  switch (s) {
-    case "granted":
-      return "已授权";
-    case "checking":
-      return "检测中";
-    case "denied":
-      return "未授权";
-    case "notDetermined":
-      return "尚未授权";
-    case "restricted":
-      return "系统限制";
-    case "unknown":
-      return "无法检测";
-    default:
-      return "—";
-  }
-}
-
 function PermissionRow({
   card,
   index,
@@ -249,19 +228,15 @@ function PermissionRow({
             {card.systemTermHint}
           </p>
         ) : null}
-        {/* macOS Accessibility / Input Monitoring 的检测受 TCC 与 ad-hoc 签名身份耦合
-            影响：dev 反复重编 / 没有稳定 Developer ID 的 release 都会让旧签名条目作废。
-            两条恢复路径：① 右上角「重置授权记录」（tccutil reset 一键清旧条目）+ 重新
-            勾选；② 手动从系统设置该权限列表里移除 OpenSpeech 后重新加入。 */}
+        {/* TCC 与 ad-hoc 签名身份耦合：dev 反复重编 / 无稳定 Developer ID 会让旧条目作废。
+            自助路径：从系统设置该权限列表里移除 OpenSpeech 后重新加入，再点「重启 OpenSpeech」。 */}
         {!granted &&
         (card.permission === "accessibility" ||
           card.permission === "input-monitoring") ? (
           <p className="mt-0.5 inline-flex items-start gap-1.5 font-sans text-[11px] leading-snug text-te-light-gray/80">
             <AlertCircle className="mt-0.5 size-3 shrink-0 text-te-accent" />
             <span>
-              已勾选但仍提示未授权？点
-              <span className="text-te-fg">「重置授权记录」</span>
-              清旧条目后重新勾选，再点「重启 OpenSpeech」。
+              已勾选但仍提示未授权？在系统设置该权限列表里移除 OpenSpeech 后重新加入，再点「重启 OpenSpeech」。
             </span>
           </p>
         ) : null}
@@ -307,11 +282,6 @@ function PermissionRow({
             ) : null}
           </>
         )}
-        {!checking && !granted && status !== "idle" ? (
-          <span className="hidden font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray md:inline">
-            {statusLabel(status)}
-          </span>
-        ) : null}
       </div>
     </div>
   );
@@ -377,26 +347,60 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
     void recheckAll();
   }, [recheckAll]);
 
-  // 主动把 OpenSpeech 写入 macOS「输入监控」/「辅助功能」列表。
-  // 仅 IOHIDCheckAccess / AXIsProcessTrusted 不会注册条目——只有调用 *Request* API
-  // 才把 App 登记到系统设置的隐私列表里。否则用户打开系统设置「输入监控」时根本
-  // 看不到 OpenSpeech 这一条可勾选项（即图中"列表为空"的现象）。
-  // 时机：挂载后先跑一次首检（recheckAll 启动），紧跟着 fire-and-forget 调 request
-  // —— 此时 onboarding 已显示，弹出的系统对话框会正常叠在页面之上。
-  // idempotent：已 granted / denied 时系统自动 no-op。仅在 macOS 真正未授权时弹框。
-  const registeredRef = useRef(false);
+  // 挂载时主动 fire 三个权限的 request——把 App 注册到系统设置列表 + 让用户
+  // 顺序看到三个弹框。**macOS 系统弹框天然 queue**：当前的关掉才显示下一个，
+  // 不会同时三个堆叠，所以三个 fire-and-forget 即可，不必手动串行。
+  //
+  // - 麦克风：plugin 调 `[AVCaptureDevice requestAccessForMediaType:soun]`（Apple 官方）
+  // - 辅助功能：plugin 调 `AXIsProcessTrustedWithOptions(prompt=YES)`
+  // - 输入监控：我们自己的 IOHIDRequestAccess（plugin 不暴露这个 API）
+  //
+  // **配套短轮询**：macOS 系统弹框（sheet 风格）关闭时**不一定触发** WebView
+  // 的 focus 事件，单靠 focus 监听会让"用户允许后 UI 仍显示未授权"（这是
+  // 之前的核心 bug）。这里启动 800ms 间隔的轮询，调 check_* 写回 statuses，
+  // 直到所有必需项 granted 或 30 次（24s）到顶。idempotent + 自我清理。
   useEffect(() => {
     if (platform !== "macos") return;
-    if (registeredRef.current) return;
-    registeredRef.current = true;
-    // 顺序无强约束，让系统按自己的弹框队列处理。失败只 warn，不打扰用户。
+    let cancelled = false;
+
+    // 三个 request 一次性 fire-and-forget。已 granted / denied 时系统 no-op；
+    // 仅 notDetermined 时弹框；macOS 内部排队，不会同时弹三个。
+    void requestMicrophone().catch((e) =>
+      console.warn("[onboarding] auto-request Microphone failed:", e),
+    );
+    void requestAccessibility().catch((e) =>
+      console.warn("[onboarding] auto-request Accessibility failed:", e),
+    );
     void requestInputMonitoring().catch((e) =>
       console.warn("[onboarding] auto-register IM failed:", e),
     );
-    void requestAccessibility().catch((e) =>
-      console.warn("[onboarding] auto-register Accessibility failed:", e),
-    );
-  }, [platform]);
+
+    let ticks = 0;
+    const interval = window.setInterval(async () => {
+      if (cancelled) return;
+      ticks += 1;
+      const required = cardsRef.current.filter(
+        (c) => c.required && c.permission !== null,
+      );
+      const results = await Promise.all(
+        required.map((c) =>
+          checkPermission(c.permission as PermissionKind).catch(() => "unknown"),
+        ),
+      );
+      if (cancelled) return;
+      required.forEach((c, i) =>
+        setStatus(c.id, results[i] as PermissionStatus),
+      );
+      if (results.every((s) => s === "granted") || ticks >= 30) {
+        window.clearInterval(interval);
+      }
+    }, 800);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [platform, setStatus]);
 
   // 进入即检测：若所有必需权限都已是 granted（多半是用户重启后再次进入引导），
   // 直接 onNext()，不在权限页停留。这一组检查独立于 recheckAll → React state 的
@@ -523,7 +527,13 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.3em]">
             <span className="text-te-light-gray">// welcome to</span>
-            <span className="size-1.5 bg-te-accent" aria-hidden />
+            <img
+              src="/logo-write.png"
+              alt=""
+              aria-hidden
+              className="size-4 shrink-0 select-none"
+              draggable={false}
+            />
             <span className="font-bold tracking-[0.25em]">
               <span className="text-te-fg">OPEN</span>
               <span className="text-te-accent">SPEECH</span>
@@ -551,21 +561,6 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
                   : "选择麦克风与注入工具"}
             </h2>
             <div className="flex flex-wrap items-center gap-2">
-              {platform === "macos" ? (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await resetTccPermissions();
-                    // 重置完后立刻刷新一次 UI，并打开"辅助功能"面板让用户重新勾选。
-                    await recheckAll();
-                    await openSystemSettings("accessibility");
-                  }}
-                  className="inline-flex items-center gap-2 border border-te-gray/60 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
-                  title="清空 OpenSpeech 在 TCC 中的旧授权条目（用于已勾选却读不到的场景）"
-                >
-                  <Eraser className="size-3" /> 重置授权记录
-                </button>
-              ) : null}
               <button
                 type="button"
                 onClick={() => void recheckAll()}

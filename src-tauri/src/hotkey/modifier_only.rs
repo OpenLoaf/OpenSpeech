@@ -206,27 +206,27 @@ pub fn create_state() -> SharedModifierOnlyState {
 }
 
 /// 启动 rdev::listen 线程。幂等：通过 `LISTEN_STARTED` AtomicBool 保证整个进程
-/// 生命周期内最多只启一次。**macOS 上仅在 Input Monitoring 已 granted 时启动**
-/// （IOHIDCheckAccess 静默查询，无副作用）；未授权时 short-circuit，后续用户
-/// 在系统设置授权 + 重启进程后下次再启。
+/// 生命周期内最多只启一次。
 ///
-/// 失败（如其它平台权限缺失）时只打日志不 panic，后续 apply 调用也不会崩，
-/// 只是 modifier-only 绑定不工作。
+/// **macOS 注册策略（关键）**：rdev 内部用 `CGEventTapCreate(kCGSessionEventTap, ...)`，
+/// 此 API 是把 App 写入「输入监控」系统设置列表的**最可靠路径**——首次访问时
+/// macOS 会自动弹「Keystroke Receiving」授权对话框 + 把 App 注册到列表。
+/// 反观 `IOHIDRequestAccess` 在某些条件下（dev 模式裸二进制 / 签名状态）会静默
+/// 失败既不弹框也不注册（这是用户报"输入监控列表里没有 OpenSpeech"的根源）。
+///
+/// 因此**无条件启动 listen**：未授权时 listen 会失败，但失败的副作用——把 App
+/// 注册到列表 + 弹弹框——正是我们要的。用户允许后下次启动 listen 即可工作；
+/// 拒绝后用户至少能在系统设置里看到 OpenSpeech 并手动勾选。
+///
+/// 失败（如 listen 返回 Err）时只打日志不 panic，后续 apply 调用也不会崩，
+/// 只是 modifier-only 绑定本会话不工作。
+///
+/// **遮挡问题**：之前担心 setup 阶段启动 listen 时弹框被主窗口遮挡——已通过
+/// 把启动时机推迟到 `hotkey_init_listener` invoke（前端 booted=true 后，主窗口
+/// 完全可见）解决。
 pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlyState) {
     if LISTEN_STARTED.swap(true, Ordering::SeqCst) {
         eprintln!("[modifier_only] start_listener: already started, skip");
-        return;
-    }
-
-    #[cfg(target_os = "macos")]
-    if !crate::permissions::input_monitoring_granted() {
-        eprintln!(
-            "[modifier_only] Input Monitoring not granted; deferring rdev::listen until \
-             user grants permission + relaunch. modifier-only bindings (Fn / Ctrl+Win / etc.) \
-             are inactive this session."
-        );
-        // 复位 flag，让用户授权重启后能再次尝试（同一进程不会，但保留语义清晰）。
-        LISTEN_STARTED.store(false, Ordering::SeqCst);
         return;
     }
 

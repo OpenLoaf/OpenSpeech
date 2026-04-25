@@ -152,6 +152,13 @@ export default function HomePage() {
             </p>
 
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+              <img
+                src="/logo-write.png"
+                alt=""
+                aria-hidden
+                draggable={false}
+                className="size-5 shrink-0 select-none"
+              />
               <span>// PUSH-TO-TALK 按键听写</span>
               <span>// 模型自选 SAAS · BYO</span>
               <span>// 跨平台 WIN · MAC · LINUX</span>

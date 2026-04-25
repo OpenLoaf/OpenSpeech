@@ -22,8 +22,8 @@ interface UIStore {
   settingsInitialTab: SettingsTabId;
   /**
    * "无互联网连接" 提示弹窗。recording gate 在 SAAS 路径下检测
-   * `navigator.onLine === false` 时打开；用户点"打开系统设置"会调
-   * Rust `open_network_settings` 跳系统网络设置面板。
+   * `navigator.onLine === false` 时打开；用户点「重试」时重新读取
+   * navigator.onLine，恢复就关弹窗，仍离线就提示一次。
    */
   noInternetOpen: boolean;
   setLoginOpen: (v: boolean) => void;

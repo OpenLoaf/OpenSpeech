@@ -38,6 +38,8 @@ struct DevSession {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // ── 1. 读 dev session（access_token + base_url）─────────────────────
     let home = std::env::var("HOME")?;
     let session_path = PathBuf::from(&home).join(".openspeech/dev_session.json");

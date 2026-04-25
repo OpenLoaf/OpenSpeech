@@ -81,7 +81,13 @@ export default function OnboardingPage() {
         className="relative z-10 flex h-12 shrink-0 items-center justify-between border-b border-te-gray/60 pl-20 pr-6"
       >
         <div className="flex items-center gap-3">
-          <span className="size-2 bg-te-accent" aria-hidden />
+          <img
+            src="/logo-write.png"
+            alt=""
+            aria-hidden
+            className="size-5 shrink-0 select-none"
+            draggable={false}
+          />
           <span className="font-mono text-sm font-bold tracking-[0.2em]">
             <span className="text-te-fg">OPEN</span>
             <span className="text-te-accent">SPEECH</span>
