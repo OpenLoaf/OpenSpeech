@@ -227,29 +227,40 @@ jobs:
           path: artifacts
           pattern: bundle-*
 
-      # staging/ 是即将上传到 Release 的扁平目录：
-      #   - installer（dmg/exe/deb/rpm/AppImage）加平台前缀，下载页一目了然
-      #   - updater 链路（.app.tar.gz / .nsis.zip / .AppImage.tar.gz + 各自 .sig）保持原名 —— 因为
-      #     latest.json 里 url 字段写死，改名 = 自动更新断链。
+      # staging/ 是即将上传到 Release 的扁平目录。**所有文件统一重命名为**
+      # `OpenSpeech-<version>-<platform>.<ext>`，包括 updater 链路（.app.tar.gz / .nsis.zip /
+      # .AppImage.tar.gz + .sig）。`matrix.artifact` 已经一次性表达 platform+arch（macOS-arm64 /
+      # Linux-x86_64 / Windows-arm64 等），不再保留 Tauri 默认名里的冗余 arch 段。
+      # 由于 `latest.json` 在下一个 step 里**自己生成**、url 字段直接拼新文件名，updater 客户端
+      # 拉到的 url ↔ 实际 asset 仍然自洽。
       - name: Stage release files
         shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p staging
+          version="${TAG#v}"
           for art in artifacts/bundle-*; do
             [[ -d "$art" ]] || continue
-            prefix="${art##*/bundle-}"
+            platform="${art##*/bundle-}"   # 例：macOS-arm64 / Linux-x86_64 / Windows-arm64
+            base_name="OpenSpeech-${version}-${platform}"
             while IFS= read -r f; do
               [[ -f "$f" ]] || continue
               base="$(basename "$f")"
-              # 注意 `*.tar.gz` / `*.tar.gz.sig` 的匹配要放在 `*.gz` 之前；这里用具体扩展规避歧义
               case "$base" in
-                *.app.tar.gz|*.app.tar.gz.sig|*.nsis.zip|*.nsis.zip.sig|*.AppImage.tar.gz|*.AppImage.tar.gz.sig)
-                  cp "$f" "staging/${base}"
-                  ;;
-                *.dmg|*.exe|*.deb|*.rpm|*.AppImage)
-                  cp "$f" "staging/${prefix}-${base}"
-                  ;;
+                # 注意 `*.tar.gz` / `*.tar.gz.sig` 的匹配要放在 `*.gz` 之前；用具体扩展规避歧义
+                *.app.tar.gz)            cp "$f" "staging/${base_name}.app.tar.gz" ;;
+                *.app.tar.gz.sig)        cp "$f" "staging/${base_name}.app.tar.gz.sig" ;;
+                *.AppImage.tar.gz)       cp "$f" "staging/${base_name}.AppImage.tar.gz" ;;
+                *.AppImage.tar.gz.sig)   cp "$f" "staging/${base_name}.AppImage.tar.gz.sig" ;;
+                *.nsis.zip)              cp "$f" "staging/${base_name}-setup.nsis.zip" ;;
+                *.nsis.zip.sig)          cp "$f" "staging/${base_name}-setup.nsis.zip.sig" ;;
+                *.dmg)                   cp "$f" "staging/${base_name}.dmg" ;;
+                *.exe)                   cp "$f" "staging/${base_name}-setup.exe" ;;
+                *.deb)                   cp "$f" "staging/${base_name}.deb" ;;
+                *.rpm)                   cp "$f" "staging/${base_name}.rpm" ;;
+                *.AppImage)              cp "$f" "staging/${base_name}.AppImage" ;;
                 *)
                   echo "::warning::unrecognized artifact, skipping: $f"
                   ;;
@@ -277,13 +288,15 @@ jobs:
             base="${sig%.sig}"
             sig_content="$(cat "$sig")"
             url="https://github.com/${REPO}/releases/download/${TAG}/${base}"
+            # stage step 已经把 platform 写进文件名（OpenSpeech-<version>-<platform>.<ext>），
+            # 这里直接按 -<platform>. / -<platform>- 段匹配，比凑 arch 关键字稳。
             case "$base" in
-              *aarch64*.app.tar.gz)              key="darwin-aarch64"  ;;
-              *_x64*.app.tar.gz|*x86_64*.app.tar.gz) key="darwin-x86_64" ;;
-              *_amd64.AppImage.tar.gz)           key="linux-x86_64"    ;;
-              *_arm64.AppImage.tar.gz|*_aarch64.AppImage.tar.gz) key="linux-aarch64" ;;
-              *_x64-setup.nsis.zip|*_x86_64-setup.nsis.zip) key="windows-x86_64" ;;
-              *_arm64-setup.nsis.zip|*_aarch64-setup.nsis.zip) key="windows-aarch64" ;;
+              OpenSpeech-*-macOS-arm64.app.tar.gz)         key="darwin-aarch64"  ;;
+              OpenSpeech-*-macOS-intel.app.tar.gz)         key="darwin-x86_64"   ;;
+              OpenSpeech-*-Linux-x86_64.AppImage.tar.gz)   key="linux-x86_64"    ;;
+              OpenSpeech-*-Linux-arm64.AppImage.tar.gz)    key="linux-aarch64"   ;;
+              OpenSpeech-*-Windows-x86_64-setup.nsis.zip)  key="windows-x86_64"  ;;
+              OpenSpeech-*-Windows-arm64-setup.nsis.zip)   key="windows-aarch64" ;;
               *)
                 echo "::warning::unknown sig pattern, skipping: $base"
                 continue
