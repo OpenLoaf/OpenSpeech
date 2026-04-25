@@ -1,14 +1,27 @@
-// 系统权限检测 / 请求 / 跳转设置
+// 系统权限检测 / 请求 / 跳转设置 / TCC 重置
 //
 // macOS 上需要三类授权：
 //   - 麦克风（隐私 → 麦克风）
 //   - 辅助功能（隐私 → 辅助功能）—— enigo 模拟键盘粘贴需要
 //   - 输入监控（隐私 → 输入监控）—— rdev 监听全局键盘需要
 //
-// 检测走系统 API（精准、零误报）；macOS 之外的平台没有等价"未授权"概念，
-// 直接返回 granted 让 UI 流程继续。
+// **职责切分（v2 重构）**：
+//   - **检测（check_*）**：本模块自己实现，走 Apple 系统 API 拿精细 5 值状态
+//     `granted | denied | notDetermined | restricted | unknown`，UX 文案需要
+//     区分 notDetermined（"请求授权"）vs denied（"去系统设置"）。
+//   - **请求 麦克风 / 辅助功能（request_*）**：迁移到 `tauri-plugin-macos-permissions`，
+//     前端直接调 plugin 暴露的 `requestMicrophonePermission` /
+//     `requestAccessibilityPermission`（更可靠：plugin 用 Apple 官方
+//     `AVCaptureDevice requestAccessForMediaType` 与 `macos-accessibility-client`，
+//     替代了原先的 cpal probe / objc 0.2 hack）。
+//   - **请求 输入监控（request_input_monitoring）**：本模块自己保留 IOHIDRequestAccess，
+//     plugin 不调这个 API（它的实现只 open settings），但只有 IOHIDRequestAccess
+//     能把 OpenSpeech 写入「输入监控」列表，这是修复"列表为空"的唯一路径。
+//   - **TCC 重置 / 跳转设置（reset_tcc / open_settings）**：本模块独有，
+//     plugin 不暴露这两类能力，但它们是恢复签名漂移 / denied 状态的关键。
 //
 // 状态字符串与前端 src/lib/permissions.ts 的 PermissionStatus 类型一一对应。
+// macOS 之外的平台没有等价"未授权"概念，一律返回 granted。
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -50,26 +63,10 @@ pub fn permission_check_input_monitoring() -> String {
 }
 
 #[tauri::command]
-pub fn permission_request_microphone() {
-    #[cfg(target_os = "macos")]
-    {
-        macos::request_microphone();
-    }
-}
-
-#[tauri::command]
 pub fn permission_request_input_monitoring() {
     #[cfg(target_os = "macos")]
     {
         macos::request_input_monitoring();
-    }
-}
-
-#[tauri::command]
-pub fn permission_request_accessibility() {
-    #[cfg(target_os = "macos")]
-    {
-        macos::request_accessibility();
     }
 }
 
@@ -122,18 +119,3 @@ pub fn permission_reset_tcc_one(app: tauri::AppHandle, kind: String) {
     }
 }
 
-/// 内部使用（非 invoke）：启动阶段判断是否可以安全启动 `rdev::listen`。
-/// 走 `IOHIDCheckAccess`（只读），不会触发系统弹框、不会把 App 写入「输入监控」
-/// 列表——所以可在 setup 期间无副作用调用。
-///
-/// 用途见 `hotkey::modifier_only::init`：
-///   - granted ⇒ 启动 listen
-///   - 未授权（denied / notDetermined）⇒ 跳过 listen，等用户在 Onboarding
-///     StepPermissions 主动 IOHIDRequestAccess + 重启进程后下次再启
-///
-/// 这避免了"首启时 listen 自动触发系统弹框 → 弹框被随后 show 的主窗口遮挡"
-/// 的体验问题。
-#[cfg(target_os = "macos")]
-pub fn input_monitoring_granted() -> bool {
-    macos::input_monitoring_status() == "granted"
-}

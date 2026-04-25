@@ -6,7 +6,9 @@
 // 我们：
 //   1. 启动时 bind 一个随机 loopback 端口，常驻一个处理线程
 //   2. 收到请求解析 code + state，立即回 HTML 让浏览器显示"登录成功"
-//   3. 把 (state, code) 异步派发给 openloaf::handle_login_callback
+//   3. 同步把 OpenSpeech 主窗口拉回前台 —— app 已经在运行（本地 server 就在 app 内），
+//      直接 show + focus 比走 deeplink/自定义 URL scheme 省事且无确认框
+//   4. 把 (state, code) 异步派发给 openloaf::handle_login_callback
 //      由它用 SDK 换 token、写 Keychain、emit 事件给前端
 
 use std::net::TcpListener;
@@ -18,6 +20,9 @@ use url::Url;
 
 use super::handle_login_callback;
 
+// 登录成功页：尝试 window.close() 自动关掉 tab；多数浏览器只允许 JS 打开的 tab
+// 自我关闭，但 OAuth 跳转链路里这个 tab 通常**就是**用户点登录后浏览器另开的，
+// 所以大概率能关掉。关不掉时下面的提示语兜底让用户手动关。
 const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -35,8 +40,9 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
   <div class="wrap">
     <div class="dot" aria-hidden></div>
     <h1>登录成功</h1>
-    <p>你可以关闭此页面，回到 OpenSpeech 继续操作。</p>
+    <p>已唤起 OpenSpeech 主窗口，此页面将自动关闭。</p>
   </div>
+  <script>setTimeout(function(){try{window.close();}catch(_){}}, 600);</script>
 </body>
 </html>"#;
 
@@ -75,6 +81,10 @@ pub fn start(app: AppHandle) -> std::io::Result<u16> {
 
             // 先回响应，避免浏览器卡住。
             let _ = req.respond(html_response(SUCCESS_HTML, 200));
+
+            // 立刻把主窗口拉回前台 —— 不等 token exchange，让用户感知"App 已响应"。
+            // 跨平台一致；macOS 还会顺手把 ActivationPolicy 切回 Regular（Dock 图标恢复）。
+            crate::show_main_window(&app);
 
             let app_handle = app.clone();
             tauri::async_runtime::spawn(async move {

@@ -13,6 +13,7 @@
     "opener:default",
     "store:default",
     "clipboard-manager:allow-write-text",
+    "macos-permissions:default",
     {
       "identifier": "sql:allow-load",
       "allow": [{ "url": "sqlite:openspeech.db" }]

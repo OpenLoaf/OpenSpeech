@@ -158,7 +158,7 @@ fn hide_main_window(app: &tauri::AppHandle) {
     }
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     // macOS：按用户偏好切换 activation policy——默认 Regular（Dock 显示图标），
     // 若设置里关了 showDockIcon 则切 Accessory（纯菜单栏应用）。前一次隐藏时
     // hide_main_window 已统一切到 Accessory，这里必须再读一次用户设定重新 apply。
@@ -315,6 +315,11 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        // macOS 权限 plugin：暴露 request_microphone_permission /
+        // request_accessibility_permission 等命令；非 macOS 平台上 plugin 内部
+        // no-op。前端通过 tauri-plugin-macos-permissions-api 的 npm 绑定调用。
+        // 见 permissions/ 模块说明。
+        .plugin(tauri_plugin_macos_permissions::init())
         .manage(hotkey::SharedHotkeyState::default())
         .manage::<openloaf::SharedOpenLoaf>(std::sync::Arc::new(openloaf::OpenLoafState::new()))
         .setup(|app| {
@@ -546,9 +551,7 @@ pub fn run() {
             permissions::permission_check_microphone,
             permissions::permission_check_accessibility,
             permissions::permission_check_input_monitoring,
-            permissions::permission_request_microphone,
             permissions::permission_request_input_monitoring,
-            permissions::permission_request_accessibility,
             permissions::permission_open_settings,
             permissions::permission_reset_tcc,
             permissions::permission_reset_tcc_one,

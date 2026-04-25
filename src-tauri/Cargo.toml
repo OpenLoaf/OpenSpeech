@@ -50,6 +50,21 @@ tauri-plugin-updater = "2"
 # 才需要联网拉一次（或走代理 / 本地 clone 后改 path = "..."）。
 rdev = { git = "https://github.com/rustdesk-org/rdev", rev = "a90dbe11" }
 
+# Examples-only：rustls 0.23 默认不再 auto-install crypto provider，主进程
+# 是 reqwest 启动时间接 install 的；独立 example binary 没有这条链路，需要
+# 显式 install，否则 tungstenite 升级 TLS 时直接 panic。
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
+# 社区维护的 macOS 权限 plugin（ayangweb/tauri-plugin-macos-permissions）。
+# 我们用它的 `request_microphone_permission`（Apple 官方 AVCaptureDevice
+# requestAccessForMediaType API）+ `request_accessibility_permission`
+# （macos-accessibility-client）替换原先的 cpal probe / objc 0.2 hack。
+# **不**用它的 `request_input_monitoring_permission`——它只 open settings，
+# 不调 IOHIDRequestAccess，无法把 App 写入「输入监控」列表。我们自己保留
+# 这条 IOHIDRequestAccess 路径。check_* 也保留自己实现以保留 5 值精细状态
+# （plugin 只返回 bool，丢失 notDetermined / denied 区分，UX 文案需要）。
+tauri-plugin-macos-permissions = "2.3.0"
 
