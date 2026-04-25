@@ -167,11 +167,11 @@ OpenSpeech/
 - `src-tauri/src/stt/` —— OpenLoaf SaaS realtime ASR orchestrator（session 独占线程 + mpsc 控制通道 + Tauri emit 事件转发）；命令 `stt_start` / `stt_finalize` / `stt_cancel`；**见 cookbook "对接 realtime ASR" + 软链 skill `openloaf-saas-sdk-rust`**
 - `src-tauri/src/openloaf/` —— OpenLoaf SaaS 登录 / token refresh / 用户档案 / 支付订单；`authenticated_client()` 对下游（如 stt）暴露已登录 `SaaSClient`
 - `src-tauri/src/db/` —— SQLite 迁移（`history` / `dictionary` 表）+ `recordings_dir()` / `ensure_recordings_dir()` 帮手
+- `src-tauri/src/inject/` —— 文本注入：当前实现为剪贴板写入 + 系统粘贴快捷键模拟（命令 `inject_paste`），由 `recording.ts` 在 final 文本到位后调用，把转写结果送回当前焦点输入框；enigo 直敲路径暂未启用
 
 规划中但尚未建立（在开发对应功能时再建，并同步本表）：
 - `src/lib/tauri.ts` —— invoke 的统一封装（暂各功能自管自的 lib/\*.ts）
 - `src/locales/` —— i18n 文案（当前硬编码中文）
-- `src-tauri/src/inject/` —— 文本注入（剪贴板 + enigo 两路）
 
 ---
 
@@ -224,6 +224,7 @@ cargo add --manifest-path src-tauri/Cargo.toml <crate>
 - 添加新 invoke 命令或插件权限时，在对应 capabilities 里显式声明；避免用全量通配 `allow-*`。
 - **已显式启用的关键权限**：
   - `core:window:allow-start-dragging` —— `data-tauri-drag-region` 能工作的前提（`core:default` 不含此项）。若拖拽失效先检查这里。
+  - `clipboard-manager:allow-write-text` —— `inject_paste` 命令把转写文本写回剪贴板的前提（`clipboard-manager:default` 只放 readText，不含 writeText）。若粘贴注入失效先检查这里。
 
 ### 前端路由
 - 使用 **React Router v7**（不是 v6）；API 差异点：`createBrowserRouter` / `RouterProvider`；`loader` / `action` 等数据 API 可选用。
