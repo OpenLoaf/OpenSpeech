@@ -12,6 +12,7 @@
     "core:window:allow-unminimize",
     "opener:default",
     "store:default",
+    "clipboard-manager:allow-write-text",
     {
       "identifier": "sql:allow-load",
       "allow": [{ "url": "sqlite:openspeech.db" }]

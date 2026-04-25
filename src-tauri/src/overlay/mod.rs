@@ -5,6 +5,8 @@
 //
 // 加载路径 /overlay；前端 router 识别到该路径后渲染 OverlayPage 而非 Layout。
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::{
     AppHandle, LogicalPosition, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
 };
@@ -13,6 +15,14 @@ pub const OVERLAY_LABEL: &str = "overlay";
 const WIDTH: f64 = 200.0;
 const HEIGHT: f64 = 36.0;
 const BOTTOM_MARGIN: f64 = 32.0;
+
+// "期望可见"状态——`show()` / `hide()` 是这个状态的入口。
+// 物理显隐再叠一层"主窗口聚焦时不显示"的策略：
+//   desired=true  + main focused   → 物理隐藏（Home 的 Live 面板已展示状态）
+//   desired=true  + main unfocused → 物理显示（用户在别的 app 里说话需要悬浮条）
+//   desired=false                  → 物理隐藏（无录音流程）
+// 主窗口 focus 变化由 `on_main_focus_changed` 钩入 lib.rs 的 WindowEvent。
+static DESIRED_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 /// 启动时预创建（hidden），第一次触发快捷键时直接 show 即可，不再有首次渲染延迟。
 pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -71,15 +81,29 @@ fn position_to_bottom_center<R: Runtime>(
 }
 
 pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    // 主窗口 focused 时跳过：Home 页的 Live 面板已经提供了 overlay 的全部信息
-    // （状态标签 + 波形 + 实时文字占位），再在屏幕底部叠一个浮窗属于视觉重复。
-    // 真正需要 overlay 的场景是用户在别的 app 里说话（主窗口失焦）。
+    // 期望可见：录音流程开始（快捷键按下）。先置位 desired，物理显隐再看
+    // 主窗口焦点。主窗口聚焦时不实际 show（Home 的 Live 面板已展示同等信息），
+    // 待 `on_main_focus_changed` 接到失焦事件再补偿。
+    DESIRED_VISIBLE.store(true, Ordering::Relaxed);
     if let Some(main) = app.get_webview_window("main") {
         if main.is_focused().unwrap_or(false) {
-            eprintln!("[overlay] skip show: main window focused");
+            eprintln!("[overlay] desired=true, defer show (main focused)");
             return Ok(());
         }
     }
+    show_now(app)
+}
+
+pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    DESIRED_VISIBLE.store(false, Ordering::Relaxed);
+    if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
+        w.hide()?;
+        eprintln!("[overlay] hide");
+    }
+    Ok(())
+}
+
+fn show_now<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     ensure_overlay(app)?;
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         position_to_bottom_center(&w)?;
@@ -89,10 +113,28 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
-        w.hide()?;
-        eprintln!("[overlay] hide");
+/// 主窗口 focus 状态变化时调用（由 lib.rs 的 WindowEvent::Focused 转发）：
+/// - 失焦：若期望可见，立即物理 show（用户切到别的 app 里说话需要悬浮条）。
+/// - 获焦：若期望可见，物理 hide（让 Home 的 Live 面板接管展示，避免视觉重复）；
+///         desired 状态保持，等下一次失焦再补偿。
+/// 期望不可见（无录音流程）时 focus 变化无副作用。
+pub fn on_main_focus_changed<R: Runtime>(
+    app: &AppHandle<R>,
+    focused: bool,
+) -> tauri::Result<()> {
+    if !DESIRED_VISIBLE.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    if focused {
+        if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
+            if w.is_visible().unwrap_or(false) {
+                w.hide()?;
+                eprintln!("[overlay] main focused → hide (desired remains true)");
+            }
+        }
+    } else {
+        eprintln!("[overlay] main blurred → compensating show");
+        show_now(app)?;
     }
     Ok(())
 }

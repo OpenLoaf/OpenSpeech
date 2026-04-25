@@ -2,8 +2,9 @@
 //
 // 职责：
 // 1. `stt_start`  —— 前端在 recording 态进入时调用；从 openloaf state 拿已登录
-//    SaaSClient，打开 `realtimeASR` WebSocket，发 start 帧（lang / sampleRate /
-//    channels / encoding=pcm16）。
+//    SaaSClient，打开 `realtimeAsr` WebSocket，发 start 帧 `{language}`。
+//    服务端固定按 16kHz mono pcm16 解码，sample rate / channel / encoding 都
+//    不需要客户端告知；payload 由 audio callback 重采样到 16k 后送进来。
 // 2. `stt_finalize` —— 前端在 hotkey 释放、录音 stop 之后调用。让 worker 发
 //    send_finish，阻塞等最多 FINALIZE_WAIT_MS 拿 Final 事件里的最终文字。
 // 3. `stt_cancel` —— Esc / 误触时调用。让 worker 立即退出，不等 Final。
@@ -48,7 +49,9 @@ const EVENT_ERROR: &str = "openspeech://asr-error";
 const EVENT_CLOSED: &str = "openspeech://asr-closed";
 const EVENT_CREDITS: &str = "openspeech://asr-credits";
 
-const FEATURE_ID: &str = "realtimeASR";
+// 服务端 feature 注册名是 `realtimeAsr`（小写 sr），不是 `realtimeASR`——
+// 2026-04-25 发错全大写会在 WebSocket 握手阶段被服务端拒 500。
+const FEATURE_ID: &str = "realtimeAsr";
 /// send_finish 后等 Final 的最长时间。服务端典型 < 500ms，3s 能兜住抖动；
 /// 超时走空串，前端自行决定是否把 history 标 failed。
 const FINALIZE_WAIT_MS: u64 = 3000;
@@ -106,17 +109,22 @@ fn close_if_active() {
     }
 }
 
+/// async + spawn_blocking：stt_start 内部 `close_if_active()` 会 join 上一轮
+/// worker，最坏可等一整个 recv_event_timeout（30ms）+ SDK Drop 发 Close 帧 +
+/// 关 socket 的几十 ms。同步 command 会占用 Tauri 命令线程池的一个 worker，
+/// 跟 stt_finalize / audio_level_stop 挤一起就可能让 UI 感觉卡。
 #[tauri::command]
-pub fn stt_start<R: Runtime>(
+pub async fn stt_start<R: Runtime>(
     app: AppHandle<R>,
     lang: Option<String>,
 ) -> Result<(), String> {
-    stt_start_impl(app, lang).map_err(|e| {
-        // 所有失败路径都打印到终端——前端 console.warn 只能在 DevTools 里看到，
-        // 终端日志更方便调试 realtime 连接 / auth 问题。
-        log::warn!("[stt] start failed: {e}");
-        e
-    })
+    tauri::async_runtime::spawn_blocking(move || stt_start_impl(app, lang))
+        .await
+        .map_err(|e| format!("stt_start join: {e}"))?
+        .map_err(|e| {
+            log::warn!("[stt] start failed: {e}");
+            e
+        })
 }
 
 fn stt_start_impl<R: Runtime>(
@@ -128,7 +136,10 @@ fn stt_start_impl<R: Runtime>(
         .authenticated_client()
         .ok_or_else(|| "not authenticated; login first".to_string())?;
 
-    let (sample_rate, channels) = crate::audio::current_stream_info()
+    // 仅做"stream 是否在跑"的兜底校验——服务端 realtimeAsr 固定按 16kHz mono
+    // pcm16 解码，**不接受**客户端传 sampleRate / channels / encoding。
+    // 重采样到 16k + mono 下混都在 audio callback 里（push_to_stt_pcm16）完成。
+    crate::audio::current_stream_info()
         .ok_or_else(|| "audio stream not running; start mic first".to_string())?;
 
     // 保险：旧 session 没清干净（上一次 finalize 崩了等）先兜底关。
@@ -138,16 +149,12 @@ fn stt_start_impl<R: Runtime>(
         .realtime()
         .connect(FEATURE_ID)
         .map_err(|e| format!("realtime connect: {e}"))?;
+    // start 帧只认 `params.language`，inputs 是空对象（realtimeAsr 不带 tool 输入）。
+    // 与 OpenLoaf-saas/scripts/test-realtime-asr-llm.ts 保持一致——多余字段会让
+    // 服务端校验失败 / 静默忽略导致后续解码错位。
     sess.send_start(
-        Some(json!({
-            "lang": lang.unwrap_or_else(|| "zh".into()),
-            "sampleRate": sample_rate,
-            "channels": channels,
-            "encoding": "pcm16",
-        })),
-        // 第二个参数是 tool inputs（webSearch 这类会有 query 等），realtimeASR 不用。
-        // 泛型 `I: Serialize` 的 `None` 需要显式类型才能通过类型推断。
-        None::<serde_json::Value>,
+        Some(json!({ "language": lang.unwrap_or_else(|| "zh".into()) })),
+        Some(json!({})),
     )
     .map_err(|e| format!("send_start: {e}"))?;
 
@@ -170,9 +177,7 @@ fn stt_start_impl<R: Runtime>(
         final_text,
         stop_signal,
     });
-    log::info!(
-        "[stt] session started (feature={FEATURE_ID}, sr={sample_rate}Hz, ch={channels})"
-    );
+    log::info!("[stt] session started (feature={FEATURE_ID})");
     Ok(())
 }
 
@@ -283,8 +288,17 @@ fn handle_event<R: Runtime>(
 ///
 /// 返回值：最终文字。超时时返回空串——前端据此写 history（text 为空时
 /// 可以标 failed，或保留 placeholder，产品决定）。
+///
+/// async + spawn_blocking：实现里有最长 3s 的 final_text 轮询 + worker join，
+/// 同步 command 会把 IPC 命令线程池堵死，重按快捷键时感觉整个 app 卡。
 #[tauri::command]
-pub fn stt_finalize() -> Result<String, String> {
+pub async fn stt_finalize() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(stt_finalize_impl)
+        .await
+        .map_err(|e| format!("stt_finalize join: {e}"))?
+}
+
+fn stt_finalize_impl() -> Result<String, String> {
     let state = slot().lock().map_err(|e| e.to_string())?.take();
     let Some(mut state) = state else {
         return Err("no active stt session".into());
@@ -318,7 +332,10 @@ pub fn stt_finalize() -> Result<String, String> {
 }
 
 /// 用户 Esc / 误触 / 前端异常时调。立即关 session，不等 Final，不返回文本。
+///
+/// async + spawn_blocking：close_if_active 里 join worker 可能等数十 ms，
+/// 同 stt_start 理由。
 #[tauri::command]
-pub fn stt_cancel() {
-    close_if_active();
+pub async fn stt_cancel() {
+    let _ = tauri::async_runtime::spawn_blocking(close_if_active).await;
 }
