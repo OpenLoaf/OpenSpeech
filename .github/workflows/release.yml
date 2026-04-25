@@ -48,30 +48,36 @@ jobs:
             platform: macos-latest
             rust-target: aarch64-apple-darwin
             args: '--target aarch64-apple-darwin'
+            asset-prefix: macOS-arm64
           - name: macOS Intel
             platform: macos-13
             rust-target: x86_64-apple-darwin
             args: '--target x86_64-apple-darwin'
+            asset-prefix: macOS-intel
 
           # ---- Linux ----
           - name: Linux x86_64
             platform: ubuntu-22.04
             rust-target: ''
             args: ''
+            asset-prefix: Linux-x86_64
           - name: Linux ARM64
             platform: ubuntu-22.04-arm
             rust-target: ''
             args: ''
+            asset-prefix: Linux-arm64
 
           # ---- Windows ----
           - name: Windows x86_64
             platform: windows-latest
             rust-target: ''
             args: ''
+            asset-prefix: Windows-x86_64
           - name: Windows ARM64
             platform: windows-11-arm
             rust-target: ''
             args: ''
+            asset-prefix: Windows-arm64
 
     name: Build · ${{ matrix.name }}
     runs-on: ${{ matrix.platform }}
@@ -170,3 +176,48 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
           includeUpdaterJson: true
+
+      # tauri-action 默认产物名形如 `OpenSpeech_0.2.0_aarch64.dmg`——只看得见 arch，看不出
+      # 是 macOS / Windows / Linux。这一步给 release 上**用户手动下载**用的 installer
+      # （dmg / exe / deb / rpm / AppImage）通过 `gh api PATCH releases/assets/:id` 加平台
+      # 前缀，重命名为 `macOS-arm64-OpenSpeech_0.2.0_aarch64.dmg` 之类，下载页一目了然。
+      #
+      # **重要**：updater 链路用的 `.app.tar.gz` / `.nsis.zip` / `.AppImage.tar.gz` 与对应
+      # `.sig` **不能 rename**——`latest.json` 里的 `url` 字段写死了原文件名，改名 = 自动
+      # 更新断链。下面 find 的 -name 白名单只圈 installer 扩展名，刻意排除 tar.gz/zip/sig。
+      #
+      # 仅 rename **本 job 自己产出**的 asset：用 disk 上 `bundle/` 目录下的真实文件名做
+      # 同名匹配，跨 job 上传到同一个 draft release 也不会误伤别人。
+      - name: Tag installer assets with platform prefix
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREFIX: ${{ matrix.asset-prefix }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t local_files < <(find src-tauri -path '*/release/bundle/*' -type f \
+            \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+            -exec basename {} \; 2>/dev/null || true)
+          if [[ ${#local_files[@]} -eq 0 ]]; then
+            echo "[rename] no installer artifacts under bundle/; skip"
+            exit 0
+          fi
+          release_id=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .id)
+          gh api "repos/$REPO/releases/$release_id/assets" --paginate \
+            --jq '.[] | [.id, .name] | @tsv' > /tmp/assets.tsv
+          while IFS=$'\t' read -r aid aname; do
+            for f in "${local_files[@]}"; do
+              if [[ "$aname" == "$f" ]]; then
+                new="${PREFIX}-${aname}"
+                if [[ "$aname" == "$new" ]]; then
+                  break
+                fi
+                gh api -X PATCH "repos/$REPO/releases/assets/$aid" -f name="$new" >/dev/null
+                echo "[rename] $aname -> $new"
+                break
+              fi
+            done
+          done < /tmp/assets.tsv
