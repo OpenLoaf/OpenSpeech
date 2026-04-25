@@ -12,10 +12,15 @@ export type Sensitivity = "LOW" | "NORMAL" | "HIGH";
 // 听写源：SAAS = OpenLoaf 云端（扣积分 / Pro+ 无限）；BYO = 用户自己的 REST 端点。
 // 详见 docs/subscription.md。
 export type DictationSource = "SAAS" | "BYO";
+// 听写模式：
+//   REALTIME — 实时听写，ASR partial 直接落文本（所见即所得，边说边出）
+//   AI       — AI 听写（默认），松开后取 final 文本，再经 LLM 自动润色/总结后一次性注入
+export type DictationMode = "REALTIME" | "AI";
 
 export interface GeneralSettings {
   interfaceLang: string;
   dictationLang: string;
+  dictationMode: DictationMode;
   translationTarget: string;
   langVariant: string;
   // 空串 = 跟随系统默认麦克风；非空 = cpal 枚举出的设备名
@@ -62,6 +67,7 @@ interface PersistShape {
 const DEFAULT_GENERAL: GeneralSettings = {
   interfaceLang: "跟随系统",
   dictationLang: "自动检测",
+  dictationMode: "AI",
   translationTarget: "EN",
   langVariant: "EN-US",
   inputDevice: "",

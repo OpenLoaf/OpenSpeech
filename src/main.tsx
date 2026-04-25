@@ -13,6 +13,7 @@ import { useHistoryStore } from "@/stores/history";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
+import { syncAutostart } from "@/lib/autostart";
 import "./App.css";
 
 // 禁用 WebView 的默认右键菜单（"后退 / 刷新"等），桌面应用不需要浏览器级菜单。
@@ -44,6 +45,12 @@ const bootPromise = (async () => {
       useDictionaryStore.getState().init(),
     ]);
     console.log("[boot] stores ready; bindings =", useHotkeysStore.getState().bindings);
+
+    // 开机自启：以 settings.launchStartup 为期望值同步到 OS（macOS LaunchAgent /
+    // Windows HKCU Run / Linux .desktop）。空操作的判断在 syncAutostart 内做，失败
+    // 不阻断启动。dev 模式下 enable 会注册到当前 dev 二进制路径——属于已知现象，
+    // 用户在 dev 环境自负盈亏。
+    void syncAutostart(useSettingsStore.getState().general.launchStartup);
 
     // 自动更新：默认开。check() 带 5s 超时；有更新则 downloadAndInstall 触发
     // 原地替换 + relaunch，用户感知 ≈ 启动时多一段"升级中"。失败静默——不打扰

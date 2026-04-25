@@ -11,8 +11,10 @@ import { AccountDialog } from "@/components/AccountDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { CloseToBackgroundDialog } from "@/components/CloseToBackgroundDialog";
 import { LoginDialog } from "@/components/LoginDialog";
+import { NoInternetDialog } from "@/components/NoInternetDialog";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
+import { useUIStore } from "@/stores/ui";
 
 type NavItem = {
   to: string;
@@ -59,13 +61,22 @@ function NavRow({ item }: { item: NavItem }) {
 
 export default function Layout() {
   const [accountOpen, setAccountOpen] = useState<boolean>(false);
-  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
-  const [loginOpen, setLoginOpen] = useState<boolean>(false);
   const [closePromptOpen, setClosePromptOpen] = useState<boolean>(false);
   const navigate = useNavigate();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
   const profile = useAuthStore((s) => s.profile);
+  // SettingsDialog / LoginDialog 的 open 状态搬到 ui store，让 recording.ts gate /
+  // LoginDialog 的"使用自己的 STT 端点"按钮也能直接调用，无需 prop drilling 或 emit。
+  const loginOpen = useUIStore((s) => s.loginOpen);
+  const setLoginOpen = useUIStore((s) => s.setLoginOpen);
+  const settingsOpen = useUIStore((s) => s.settingsOpen);
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const settingsInitialTab = useUIStore((s) => s.settingsInitialTab);
+  const noInternetOpen = useUIStore((s) => s.noInternetOpen);
+  const setNoInternetOpen = useUIStore((s) => s.setNoInternetOpen);
+  const openLogin = useUIStore((s) => s.openLogin);
+  const openSettings = useUIStore((s) => s.openSettings);
 
   // 用户名 fallback 链：name → email 前缀 → "账户"。邮箱截 @ 前，避免侧栏被挤爆。
   const displayName = (() => {
@@ -164,7 +175,7 @@ export default function Layout() {
         navigate("/");
       });
       await addSub<unknown>("openspeech://tray-open-settings", () => {
-        setSettingsOpen(true);
+        openSettings();
       });
       await addSub<unknown>("openspeech://tray-open-dictionary", () => {
         navigate("/dictionary");
@@ -200,7 +211,7 @@ export default function Layout() {
       cancelled = true;
       unsubs.forEach((u) => u());
     };
-  }, [navigate]);
+  }, [navigate, openSettings]);
 
   // 设置页等处改 inputDevice 后通知 Rust 重建托盘菜单，让"选择麦克风"的 ✓
   // 跟随最新选择。空依赖 + subscribe 自带首次调用豁免（prev === next）。
@@ -303,7 +314,7 @@ export default function Layout() {
             onClick={() => {
               // 未登录：直接打开登录弹窗；已登录：打开账户弹窗。
               if (isAuthenticated) setAccountOpen(true);
-              else setLoginOpen(true);
+              else openLogin();
             }}
             className="flex min-w-0 items-center gap-2 px-3 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
           >
@@ -324,7 +335,7 @@ export default function Layout() {
           </button>
           <button
             type="button"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => openSettings()}
             className="flex items-center gap-2 px-3 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
           >
             <Settings className="size-4" />
@@ -344,12 +355,17 @@ export default function Layout() {
       {/* Dialogs */}
       <AccountDialog open={accountOpen} onOpenChange={setAccountOpen} />
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        initialTab={settingsInitialTab}
+      />
       <CloseToBackgroundDialog
         open={closePromptOpen}
         onOpenChange={setClosePromptOpen}
         onConfirm={handleCloseConfirm}
       />
+      <NoInternetDialog open={noInternetOpen} onOpenChange={setNoInternetOpen} />
     </div>
   );
 }

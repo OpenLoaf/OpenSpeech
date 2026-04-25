@@ -56,6 +56,10 @@ pub const DEFAULT_WEB_URL: &str = match option_env!("OPENLOAF_WEB_URL") {
 
 const APP_ID: &str = "openspeech-desktop";
 const LOGIN_EVENT: &str = "openspeech://openloaf-login";
+/// 启动时（bootstrap）凭 keychain 里的 refresh_token 自动恢复成功后广播。
+/// 前端在初始化时拿到的 `is_authenticated` 可能早于 bootstrap 网络往返完成，
+/// 所以这里再补一次推送，让 UI 把恢复出来的用户写回 store。
+const RESTORED_EVENT: &str = "openspeech://openloaf-restored";
 /// 自动 refresh 彻底失败（refresh token 也无效）时广播给前端，让 UI 切回未登录态。
 const AUTH_LOST_EVENT: &str = "openspeech://openloaf-auth-lost";
 
@@ -148,6 +152,12 @@ impl OpenLoafState {
     pub fn authenticated_client(&self) -> Option<SaaSClient> {
         self.client.access_token().as_ref()?;
         Some(self.client.clone())
+    }
+
+    /// 返回 SaaSClient 克隆（无论是否登录）。供"网络健康探针"等公开端点调用复用。
+    /// 不强制登录态，因为 `payment().list_plans()` 等公开端点本身不需要 token。
+    pub fn client_clone(&self) -> SaaSClient {
+        self.client.clone()
     }
 
     fn current_user(&self) -> Option<PublicUser> {
@@ -246,6 +256,7 @@ fn apply_session(state: &OpenLoafState, session: AuthSession) -> PublicUser {
     if let Err(err) = save_refresh_token(&session.refresh_token) {
         log::warn!("openloaf: save refresh token failed: {err}");
     }
+    dump_dev_session(&session.access_token, &session.refresh_token);
     let user: PublicUser = session.user.into();
     state.set_user(Some(user.clone()));
     user
@@ -255,7 +266,78 @@ fn clear_session(state: &OpenLoafState) {
     state.client.set_access_token(None);
     state.set_user(None);
     clear_refresh_token();
+    clear_dev_session();
 }
+
+// ─── Dev-only session dump ───────────────────────────────────────
+//
+// Debug build（`cargo run` / `pnpm tauri dev`）下每次 apply_session 同步把
+// access_token + refresh_token + base_url dump 到 `~/.openspeech/dev_session.json`，
+// logout/clear_session 时删除。**只给测试工具（如 `examples/test_realtime_asr.rs`）
+// 读取**，release build 编译时直接编译掉（`#[cfg(not(debug_assertions))]` 空实现）。
+//
+// 文件权限设 0600 避免同机其他用户读到；不加密——dev 场景已经是"可信本机"语境。
+
+#[cfg(debug_assertions)]
+fn dev_session_path() -> Option<std::path::PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .map(|h| std::path::PathBuf::from(h).join(".openspeech/dev_session.json"))
+}
+
+#[cfg(debug_assertions)]
+fn dump_dev_session(access_token: &str, refresh_token: &str) {
+    let Some(path) = dev_session_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            log::warn!("openloaf: mkdir ~/.openspeech failed: {e}");
+            return;
+        }
+    }
+    let payload = serde_json::json!({
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "base_url": DEFAULT_BASE_URL,
+        "note": "DEV ONLY — dumped by cfg(debug_assertions) build. Do NOT commit.",
+    });
+    let bytes = match serde_json::to_vec_pretty(&payload) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("openloaf: serialize dev session: {e}");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&path, &bytes) {
+        log::warn!("openloaf: write dev session: {e}");
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+    log::info!("openloaf: dev session dumped → {}", path.display());
+}
+
+#[cfg(debug_assertions)]
+fn clear_dev_session() {
+    if let Some(path) = dev_session_path() {
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn dump_dev_session(_: &str, _: &str) {}
+
+#[cfg(not(debug_assertions))]
+fn clear_dev_session() {}
 
 // ─── 登录事件 payload ────────────────────────────────────────────
 
@@ -346,6 +428,36 @@ pub async fn openloaf_logout(state: State<'_, SharedOpenLoaf>) -> Result<(), Str
 #[tauri::command]
 pub fn openloaf_current_user(state: State<'_, SharedOpenLoaf>) -> Option<PublicUser> {
     state.current_user()
+}
+
+/// 网络健康探针：调用 SDK 的 `payment().list_plans()` —— 它对应公开端点
+/// `GET /api/public/plans`，不需要 access token。能拿到响应即视为
+/// "网络通且 SaaS 可达"。任何错误（DNS 失败 / connect refused / 5xx / 解析失败）
+/// 都返回 false，恰好覆盖"完全没网"以及"链路通但服务不可用"两类情况——
+/// 比 `navigator.onLine` 更可靠（后者只检系统层链路）。
+///
+/// 该调用是 SDK 的同步阻塞调用，包在 `spawn_blocking` 里 + 5s tokio timeout
+/// 兜底，避免 health 检测自己卡住影响快捷键响应。
+#[tauri::command]
+pub async fn openloaf_health_check(state: State<'_, SharedOpenLoaf>) -> Result<bool, String> {
+    use std::time::Duration;
+    let client = state.client_clone();
+    let task = tokio::task::spawn_blocking(move || client.payment().list_plans());
+    match tokio::time::timeout(Duration::from_secs(5), task).await {
+        Ok(Ok(Ok(_resp))) => Ok(true),
+        Ok(Ok(Err(e))) => {
+            eprintln!("[health] list_plans failed: {e:?}");
+            Ok(false)
+        }
+        Ok(Err(join_err)) => {
+            eprintln!("[health] spawn_blocking join error: {join_err}");
+            Ok(false)
+        }
+        Err(_elapsed) => {
+            eprintln!("[health] timeout after 5s");
+            Ok(false)
+        }
+    }
 }
 
 #[tauri::command]
@@ -563,8 +675,11 @@ pub async fn bootstrap(app: &AppHandle) {
 
     match result {
         Ok(Ok(session)) => {
-            apply_session(&shared, session);
+            let user = apply_session(&shared, session);
             log::info!("openloaf: session restored from Keychain");
+            if let Err(e) = app.emit(RESTORED_EVENT, user) {
+                log::warn!("openloaf: emit restored event failed: {e}");
+            }
         }
         Ok(Err(err)) => {
             log::warn!("openloaf: refresh failed, clearing stored token: {err}");

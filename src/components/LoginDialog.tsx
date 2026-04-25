@@ -1,5 +1,5 @@
 import { useEffect, type ReactElement } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, ServerCog } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useAuthStore, type LoginProvider } from "@/stores/auth";
+import { useUIStore } from "@/stores/ui";
 
 type Props = {
   open: boolean;
@@ -131,6 +132,38 @@ export function LoginDialog({ open, onOpenChange }: Props) {
             ))}
           </div>
 
+          {/* BYO STT 入口：不想登录 OpenLoaf 的用户可以直接跳到设置 → 大模型 tab
+              填写自己的 STT REST 端点。"或" 分隔线把 SaaS / BYO 两条路径视觉拉平。 */}
+          <div className="flex items-center gap-2">
+            <span className="h-px flex-1 bg-te-gray/40" />
+            <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
+              或
+            </span>
+            <span className="h-px flex-1 bg-te-gray/40" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <button
+              type="button"
+              disabled={isBusy || isAuthenticated}
+              onClick={() => {
+                onOpenChange(false);
+                useUIStore.getState().openSettings("MODEL");
+              }}
+              className={cn(
+                "inline-flex w-full items-center justify-center gap-3 border border-te-gray/60 px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors",
+                !isBusy && !isAuthenticated
+                  ? "hover:border-te-accent hover:text-te-accent"
+                  : "cursor-not-allowed opacity-50",
+              )}
+            >
+              <ServerCog className="size-4" />
+              使用自己的 STT 端点
+            </button>
+            <p className="font-sans text-xs leading-relaxed text-te-light-gray">
+              不想登录 OpenLoaf？填写你自己的 STT REST 端点，音频从本机直发，不经云端。
+            </p>
+          </div>
+
           {/* 状态/说明区：空闲时展示说明文字；登录中/出错/成功时替换为状态行。
               整组（黄点 + 文字 + spinner）作为一个 inline 单元水平居中，
               方块和 loader 直接贴在文字左右两侧。 */}
@@ -160,11 +193,7 @@ export function LoginDialog({ open, onOpenChange }: Props) {
                 <Loader2 className="size-3.5 shrink-0 animate-spin text-te-light-gray" />
               ) : null}
             </div>
-          ) : (
-            <p className="pt-1 font-sans text-xs leading-relaxed text-te-light-gray">
-              登录后将获得云端能力授权，并把会话安全保存在系统密钥链。本地录音、历史与词典不受影响。
-            </p>
-          )}
+          ) : null}
 
           {isBusy ? (
             <button

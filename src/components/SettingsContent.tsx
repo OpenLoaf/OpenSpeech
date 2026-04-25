@@ -23,6 +23,7 @@ import {
   Cloud,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { syncAutostart } from "@/lib/autostart";
 import { HotkeyField } from "@/components/HotkeyField";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import {
@@ -37,7 +38,8 @@ import { detectPlatform } from "@/lib/platform";
 /*  Types                                                             */
 /* ──────────────────────────────────────────────────────────────── */
 
-type TabId = "ACCOUNT" | "GENERAL" | "MODEL" | "PERSONALIZATION" | "ABOUT";
+import type { SettingsTabId } from "@/stores/ui";
+type TabId = SettingsTabId;
 
 type TabDef = {
   id: TabId;
@@ -642,7 +644,10 @@ function GeneralTab() {
       <Row label="开机自启">
         <Switch
           checked={general.launchStartup}
-          onChange={(v) => void setGeneral("launchStartup", v)}
+          onChange={(v) => {
+            void setGeneral("launchStartup", v);
+            void syncAutostart(v);
+          }}
         />
       </Row>
       {detectPlatform() === "macos" ? (
@@ -1016,8 +1021,10 @@ function SubNav({
 /*  Shared content (used by /settings page and SettingsDialog)        */
 /* ──────────────────────────────────────────────────────────────── */
 
-export default function SettingsContent() {
-  const [tab, setTab] = useState<TabId>("GENERAL");
+export default function SettingsContent({
+  initialTab = "GENERAL",
+}: { initialTab?: TabId } = {}) {
+  const [tab, setTab] = useState<TabId>(initialTab);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col md:flex-row">

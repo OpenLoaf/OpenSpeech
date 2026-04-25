@@ -22,6 +22,7 @@ use tauri::ActivationPolicy;
 mod audio;
 mod db;
 mod hotkey;
+mod inject;
 mod openloaf;
 mod overlay;
 mod secrets;
@@ -73,6 +74,38 @@ fn sync_dock_icon(_app: tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     {
         apply_dock_icon_policy(&_app);
+    }
+}
+
+// "没有互联网连接"对话框上的"打开系统设置"按钮调用。
+// 直接 spawn 系统命令打开网络设置面板——`tauri-plugin-opener` 默认 scope 不允许
+// `x-apple.systempreferences:` / `ms-settings:` 这种自定义 scheme，自管更省事。
+// 失败只记日志（按钮已经按下了，弹另一个错误对话框打扰更甚）。
+#[tauri::command]
+fn open_network_settings() {
+    use std::process::Command;
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.Network-Settings.extension")
+        .spawn();
+
+    // Windows 10/11：ms-settings:network-status 是网络与 Internet 设置主页
+    #[cfg(target_os = "windows")]
+    let result = Command::new("cmd")
+        .args(["/C", "start", "ms-settings:network-status"])
+        .spawn();
+
+    // Linux 没有统一入口；优先 GNOME（gnome-control-center），失败时回退 KDE。
+    // 都失败也不强求——用户可以自己去打开。
+    #[cfg(target_os = "linux")]
+    let result = Command::new("gnome-control-center")
+        .arg("network")
+        .spawn()
+        .or_else(|_| Command::new("kcmshell5").arg("kcm_networkmanagement").spawn());
+
+    if let Err(e) = result {
+        eprintln!("[network] open_network_settings failed: {e:?}");
     }
 }
 
@@ -438,12 +471,21 @@ pub fn run() {
                 disable_macos_fullscreen(&window);
 
                 let app_handle = app.handle().clone();
-                window.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
+                window.on_window_event(move |event| match event {
+                    WindowEvent::CloseRequested { api, .. } => {
                         // 红叉 / Cmd+W（Window → Close）走这里；Cmd+Q 走 App Menu 的 quit_app。
                         api.prevent_close();
                         let _ = app_handle.emit(CLOSE_REQUESTED_EVENT, ());
                     }
+                    // 主窗口 focus 变化驱动悬浮录音条的物理显隐：录音流程进行中
+                    // （`overlay::DESIRED_VISIBLE == true`）下，主窗失焦才真正 show
+                    // overlay；主窗回到前台则 hide overlay，由 Home 的 Live 面板展示。
+                    WindowEvent::Focused(focused) => {
+                        if let Err(e) = overlay::on_main_focus_changed(&app_handle, *focused) {
+                            eprintln!("[overlay] focus handler failed: {e:?}");
+                        }
+                    }
+                    _ => {}
                 });
             }
 
@@ -456,6 +498,7 @@ pub fn run() {
             show_main_window_cmd,
             tray_refresh,
             sync_dock_icon,
+            open_network_settings,
             hotkey::apply_hotkey_config,
             hotkey::set_hotkey_recording,
             overlay::overlay_show,
@@ -470,6 +513,7 @@ pub fn run() {
             openloaf::openloaf_is_authenticated,
             openloaf::openloaf_fetch_profile,
             openloaf::openloaf_web_url,
+            openloaf::openloaf_health_check,
             audio::audio_level_start,
             audio::audio_level_stop,
             audio::audio_list_input_devices,
@@ -480,6 +524,7 @@ pub fn run() {
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,
+            inject::inject_paste,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

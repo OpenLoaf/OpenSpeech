@@ -100,31 +100,66 @@ fn push_samples(data: &[f32]) {
     }
 }
 
-/// callback 内调用：把 f32 帧 downmix 到 mono、量化为 PCM16 LE bytes，交给
-/// `stt::try_send_audio_pcm16`——stt 内部走 mpsc 进 worker 线程，跟 audio
+/// 服务端 realtimeAsr 固定按 16kHz pcm16 解码——任何源采样率必须先重采样。
+const STT_TARGET_SAMPLE_RATE: u32 = 16_000;
+
+/// callback 内调用：mono 下混 → 重采样到 16kHz → PCM16 LE bytes，丢给
+/// `stt::try_send_audio_pcm16`。stt 内部走 mpsc 进 worker 线程，跟 audio
 /// callback 解耦（SDK 的 `RealtimeSession` 自身不 Sync，不能跨线程共享）。
-/// 多声道设备按算术平均下混到 mono，简单够用；后续若要针对 stereo 做通道
-/// 选择再扩展。无激活 session 时内部 try_lock 会短路返回，零开销。
-fn push_to_stt_pcm16(data: &[f32], channels: u16) {
+///
+/// 多声道按算术平均下混；重采样用最朴素的线性插值（单帧无状态，会在 chunk
+/// 边界丢 0~1 个采样 ≈ <0.1ms，对识别率影响可忽略）。无激活 session 时
+/// `try_send_audio_pcm16` 内部 try_lock 短路返回，零开销。
+fn push_to_stt_pcm16(data: &[f32], channels: u16, src_rate: u32) {
     let ch = channels.max(1) as usize;
     let frames = data.len() / ch;
-    let mut bytes = Vec::with_capacity(frames * 2);
-    if ch == 1 {
-        for s in data {
-            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            bytes.extend_from_slice(&v.to_le_bytes());
-        }
+    if frames == 0 {
+        return;
+    }
+
+    // 1) mono downmix
+    let mono: Vec<f32> = if ch == 1 {
+        data[..frames].to_vec()
     } else {
+        let mut out = Vec::with_capacity(frames);
         for f in 0..frames {
             let start = f * ch;
             let mut sum = 0.0f32;
             for c in 0..ch {
                 sum += data[start + c];
             }
-            let avg = sum / ch as f32;
-            let v = (avg.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            bytes.extend_from_slice(&v.to_le_bytes());
+            out.push(sum / ch as f32);
         }
+        out
+    };
+
+    // 2) 线性插值重采样到 16k（src_rate == 16k 时跳过）
+    let resampled: Vec<f32> = if src_rate == STT_TARGET_SAMPLE_RATE {
+        mono
+    } else {
+        let ratio = src_rate as f64 / STT_TARGET_SAMPLE_RATE as f64;
+        let dst_len = (mono.len() as f64 / ratio).floor() as usize;
+        if dst_len == 0 {
+            return;
+        }
+        let last = mono.len() - 1;
+        let mut out = Vec::with_capacity(dst_len);
+        for i in 0..dst_len {
+            let src_idx = i as f64 * ratio;
+            let lo = src_idx.floor() as usize;
+            let hi = (lo + 1).min(last);
+            let frac = src_idx - lo as f64;
+            let s = mono[lo] as f64 * (1.0 - frac) + mono[hi] as f64 * frac;
+            out.push(s as f32);
+        }
+        out
+    };
+
+    // 3) f32 → i16 LE bytes
+    let mut bytes = Vec::with_capacity(resampled.len() * 2);
+    for s in resampled {
+        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        bytes.extend_from_slice(&v.to_le_bytes());
     }
     crate::stt::try_send_audio_pcm16(bytes);
 }
@@ -214,9 +249,10 @@ fn spawn_monitor_thread<R: Runtime>(
             };
             let sample_format = supported.sample_format();
             let stream_config: cpal::StreamConfig = supported.into();
-            // channels / sample_rate 需要进 audio callback 做 PCM16 下混；u16 / u32
-            // 都是 Copy，move 闭包按值捕获即可。
+            // channels / sample_rate 需要进 audio callback 做 PCM16 下混 + 重采样
+            // 到 16k；u16 / u32 都是 Copy，move 闭包按值捕获即可。
             let cb_channels = stream_config.channels;
+            let cb_sample_rate = stream_config.sample_rate;
 
             let err_fn = |e: cpal::StreamError| eprintln!("[audio] stream error: {e}");
 
@@ -233,7 +269,7 @@ fn spawn_monitor_thread<R: Runtime>(
                         }
                         peak_cb.store(p.to_bits(), Ordering::Relaxed);
                         push_samples(data);
-                        push_to_stt_pcm16(data, cb_channels);
+                        push_to_stt_pcm16(data, cb_channels, cb_sample_rate);
                     },
                     err_fn,
                     None,
@@ -256,7 +292,7 @@ fn spawn_monitor_thread<R: Runtime>(
                                 }
                             }
                             push_samples(&buf[..chunk.len()]);
-                            push_to_stt_pcm16(&buf[..chunk.len()], cb_channels);
+                            push_to_stt_pcm16(&buf[..chunk.len()], cb_channels, cb_sample_rate);
                         }
                         peak_cb.store(p.to_bits(), Ordering::Relaxed);
                     },
@@ -278,7 +314,7 @@ fn spawn_monitor_thread<R: Runtime>(
                                 }
                             }
                             push_samples(&buf[..chunk.len()]);
-                            push_to_stt_pcm16(&buf[..chunk.len()], cb_channels);
+                            push_to_stt_pcm16(&buf[..chunk.len()], cb_channels, cb_sample_rate);
                         }
                         peak_cb.store(p.to_bits(), Ordering::Relaxed);
                     },
@@ -390,14 +426,18 @@ pub fn stop() {
     }
 }
 
+// audio_level_start / audio_level_stop：内部可能 join 旧 audio 线程 + 打开新
+// cpal stream（macOS 上 device.build_input_stream 首次可达 100+ms）。同步
+// command 会阻塞 Tauri 命令线程池，和 stt_* 挤一起时肉眼可见卡顿——全部挪到
+// spawn_blocking 池里。
 #[tauri::command]
-pub fn audio_level_start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) {
-    start(app, device_name);
+pub async fn audio_level_start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) {
+    let _ = tauri::async_runtime::spawn_blocking(move || start(app, device_name)).await;
 }
 
 #[tauri::command]
-pub fn audio_level_stop() {
-    stop();
+pub async fn audio_level_stop() {
+    let _ = tauri::async_runtime::spawn_blocking(stop).await;
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -442,8 +482,19 @@ pub fn audio_recording_start(id: String) -> Result<(), String> {
 ///
 /// 若无激活 session（用户快速双击误触 / 没调 start 就 stop）返回 Err；前端
 /// 据此走"不写历史"分支。
+///
+/// async + spawn_blocking：WAV 编码 + fs 写入少则几 ms 多则几十 ms（大音频），
+/// 放 blocking 池避免跟 stt_finalize 挤 IPC 命令线程。
 #[tauri::command]
-pub fn audio_recording_stop<R: Runtime>(
+pub async fn audio_recording_stop<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<RecordingResult, String> {
+    tauri::async_runtime::spawn_blocking(move || audio_recording_stop_impl(app))
+        .await
+        .map_err(|e| format!("audio_recording_stop join: {e}"))?
+}
+
+fn audio_recording_stop_impl<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<RecordingResult, String> {
     let session = {

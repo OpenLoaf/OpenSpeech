@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { Check, Loader2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { useRecordingStore } from "@/stores/recording";
 
@@ -38,8 +39,15 @@ export default function OverlayPage() {
   const state = useRecordingStore((s) => s.state);
   const audioLevels = useRecordingStore((s) => s.audioLevels);
   const errorMessage = useRecordingStore((s) => s.errorMessage);
-  const cancel = useRecordingStore((s) => s.simulateCancel);
-  const finalize = useRecordingStore((s) => s.simulateFinalize);
+
+  // overlay 是镜像窗口：按钮交互只能通过 emitTo 发回主窗，主窗 listener 调
+  // 真实的 simulateCancel / simulateFinalize（那里才有 Rust 录音 / STT 副作用）。
+  const cancel = () => {
+    void emitTo("main", "openspeech://overlay-action", "cancel");
+  };
+  const finalize = () => {
+    void emitTo("main", "openspeech://overlay-action", "finalize");
+  };
 
   // initListeners 已在 main.tsx 的 boot IIFE 中完成，组件只负责订阅 + 渲染。
 

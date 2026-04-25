@@ -292,11 +292,18 @@ function RowActions({ status }: { status: HistoryStatus }) {
   const isFailed = status === "failed";
   const baseBtn =
     "inline-flex size-7 items-center justify-center border border-transparent text-te-light-gray transition-colors hover:border-te-gray/60 hover:text-te-accent";
+  const dangerBtn =
+    "inline-flex size-7 items-center justify-center border border-transparent text-te-light-gray transition-colors hover:border-[#ff4d4d]/60 hover:text-[#ff4d4d]";
 
-  return (
-    <div className="flex items-center gap-1">
-      {/* 失败态：重试按钮常显，带文字，方形灰底 */}
-      {isFailed && (
+  // 失败态：只有「(hover) 删除 + 重试常显」，由外层 HistoryRow 在更右侧再放一个播放按钮。
+  if (isFailed) {
+    return (
+      <div className="flex items-center gap-1">
+        <div className="pointer-events-none flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+          <button type="button" className={dangerBtn} title="删除">
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
         <button
           type="button"
           className="inline-flex items-center gap-1.5 border border-te-gray/40 bg-te-surface px-2.5 py-1 font-mono text-[11px] uppercase tracking-widest text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
@@ -305,24 +312,21 @@ function RowActions({ status }: { status: HistoryStatus }) {
           <RotateCcw className="size-3" strokeWidth={2} />
           <span>重试</span>
         </button>
-      )}
-
-      {/* 其他图标按钮：hover 才显现 */}
-      <div className="pointer-events-none flex items-center gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-        <button type="button" className={baseBtn} title="复制">
-          <Copy className="size-3.5" />
-        </button>
-        <button type="button" className={baseBtn} title="重新注入">
-          <CornerUpLeft className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          className="inline-flex size-7 items-center justify-center border border-transparent text-te-light-gray transition-colors hover:border-[#ff4d4d]/60 hover:text-[#ff4d4d]"
-          title="删除"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
       </div>
+    );
+  }
+
+  return (
+    <div className="pointer-events-none flex items-center gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+      <button type="button" className={baseBtn} title="复制">
+        <Copy className="size-3.5" />
+      </button>
+      <button type="button" className={baseBtn} title="重新注入">
+        <CornerUpLeft className="size-3.5" />
+      </button>
+      <button type="button" className={dangerBtn} title="删除">
+        <Trash2 className="size-3.5" />
+      </button>
     </div>
   );
 }
@@ -386,15 +390,14 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
         )}
       </div>
 
-      {/* 状态 + 操作 */}
+      {/* 状态 + 操作（从右到左：播放、重试 / 操作组、(hover) 删除） */}
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
         <RowActions status={item.status} />
-        {!isFailed &&
-          (item.audio_path ? (
-            <PlayButton id={item.id} audioPath={item.audio_path} />
-          ) : (
-            <StatusBadge status={item.status} />
-          ))}
+        {item.audio_path ? (
+          <PlayButton id={item.id} audioPath={item.audio_path} />
+        ) : !isFailed ? (
+          <StatusBadge status={item.status} />
+        ) : null}
       </div>
     </motion.div>
   );

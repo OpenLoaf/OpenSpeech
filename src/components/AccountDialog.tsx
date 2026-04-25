@@ -102,7 +102,7 @@ export function AccountDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[70vh] w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0">
+      <DialogContent className="flex max-h-[88vh] min-h-[640px] w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0">
         <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
             账户

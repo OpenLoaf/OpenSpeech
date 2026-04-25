@@ -138,6 +138,19 @@ function keyFromEvent(e: KeyboardEvent): KeyToken {
   return { id: code || k, label: k || code };
 }
 
+// 过滤识别失败的按键：rdev 0.5 对未映射的硬件键 fallback 成
+// `Key::Unknown(u32)` / `Key::RawKey(_)`，到 Rust → 前端就成了
+// "Unknown(123)" / "RawKey(...)"；DOM 在某些 IME / 媒体键场景
+// 也会给 "Unidentified"。这些都不该作为视觉反馈显示给用户。
+function isDisplayableKey(token: KeyToken): boolean {
+  const id = token.id || "";
+  const label = token.label || "";
+  if (!id || !label) return false;
+  if (id === "Unidentified" || label === "Unidentified") return false;
+  if (id.startsWith("Unknown(") || id.startsWith("RawKey(")) return false;
+  return true;
+}
+
 /* ──────────────────────────────────────────────────────────────── */
 /*  Local components                                                  */
 /* ──────────────────────────────────────────────────────────────── */
@@ -421,7 +434,9 @@ export default function HomePage() {
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      applyPressed(keyFromEvent(e));
+      const tok = keyFromEvent(e);
+      if (!isDisplayableKey(tok)) return;
+      applyPressed(tok);
     };
     const clear = () => applyPressed(null);
     window.addEventListener("keydown", onDown);
@@ -442,7 +457,9 @@ export default function HomePage() {
       (ev) => {
         const { code, phase } = ev.payload;
         if (phase === "pressed") {
-          applyPressed({ id: code, label: CODE_LABEL[code] ?? code });
+          const tok: KeyToken = { id: code, label: CODE_LABEL[code] ?? code };
+          if (!isDisplayableKey(tok)) return;
+          applyPressed(tok);
         } else {
           applyPressed(null);
         }

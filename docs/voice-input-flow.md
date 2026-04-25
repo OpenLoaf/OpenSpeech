@@ -30,6 +30,15 @@
 | Injecting | 正在把文字写入目标应用 | 悬浮条短暂闪一下对钩 + `Inserted`，200 ms 后淡出 |
 | Error | 网络错误 / API 失败 / 权限错误 | 悬浮条红底显示错误文案；**粘滞不自动淡出**，直到用户点 `×` 或发起下一次录音；整条可点击跳历史页查看详情与"重试"；历史中对应条目标记为 failed |
 
+### 悬浮条显隐策略（与主窗口焦点联动）
+
+悬浮录音条的 **逻辑可见性**（"是否在录音流程中"）与 **物理可见性**（OS 窗口实际是否 show）拆成两层：
+
+- **主窗口处于前台焦点时**，即使状态处于 Recording / Transcribing / Injecting / Error，OS 悬浮条**不显示**——Home 页的 Live 面板已经提供等价信息（状态标签、波形、实时文字、取消/确定按钮），屏幕底部再叠一个浮窗属于视觉重复。
+- **主窗口失焦后（用户切到别的应用、或最小化主窗）立即显示** OS 悬浮条；用户切回主窗口（主窗口重新获得焦点）则悬浮条物理隐藏，逻辑状态保持不变（继续录音/转写）。
+
+实现：Rust `overlay::DESIRED_VISIBLE` 跟踪逻辑可见性（`show()` 置 true、`hide()` 置 false），主窗口 `WindowEvent::Focused` 事件由 `overlay::on_main_focus_changed` 在 desired=true 时按焦点切换物理显隐。前端无须感知此策略。
+
 ## 详细业务规则
 
 ### 触发
@@ -37,6 +46,11 @@
 2. 当 OpenSpeech 主窗口处于焦点时，快捷键依然生效。
 3. 当麦克风权限未授予时，触发快捷键必须引导用户前往系统权限设置，不得静默失败。
 4. **必须存在可写入的光标焦点**才会开始录音；若系统焦点在不可编辑的区域（桌面、菜单栏、只读窗口），触发时给出轻提示"当前位置无输入框"，不进入 Recording。
+5. **后端可用性 Gate（Idle → Preparing 之前）**：必须存在至少一条可用的转写后端，否则**不进入 Recording**，主窗回前台并弹 LoginDialog。判定：
+   - `saasReady = isAuthenticated`（`dictationSource=SAAS` 默认走 OpenLoaf SaaS realtime ASR，需登录）
+   - `byoReady  = dictationSource === "BYO" && endpoint.trim() !== ""`（用户自带 REST STT 端点，不经云端）
+   - `!saasReady && !byoReady` ⇒ 拦截 → `useUIStore.openLogin()`（同时 `invoke("show_main_window_cmd")` 把主窗从托盘拉回）。
+   LoginDialog 内除两个 OAuth 入口外，提供一个"使用自己的 STT 端点"按钮，点击后关闭登录窗、`openSettings("MODEL")` 跳到设置→大模型 tab 让用户填 endpoint+API Key。Toggle 模式"再按一次停止"路径不受 Gate 影响（已经在录音中，只走停止逻辑）。
 
 ### 录音
 1. 采样率 / 声道数**跟随系统默认输入设备**（多数 Mac/Win 会是 44.1 kHz 或 48 kHz 立体声）；**不做重采样**，采集到的 f32 原样进 WAV（16-bit PCM 编码）。送到 SaaS realtime ASR 的帧在 cpal 回调里临时做 mono downmix + PCM16 量化，不影响落盘文件。
@@ -52,7 +66,7 @@
 1. **走 `openloaf-saas` Rust SDK 的 `client.realtime().connect("realtimeASR")` WebSocket 通道**，不是传统 REST 批量上传。cpal 回调边录边把 PCM16 帧喂给 session，服务端边识别边下发 Partial/Final/Credits 事件。实现见 `src-tauri/src/stt/mod.rs`；SDK 用法见 skill `.claude/skills/openloaf-saas-sdk-rust/`。
 2. 按下快捷键 → `startRecordingToFile(id)` 成功后立刻 `startSttSession()` 建连并发 start 帧（`lang=zh / sampleRate=<设备原生> / channels=<设备原生> / encoding=pcm16`），cpal 回调自此把每帧都转发到 realtime worker。
 3. 松开快捷键 → `stopRecordingAndSave` 与 `finalizeSttSession` **并行** `allSettled`：前者落 WAV，后者发 `send_finish` 等最多 `FINALIZE_WAIT_MS = 3s` 拿 Final。Final 非空 → history.status=success；空串 / 超时 / session 异常 → history.status=failed（text 占位 `（未能获取转写结果）`）。
-4. **未登录直接拒**：`stt_start` 会先检查 `OpenLoafState::authenticated_client()`；未登录则只本地录音 + 落 history 占位文字，不建 WS 连接。UI 由 Account 流程引导登录。
+4. **未登录直接拒**：`stt_start` 会先检查 `OpenLoafState::authenticated_client()`；未登录则不建 WS 连接，仅本地录音 + 落 history 占位文字。**正常路径下不会到这里**——前端 Gate（见上文"触发 §5"）已经把"既未登录又没配 BYO"的情况拦在 Idle，Rust 这层只做兜底（例如 token 过期还没刷成功就触发录音的瞬态）。
 5. **余额不足**：服务端下发 `closed{reason:"insufficient_credits"}`；前端 `openspeech://asr-closed` 监听到后立即切 Error 态，文案"余额不足，已取消本次转写"。
 6. **idle 60s / 2h max-duration** 服务端会主动关 session——hold-to-speak 持续发帧天然续活；用户真按满 2 小时时触发 `closed{reason:"max_duration"}`，视为会话结束，history 按 failed 落（Final 没拿到）。
 7. **语种**：MVP 固定 `lang=zh`；未来在 Settings "听写 → 语言" 里提供下拉覆盖 start 帧 `lang` 字段。

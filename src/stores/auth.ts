@@ -60,6 +60,7 @@ interface AuthState {
 // 模块加载时就 attach，确保在弹窗挂载前就能收到事件（防止 race）。
 let loginEventUnlisten: UnlistenFn | null = null;
 let authLostUnlisten: UnlistenFn | null = null;
+let restoredUnlisten: UnlistenFn | null = null;
 
 async function ensureLoginListener() {
   if (!loginEventUnlisten) {
@@ -101,6 +102,23 @@ async function ensureLoginListener() {
         isAuthenticated: false,
       });
     });
+  }
+
+  // 启动 bootstrap 用 keychain 里的 refresh_token 恢复成功后广播。
+  // 前端 init() 调 openloaf_is_authenticated 的时候 bootstrap 的 refresh
+  // 网络往返还没完，此事件就是用来"补一拍"的。
+  if (!restoredUnlisten) {
+    restoredUnlisten = await listen<AuthUser>(
+      "openspeech://openloaf-restored",
+      (event) => {
+        useAuthStore.setState({
+          user: event.payload,
+          isAuthenticated: true,
+          loaded: true,
+        });
+        void useAuthStore.getState().fetchProfile();
+      },
+    );
   }
 }
 
