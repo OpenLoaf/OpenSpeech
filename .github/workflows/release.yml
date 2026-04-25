@@ -58,8 +58,14 @@ jobs:
             args: '--target aarch64-apple-darwin'
             artifact: macOS-arm64
             arch-tag: aarch64
+          # Intel 也跑在 Apple Silicon runner 上交叉编译 x86_64 —— GitHub 已把 macos-13
+          # （Intel）从免费 runner 池退役，留下来的 Intel runner 走付费 Larger Runner 标签，
+          # 现状 v0.2.0/v0.2.1 的 Intel job 永远排不到队。dtolnay/rust-toolchain 里声明
+          # target，cargo 自动交叉编译；OpenSpeech 的 Rust 依赖（cpal/tauri/reqwest 等）
+          # 没有需要 brew 的 native 依赖，纯 cross OK。OpenLoaf 仓库 publish-desktop.yml
+          # 同样的处理。
           - name: macOS Intel
-            platform: macos-13
+            platform: macos-latest
             rust-target: x86_64-apple-darwin
             args: '--target x86_64-apple-darwin'
             artifact: macOS-intel
