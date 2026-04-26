@@ -237,46 +237,34 @@ export default function Layout() {
   // 后，已运行的进程内部 AVCaptureDevice / AXIsProcessTrusted / IOHIDCheckAccess
   // 都仍读到旧值（per-process 缓存），所以无法实时感知。但 macOS 撤权后会自动
   // 触发整个 App 重启——重启后 onboarding 已完成，前端不再走 StepPermissions。
-  // 这里在主窗口每次回到前台时静默 check 一次，发现"曾经 granted 的项现在不是
-  // granted"就 toast 提示用户去重新授权（参考 AltTab 的运行时轮询范式）。
-  // 不主动 reset/重启，因为 macOS 限制下唯一干净路径是用户去系统设置勾选 + 再
-  // 重启 App。提示完后用户自己决定。
+  // 这里在主窗口每次回到前台时静默 check 一次，发现任一项不是 granted 就把
+  // onboardingCompleted 重置为 false 并直接跳回 /onboarding（Step 1），让用户
+  // 在原有的权限页里完成重新授权 + 重启流程，避免 toast 漂浮但实际无路径自救。
   useEffect(() => {
     if (detectPlatform() !== "macos") return;
     if (!useSettingsStore.getState().general.onboardingCompleted) return;
 
     let cancelled = false;
-    const lastSeenGranted: Record<string, boolean> = {
-      microphone: true,
-      accessibility: true,
-      "input-monitoring": true,
-    };
+    let redirected = false;
 
     const checkAll = async () => {
+      if (redirected) return;
       try {
         const [m, a, i]: PermissionStatus[] = await Promise.all([
           checkMicrophone(),
           checkAccessibility(),
           checkInputMonitoring(),
         ]);
-        if (cancelled) return;
-        // 仅当此前观察到 granted、现在不是 granted 时才 toast——避免首次启动
-        // 还没授权时也跳出来提示。
-        const transitions: Array<[string, PermissionStatus, string]> = [
-          ["microphone", m, "麦克风"],
-          ["accessibility", a, "辅助功能"],
-          ["input-monitoring", i, "输入监控"],
-        ];
-        for (const [kind, status, label] of transitions) {
-          const wasGranted = lastSeenGranted[kind];
-          const nowGranted = status === "granted";
-          if (wasGranted && !nowGranted) {
-            toast.error(`${label}权限已撤销`, {
-              description: "请在系统设置重新授权后重启 OpenSpeech。",
-              duration: 8000,
-            });
-          }
-          lastSeenGranted[kind] = nowGranted;
+        if (cancelled || redirected) return;
+        const anyMissing =
+          m !== "granted" || a !== "granted" || i !== "granted";
+        if (anyMissing) {
+          redirected = true;
+          await useSettingsStore
+            .getState()
+            .setGeneral("onboardingCompleted", false);
+          if (cancelled) return;
+          navigate("/onboarding", { replace: true });
         }
       } catch (e) {
         console.warn("[layout] runtime permission check failed:", e);
@@ -291,7 +279,7 @@ export default function Layout() {
       cancelled = true;
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [navigate]);
 
   const handleCloseConfirm = async ({
     remember,

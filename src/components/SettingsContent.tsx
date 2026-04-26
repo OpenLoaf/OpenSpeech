@@ -554,6 +554,27 @@ function GeneralTab() {
         />
       </Row>
 
+      {/* ASR segmentation */}
+      <SectionTitle>分句模式</SectionTitle>
+      <div className="py-3">
+        <RadioBlock
+          value={general.asrSegmentMode}
+          onChange={(v) => void setGeneral("asrSegmentMode", v)}
+          options={[
+            {
+              value: "AUTO",
+              label: "自动分句",
+              hint: "服务端按停顿自动切句，录音过程中实时回填文字。",
+            },
+            {
+              value: "MANUAL",
+              label: "手动分句",
+              hint: "整段录音视为一次完整对话，松开按键后才返回转写结果。",
+            },
+          ]}
+        />
+      </div>
+
       {/* Text injection */}
       <SectionTitle>文本注入</SectionTitle>
       <div className="py-3">

@@ -224,6 +224,22 @@ const CODE_LABEL: Record<string, string> = {
   ArrowDown: "↓",
   ArrowLeft: "←",
   ArrowRight: "→",
+  // 标点物理键：W3C code 以英文命名（Comma / Period / Slash 等），
+  // 用户看到的是键帽字符，统一回显成符号，避免出现 "Comma"、"Period" 字样。
+  Backquote: "`",
+  Minus: "-",
+  Equal: "=",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backslash: "\\",
+  Semicolon: ";",
+  Quote: "'",
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  IntlBackslash: "\\",
+  IntlRo: "\\",
+  IntlYen: "¥",
 };
 
 export function formatCode(code: string): string {

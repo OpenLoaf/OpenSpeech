@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "core:event:default",
-    "core:webview:default"
+    "core:webview:default",
+    "log:default"
   ]
 }

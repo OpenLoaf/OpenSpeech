@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import { attachConsole } from "@tauri-apps/plugin-log";
 import { router } from "./router";
 import { Toaster } from "@/components/ui/sonner";
 import { LoadingScreen } from "@/components/LoadingScreen";
@@ -14,6 +16,7 @@ import { useHistoryStore } from "@/stores/history";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
+import { useUIStore } from "@/stores/ui";
 import { syncAutostart } from "@/lib/autostart";
 import "./App.css";
 
@@ -25,6 +28,13 @@ window.addEventListener("contextmenu", (e) => e.preventDefault());
 const WINDOW_LABEL = getCurrentWebviewWindow().label;
 const IS_OVERLAY = WINDOW_LABEL === "overlay";
 console.log("[boot] window label =", WINDOW_LABEL, "isOverlay =", IS_OVERLAY);
+
+// 把 Rust 端 `log::info!/warn!/error!/debug!` 转发到 webview devtools console。
+// Rust 那侧已开启 Webview target；这里再 attach 一次让前端进程接收 + 渲染。
+// fire-and-forget，失败只是没日志，不影响业务。
+attachConsole().catch((e) => {
+  console.warn("[boot] attachConsole failed:", e);
+});
 
 // 启动路由策略：boot 完成后读 settings.onboardingCompleted，false ⇒ 跳 /onboarding。
 // 用 router.navigate 而不是 replaceState：ESM import 时 createBrowserRouter 已锁定初始 location，
@@ -85,6 +95,17 @@ const bootPromise = (async () => {
 
     await useRecordingStore.getState().initListeners();
     console.log("[boot] recording listeners attached");
+
+    // 悬浮条上的 action 按钮（"登录" / "网络设置"）反向通知主窗执行——
+    // 这是录音 gate 失败后唯一会拉主程序的入口，需要用户主动点击。
+    void listen<string>("openspeech://overlay-toast-action", (evt) => {
+      const key = String(evt.payload ?? "");
+      const ui = useUIStore.getState();
+      if (key === "open_login") ui.openLogin();
+      else if (key === "open_no_internet") ui.openNoInternet();
+      else if (key === "open_settings_byo") ui.openSettings("GENERAL");
+      else console.warn("[boot] unknown overlay-toast-action:", key);
+    });
 
     await useRecordingStore.getState().syncBindings(
       useHotkeysStore.getState().bindings,

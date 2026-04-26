@@ -9,6 +9,22 @@ import { useUIStore } from "@/stores/ui";
 // startLogin → 拉起浏览器 → 用户授权 → Rust emit success → isAuthenticated=true
 // → 这里 effect 自动跳下一步。失败显示错误并允许重试。
 
+// 与 LoginDialog 同款：raw 错误清洗成短中文。
+function friendlyLoginError(raw: string | null): string {
+  if (!raw) return "登录失败，请重试";
+  const m = raw.toLowerCase();
+  if (m.includes("connection reset")) return "登录服务器连接被重置，请重试";
+  if (m.includes("timed out") || m.includes("timeout")) return "登录超时，请重试";
+  if (
+    m.includes("connection refused") ||
+    m.includes("dns") ||
+    m.includes("error sending request") ||
+    m.includes("network error")
+  )
+    return "无法连接登录服务器，请检查网络后重试";
+  return "登录失败，请重试";
+}
+
 function GoogleIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden>
@@ -109,7 +125,7 @@ export function StepLogin({
     if (isAuthenticated) return "登录成功，正在进入下一步…";
     if (loginStatus === "opening") return "正在打开浏览器…";
     if (loginStatus === "polling") return "等待在浏览器完成授权…";
-    if (loginStatus === "error") return loginError ?? "登录失败，请重试";
+    if (loginStatus === "error") return friendlyLoginError(loginError);
     return null;
   })();
   const statusTone =

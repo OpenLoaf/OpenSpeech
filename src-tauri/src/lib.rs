@@ -28,6 +28,7 @@ mod overlay;
 mod permissions;
 mod secrets;
 mod stt;
+mod transcribe;
 
 // 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
 const CLOSE_REQUESTED_EVENT: &str = "openspeech://close-requested";
@@ -292,10 +293,28 @@ fn disable_macos_fullscreen(window: &tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
-                .level(tauri_plugin_log::log::LevelFilter::Info)
+                // Debug 整体放开 + 把噪声过大的网络栈拽回 Info；release 维持 Info。
+                .level(if cfg!(debug_assertions) {
+                    tauri_plugin_log::log::LevelFilter::Debug
+                } else {
+                    tauri_plugin_log::log::LevelFilter::Info
+                })
+                .level_for("tungstenite", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("tokio_tungstenite", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("hyper", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("reqwest", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("rustls", tauri_plugin_log::log::LevelFilter::Info)
+                // 走 webview 的 console.{log/info/warn/error}，前端 devtools 即可看 Rust 日志。
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Webview,
+                ))
+                // 同时保留终端输出（dev 启动时）。
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                ))
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -314,12 +333,17 @@ pub fn run() {
                 })
                 .build(),
         )
-        .plugin(tauri_plugin_opener::init())
-        // macOS 权限 plugin：暴露 request_microphone_permission /
-        // request_accessibility_permission 等命令；非 macOS 平台上 plugin 内部
-        // no-op。前端通过 tauri-plugin-macos-permissions-api 的 npm 绑定调用。
-        // 见 permissions/ 模块说明。
-        .plugin(tauri_plugin_macos_permissions::init())
+        .plugin(tauri_plugin_opener::init());
+
+    // macOS 权限 plugin：暴露 request_microphone_permission /
+    // request_accessibility_permission 等命令。crate 本身在 Cargo.toml 是
+    // `[target.'cfg(target_os = "macos")'.dependencies]`，Linux / Windows
+    // 编译时不存在 → 这里必须用 cfg shadow 重绑，否则 Linux ARM64 等平台报
+    // `unresolved module tauri_plugin_macos_permissions`（v0.2.5/0.2.6 CI 即栽于此）。
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_macos_permissions::init());
+
+    builder
         .manage(hotkey::SharedHotkeyState::default())
         .manage::<openloaf::SharedOpenLoaf>(std::sync::Arc::new(openloaf::OpenLoafState::new()))
         .setup(|app| {
@@ -419,10 +443,10 @@ pub fn run() {
             // ---- 系统托盘 ---------------------------------------------------
             // 菜单项详见 build_tray_menu。切换麦克风 / 插拔设备时通过
             // tray_refresh invoke 或 on_menu_event 末尾的重建触发刷新。
-            let icon = app
-                .default_window_icon()
-                .expect("missing default window icon")
-                .clone();
+            // 托盘图标专用 PNG，独立于 bundle / 窗口图标，便于单独换样。
+            let icon = tauri::image::Image::from_bytes(include_bytes!(
+                "../icons/tray-icon.png"
+            ))?;
             let initial_menu = build_tray_menu(&app.handle())?;
 
             TrayIconBuilder::with_id("main")
@@ -525,6 +549,7 @@ pub fn run() {
             hotkey::hotkey_init_listener,
             overlay::overlay_show,
             overlay::overlay_hide,
+            overlay::overlay_set_height,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,
@@ -547,6 +572,8 @@ pub fn run() {
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,
+            transcribe::transcribe_recording_file,
+            transcribe::transcribe_long_audio_url,
             inject::inject_paste,
             permissions::permission_check_microphone,
             permissions::permission_check_accessibility,

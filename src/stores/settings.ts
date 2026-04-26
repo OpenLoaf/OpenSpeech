@@ -16,6 +16,10 @@ export type DictationSource = "SAAS" | "BYO";
 //   REALTIME — 实时听写，ASR partial 直接落文本（所见即所得，边说边出）
 //   AI       — AI 听写（默认），松开后取 final 文本，再经 LLM 自动润色/总结后一次性注入
 export type DictationMode = "REALTIME" | "AI";
+// 分句模式（V4 OL-TL-RT-002 的 vadMode 透传，UI 用人类语义）：
+//   AUTO   — 自动分句（默认 / 服务端 VAD）：按停顿自动切句，UI 实时回填 partial
+//   MANUAL — 手动分句：整段录音视为一句话，松开按键后才出转写
+export type AsrSegmentMode = "AUTO" | "MANUAL";
 
 export interface GeneralSettings {
   interfaceLang: string;
@@ -53,6 +57,10 @@ export interface GeneralSettings {
   // 首次启动引导是否已完成。false ⇒ 启动时 main.tsx 会重定向到 /onboarding。
   // 设置 → 关于 里可重新触发引导（清掉这个标记）。
   onboardingCompleted: boolean;
+  // V4 OL-TL-RT-002 的分句模式。AUTO = 服务端按停顿切句（多段 Final 客户端
+  // 按 sentenceId 累积）；MANUAL = 整段视为一句话，松开按键后服务端才返回唯一
+  // 一段 Final（中途没有 partial 回填）。
+  asrSegmentMode: AsrSegmentMode;
 }
 
 export interface PersonalizationSettings {
@@ -88,6 +96,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   autoUpdate: true,
   closeBehavior: "ASK",
   onboardingCompleted: false,
+  asrSegmentMode: "AUTO",
 };
 
 const DEFAULT_PERSONALIZATION: PersonalizationSettings = {

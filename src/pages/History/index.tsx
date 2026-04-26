@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Copy,
   Download,
+  Loader2,
   Minus,
   MoreHorizontal,
   Pause,
@@ -26,6 +27,7 @@ import {
 import { SearchBox } from "@/components/SearchBox";
 import {
   useHistoryStore,
+  NotAuthenticatedError,
   type HistoryItem,
   type HistoryStatus,
   type HistoryType,
@@ -292,9 +294,19 @@ function TypeChip({ type }: { type: HistoryType }) {
 function RowActions({
   status,
   text,
+  audioPath,
+  durationMs,
+  retrying,
+  onRetry,
+  onDelete,
 }: {
   status: HistoryStatus;
   text: string;
+  audioPath?: string | null;
+  durationMs: number;
+  retrying: boolean;
+  onRetry: () => void;
+  onDelete: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const isFailed = status === "failed";
@@ -316,22 +328,45 @@ function RowActions({
     }
   };
 
+  // 长录音（>5min）暂走不通——OL-TL-004 只接受公网 URL。在 UI 层提前禁用按钮，
+  // 给出 title 提示，避免用户点击后才看到 toast。
+  const tooLong = durationMs > 5 * 60 * 1000;
+  const canRetry = !!audioPath && !tooLong && !retrying;
+  const retryTitle = !audioPath
+    ? "无可用音频，无法重试"
+    : tooLong
+      ? "暂不支持超过 5 分钟的录音重试"
+      : retrying
+        ? "重试中…"
+        : "重试转录";
+
   // 失败态：只有「(hover) 删除 + 重试常显」，由外层 HistoryRow 在更右侧再放一个播放按钮。
   if (isFailed) {
     return (
       <div className="flex items-center gap-1">
         <div className="pointer-events-none flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-          <button type="button" className={dangerBtn} title="删除">
+          <button
+            type="button"
+            className={dangerBtn}
+            title="删除"
+            onClick={onDelete}
+          >
             <Trash2 className="size-3.5" />
           </button>
         </div>
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 border border-te-gray/40 bg-te-surface px-2.5 py-1 font-mono text-[11px] uppercase tracking-widest text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
-          title="重试转录"
+          disabled={!canRetry}
+          onClick={onRetry}
+          className="inline-flex items-center gap-1.5 border border-te-gray/40 bg-te-surface px-2.5 py-1 font-mono text-[11px] uppercase tracking-widest text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-te-gray/40 disabled:hover:text-te-fg"
+          title={retryTitle}
         >
-          <RotateCcw className="size-3" strokeWidth={2} />
-          <span>重试</span>
+          {retrying ? (
+            <Loader2 className="size-3 animate-spin" strokeWidth={2} />
+          ) : (
+            <RotateCcw className="size-3" strokeWidth={2} />
+          )}
+          <span>{retrying ? "重试中" : "重试"}</span>
         </button>
       </div>
     );
@@ -354,7 +389,12 @@ function RowActions({
       <button type="button" className={baseBtn} title="重新注入">
         <RotateCcw className="size-3.5" />
       </button>
-      <button type="button" className={dangerBtn} title="删除">
+      <button
+        type="button"
+        className={dangerBtn}
+        title="删除"
+        onClick={onDelete}
+      >
         <Trash2 className="size-3.5" />
       </button>
     </div>
@@ -363,9 +403,34 @@ function RowActions({
 
 function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
   const isFailed = item.status === "failed";
+  const retry = useHistoryStore((s) => s.retry);
+  const remove = useHistoryStore((s) => s.remove);
+  const retrying = useHistoryStore((s) => s.retryingIds.has(item.id));
   const displayText = isFailed
     ? "您的转录被中断。但 OpenSpeech 仍可以为您重试。"
     : item.text;
+
+  const handleRetry = async () => {
+    try {
+      await retry(item.id);
+      toast.success("重试成功");
+    } catch (e) {
+      // 未登录拦截已经弹了登录框，不再叠 toast 干扰。
+      if (e instanceof NotAuthenticatedError) return;
+      console.error("[history] retry failed:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error("重试失败", { description: msg });
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await remove(item.id);
+    } catch (e) {
+      console.error("[history] delete failed:", e);
+      toast.error("删除失败");
+    }
+  };
 
   return (
     <motion.div
@@ -422,7 +487,15 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
 
       {/* 状态 + 操作（从右到左：播放、重试 / 操作组、(hover) 删除） */}
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
-        <RowActions status={item.status} text={item.text} />
+        <RowActions
+          status={item.status}
+          text={item.text}
+          audioPath={item.audio_path}
+          durationMs={item.duration_ms}
+          retrying={retrying}
+          onRetry={() => void handleRetry()}
+          onDelete={() => void handleDelete()}
+        />
         {item.audio_path ? (
           <PlayButton id={item.id} audioPath={item.audio_path} />
         ) : !isFailed ? (

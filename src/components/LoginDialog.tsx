@@ -1,5 +1,5 @@
-import { useEffect, type ReactElement } from "react";
-import { Loader2, ServerCog } from "lucide-react";
+import { useEffect, useState, type ReactElement } from "react";
+import { ChevronDown, Loader2, RotateCcw, ServerCog } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -64,16 +64,43 @@ const PROVIDERS: Array<{
   { id: "wechat", label: "使用微信登录", Icon: WechatMark },
 ];
 
+/** 把后端 / 网络层的 raw 错误清洗成短中文提示，友好且不吓人。
+ *  原始消息仍然在"详情"折叠区里展示，方便排查时取证。 */
+function friendlyLoginError(raw: string | null): string {
+  if (!raw) return "登录失败，请重试";
+  const m = raw.toLowerCase();
+  if (m.includes("connection reset")) return "登录服务器连接被重置，请稍后重试";
+  if (m.includes("timed out") || m.includes("timeout")) return "登录超时，请重试";
+  if (
+    m.includes("connection refused") ||
+    m.includes("dns") ||
+    m.includes("error sending request") ||
+    m.includes("network error")
+  )
+    return "无法连接登录服务器，请检查网络后重试";
+  if (m.includes("not authenticated")) return "未登录";
+  return "登录失败，请重试";
+}
+
 export function LoginDialog({ open, onOpenChange }: Props) {
   const {
     loginStatus,
     loginError,
+    lastProvider,
     isAuthenticated,
     startLogin,
+    retryLogin,
     cancelLogin,
   } = useAuthStore();
 
   const isBusy = loginStatus === "opening" || loginStatus === "polling";
+  const isError = loginStatus === "error";
+  const [showDetails, setShowDetails] = useState(false);
+
+  // 关闭弹窗时收起详情，避免下次打开还是展开状态。
+  useEffect(() => {
+    if (!open) setShowDetails(false);
+  }, [open]);
 
   // 打开时重置错误；关闭时取消进行中的登录。
   useEffect(() => {
@@ -94,7 +121,7 @@ export function LoginDialog({ open, onOpenChange }: Props) {
     if (isAuthenticated) return "登录成功";
     if (loginStatus === "opening") return "正在打开浏览器...";
     if (loginStatus === "polling") return "等待在浏览器完成授权";
-    if (loginStatus === "error") return loginError ?? "登录失败";
+    if (isError) return friendlyLoginError(loginError);
     return "选择登录方式继续";
   })();
 
@@ -159,20 +186,24 @@ export function LoginDialog({ open, onOpenChange }: Props) {
               <ServerCog className="size-4" />
               使用自己的 STT 端点
             </button>
-            <p className="font-sans text-xs leading-relaxed text-te-light-gray">
-              不想登录 OpenLoaf？填写你自己的 STT REST 端点，音频从本机直发，不经云端。
-            </p>
+            {!isBusy ? (
+              <p className="font-sans text-xs leading-relaxed text-te-light-gray">
+                不想登录 OpenLoaf？填写你自己的 STT REST 端点，音频从本机直发，不经云端。
+              </p>
+            ) : null}
           </div>
 
           {/* 状态/说明区：空闲时展示说明文字；登录中/出错/成功时替换为状态行。
               整组（黄点 + 文字 + spinner）作为一个 inline 单元水平居中，
-              方块和 loader 直接贴在文字左右两侧。 */}
-          {isBusy || loginStatus === "error" || isAuthenticated ? (
+              方块和 loader 直接贴在文字左右两侧。
+              错误状态下文案改用 `friendlyLoginError` 清洗后的中文短句，
+              raw 信息收进下面的"详情"折叠区，避免大段英文 stack 吓到用户。 */}
+          {isBusy || isError || isAuthenticated ? (
             <div className="flex items-center justify-center gap-2 pt-1">
               <span
                 className={cn(
                   "size-1.5 shrink-0",
-                  loginStatus === "error"
+                  isError
                     ? "bg-red-500/70"
                     : isAuthenticated
                       ? "bg-green-500/80"
@@ -182,15 +213,61 @@ export function LoginDialog({ open, onOpenChange }: Props) {
               <span
                 className={cn(
                   "font-mono text-[11px] uppercase tracking-[0.2em]",
-                  loginStatus === "error"
-                    ? "text-red-500/90"
-                    : "text-te-light-gray",
+                  isError ? "text-red-500/90" : "text-te-light-gray",
                 )}
               >
                 {subtitle}
               </span>
               {isBusy ? (
                 <Loader2 className="size-3.5 shrink-0 animate-spin text-te-light-gray" />
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* 错误恢复区：突出"重试"按钮（沿用上次 provider）+ 关闭 + 折叠详情。
+              没有 lastProvider（理论上 error 状态下一定有，只是兜底）时不渲染重试。 */}
+          {isError ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-center gap-2">
+                {lastProvider ? (
+                  <button
+                    type="button"
+                    onClick={() => void retryLogin()}
+                    className="inline-flex items-center gap-2 border border-te-accent bg-te-accent/10 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-te-accent transition-colors hover:bg-te-accent hover:text-te-bg"
+                  >
+                    <RotateCcw className="size-3.5" />
+                    重试
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => onOpenChange(false)}
+                  className="inline-flex items-center gap-2 border border-te-gray px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-fg hover:text-te-fg"
+                >
+                  关闭
+                </button>
+              </div>
+              {loginError ? (
+                <div className="flex flex-col items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowDetails((v) => !v)}
+                    className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray transition-colors hover:text-te-fg"
+                  >
+                    <ChevronDown
+                      className={cn(
+                        "size-3 transition-transform",
+                        showDetails ? "rotate-180" : "rotate-0",
+                      )}
+                    />
+                    {showDetails ? "收起详情" : "查看详情"}
+                  </button>
+                  {showDetails ? (
+                    <pre className="max-h-32 w-full overflow-auto whitespace-pre-wrap break-all border border-te-gray/40 bg-te-surface/40 px-3 py-2 font-mono text-[10px] leading-relaxed text-te-light-gray">
+                      {loginError}
+                    </pre>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           ) : null}

@@ -141,26 +141,24 @@ export default function HomePage() {
             transition={{ duration: 0.5 }}
             className="flex min-h-0 flex-[4_1_0%] flex-col justify-between"
           >
-            <div className="flex items-center gap-4 md:gap-6">
-              <img
-                src="/logo-write.png"
-                alt=""
-                aria-hidden
-                draggable={false}
-                className="size-12 shrink-0 select-none md:size-16 lg:size-20"
-              />
-              <h1 className="font-mono text-[clamp(1.75rem,5.5vw,4.5rem)] font-bold leading-[0.95] tracking-tighter text-te-fg">
-                说出来。
-                <br />
-                <span className="text-te-accent">就成文。</span>
-              </h1>
-            </div>
+            <h1 className="font-mono text-[clamp(1.75rem,5.5vw,4.5rem)] font-bold leading-[0.95] tracking-tighter text-te-fg">
+              说出来。
+              <br />
+              <span className="text-te-accent">就成文。</span>
+            </h1>
 
             <p className="max-w-xl font-sans text-sm leading-relaxed text-te-light-gray md:text-base">
               按一下快捷键，开口说话，再按一下结束——文字即刻出现在任意应用中。不绑定编辑器，录音只留本机，无任何遥测。
             </p>
 
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+              <img
+                src="/logo-write.png"
+                alt=""
+                aria-hidden
+                draggable={false}
+                className="size-5 shrink-0 select-none"
+              />
               <span>// PUSH-TO-TALK 按键听写</span>
               <span>// 模型自选 SAAS · BYO</span>
               <span>// 跨平台 WIN · MAC · LINUX</span>

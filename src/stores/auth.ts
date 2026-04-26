@@ -47,9 +47,13 @@ interface AuthState {
   loginError: string | null;
   /** 当前进行中的登录 state（后端用来匹配 callback） */
   currentLoginState: string | null;
+  /** 上次发起登录用的 provider，error 状态下重试按钮用它。 */
+  lastProvider: LoginProvider | null;
 
   init: () => Promise<void>;
   startLogin: (provider: LoginProvider) => Promise<void>;
+  /** 沿用 lastProvider 再发起一次登录；没有 lastProvider 时静默 no-op。 */
+  retryLogin: () => Promise<void>;
   cancelLogin: () => Promise<void>;
   logout: () => Promise<void>;
   /** 主动拉一次 profile（登录事件 / 恢复会话后自动触发；其他地方也可手动用） */
@@ -130,6 +134,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   loginStatus: "idle",
   loginError: null,
   currentLoginState: null,
+  lastProvider: null,
 
   init: async () => {
     await ensureLoginListener();
@@ -160,7 +165,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (loginStatus === "opening" || loginStatus === "polling") return;
 
     await ensureLoginListener();
-    set({ loginStatus: "opening", loginError: null });
+    set({ loginStatus: "opening", loginError: null, lastProvider: provider });
 
     let result: StartLoginResult;
     try {
@@ -195,6 +200,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loginStatus: "polling" });
     // 后续由 listen() 里的 success/error 回调驱动状态；
     // 这里不做轮询 —— Rust 端直接 emit 结果事件，效率比轮询高。
+  },
+
+  retryLogin: async () => {
+    const { lastProvider } = get();
+    if (!lastProvider) return;
+    await get().startLogin(lastProvider);
   },
 
   cancelLogin: async () => {

@@ -15,8 +15,15 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-export async function startSttSession(lang?: string): Promise<void> {
-  await invoke("stt_start", { lang });
+// V4 OL-TL-RT-002 的 vadMode 透传：
+//   "auto"   → ServerVad（服务端按停顿切句，多段 Final）
+//   "manual" → None（整段一句话，松手才出 Final）
+export type SttMode = "auto" | "manual";
+
+export async function startSttSession(
+  options: { lang?: string; mode?: SttMode } = {},
+): Promise<void> {
+  await invoke("stt_start", { lang: options.lang, mode: options.mode });
 }
 
 export async function finalizeSttSession(): Promise<string> {
@@ -29,4 +36,37 @@ export async function cancelSttSession(): Promise<void> {
   } catch (e) {
     console.warn("[stt] cancel failed:", e);
   }
+}
+
+// 文件转写：把已落盘的 WAV（history.audio_path / "recordings/<id>.wav"）通过
+// V4 工具接口重新转成文字。Rust 端按 duration_ms 自动分流：
+//   ≤ 5 分钟 → OL-TL-003 asrShort（base64 同步）
+//   > 5 分钟 → 暂不支持（OL-TL-004 需要公网 URL，本地录音没法直传）
+export interface TranscribeFileResult {
+  text: string;
+  variant: "asrShort" | "asrLong";
+  creditsConsumed: number;
+}
+
+export async function transcribeRecordingFile(args: {
+  audioPath: string;
+  durationMs: number;
+  lang?: string;
+}): Promise<TranscribeFileResult> {
+  return await invoke<TranscribeFileResult>("transcribe_recording_file", {
+    audioPath: args.audioPath,
+    durationMs: args.durationMs,
+    lang: args.lang,
+  });
+}
+
+// 长音频公网 URL 转写。本地录音重试不会走这里——保留给后续"上传后转写"等场景。
+export async function transcribeLongAudioUrl(args: {
+  url: string;
+  lang?: string;
+}): Promise<TranscribeFileResult> {
+  return await invoke<TranscribeFileResult>("transcribe_long_audio_url", {
+    url: args.url,
+    lang: args.lang,
+  });
 }

@@ -8,7 +8,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{
-    AppHandle, LogicalPosition, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl,
+    WebviewWindowBuilder,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
@@ -62,6 +63,15 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 fn position_to_bottom_center<R: Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> tauri::Result<()> {
+    position_to_bottom_center_with_height(window, HEIGHT)
+}
+
+// 把 overlay 窗口移动到屏幕底部中央，保持底部边距 BOTTOM_MARGIN 不变；
+// height 参数允许窗口纵向变高（错误条出现时），上沿向上扩展，胶囊本体位置不动。
+fn position_to_bottom_center_with_height<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    height: f64,
+) -> tauri::Result<()> {
     let Some(monitor) = window.primary_monitor()? else {
         return Ok(());
     };
@@ -74,9 +84,9 @@ fn position_to_bottom_center<R: Runtime>(
     let origin_x = origin.x as f64 / scale;
     let origin_y = origin.y as f64 / scale;
     let x = origin_x + (logical_w - WIDTH) / 2.0;
-    let y = origin_y + logical_h - HEIGHT - BOTTOM_MARGIN;
+    let y = origin_y + logical_h - height - BOTTOM_MARGIN;
     window.set_position(LogicalPosition::new(x, y))?;
-    eprintln!("[overlay] positioned at logical ({x:.1}, {y:.1})");
+    eprintln!("[overlay] positioned at logical ({x:.1}, {y:.1}) h={height:.1}");
     Ok(())
 }
 
@@ -147,5 +157,22 @@ pub fn overlay_show<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 #[tauri::command]
 pub fn overlay_hide<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     hide(&app).map_err(|e| e.to_string())
+}
+
+// 错误条出现/消失时由前端调一次：传入新的窗口高度（默认 36；展开时 ~96）。
+// 重新设置 inner_size 后立即重新定位，使底部胶囊保持原位，错误条向上扩展。
+#[tauri::command]
+pub fn overlay_set_height<R: Runtime>(
+    app: AppHandle<R>,
+    height: f64,
+) -> Result<(), String> {
+    let Some(w) = app.get_webview_window(OVERLAY_LABEL) else {
+        return Ok(());
+    };
+    let h = height.clamp(HEIGHT, 240.0);
+    w.set_size(LogicalSize::new(WIDTH, h))
+        .map_err(|e| e.to_string())?;
+    position_to_bottom_center_with_height(&w, h).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
