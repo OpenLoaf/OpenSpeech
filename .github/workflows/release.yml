@@ -351,9 +351,8 @@ jobs:
           echo "--- latest.json ---"
           cat ../latest.json
 
-      # Release 正文 = changelog（用户写）+ 下载对照表（自动生成）+ 自动更新一句话。
+      # Release 正文 = changelog 原文，不再追加下载表 / 自动更新说明等内容。
       # changelog SSoT = `docs/changelogs/{version}/zh.md`（缺失则回退 en.md，再缺回退占位文）。
-      # 文件由开发者在发版前手动编辑（见 .claude/skills/openspeech-release/SKILL.md）。
       - name: Build release notes
         shell: bash
         env:
@@ -362,43 +361,12 @@ jobs:
           set -euo pipefail
           version="${TAG#v}"
           changelog_dir="docs/changelogs/${version}"
-          if   [[ -f "${changelog_dir}/zh.md" ]]; then changelog="$(cat "${changelog_dir}/zh.md")"
-          elif [[ -f "${changelog_dir}/en.md" ]]; then changelog="$(cat "${changelog_dir}/en.md")"
+          if   [[ -f "${changelog_dir}/zh.md" ]]; then cp "${changelog_dir}/zh.md" release_notes.md
+          elif [[ -f "${changelog_dir}/en.md" ]]; then cp "${changelog_dir}/en.md" release_notes.md
           else
-            changelog="本版本暂未提供变更说明，详细改动请查看 [commit 历史](https://github.com/${GITHUB_REPOSITORY}/commits/${TAG})。"
+            echo "本版本暂未提供变更说明，详细改动请查看 [commit 历史](https://github.com/${GITHUB_REPOSITORY}/commits/${TAG})。" > release_notes.md
             echo "::warning::缺失 ${changelog_dir}/zh.md 与 en.md，使用占位文案"
           fi
-
-          {
-            echo "${changelog}"
-            echo ""
-            echo "---"
-            echo ""
-            echo "## 📥 下载"
-            echo ""
-            echo "| 系统 | 推荐安装包 |"
-            echo "| --- | --- |"
-            echo "| macOS（Apple Silicon · M1/M2/M3/M4） | \`OpenSpeech-${version}-macOS-arm64.dmg\` |"
-            echo "| macOS（Intel） | \`OpenSpeech-${version}-macOS-intel.dmg\` |"
-            echo "| Windows 10/11（x64） | \`OpenSpeech-${version}-Windows-x86_64-setup.exe\` |"
-            echo "| Windows 11（ARM64） | \`OpenSpeech-${version}-Windows-arm64-setup.exe\` |"
-            echo "| Linux（AppImage · x64） | \`OpenSpeech-${version}-Linux-x86_64.AppImage\` |"
-            echo "| Linux（AppImage · ARM64） | \`OpenSpeech-${version}-Linux-arm64.AppImage\` |"
-            echo "| Debian / Ubuntu（x64） | \`OpenSpeech-${version}-Linux-x86_64.deb\` |"
-            echo "| Debian / Ubuntu（ARM64） | \`OpenSpeech-${version}-Linux-arm64.deb\` |"
-            echo "| Fedora / RHEL（x64） | \`OpenSpeech-${version}-Linux-x86_64.rpm\` |"
-            echo ""
-            echo "## 🔄 自动更新"
-            echo ""
-            echo "已安装 OpenSpeech 的用户无需手动下载——应用启动时会自动检测并提示升级，"
-            echo "也可以从右上角托盘菜单「检查更新」手动触发。每个安装包都经过 minisign 签名，"
-            echo "客户端会校验签名后再替换，避免中间人篡改。"
-            echo ""
-            echo "## 🛠️ 给开发者"
-            echo ""
-            echo "Updater 索引 \`latest.json\` 与同名 \`.sig\` / \`.app.tar.gz\` / \`.nsis.zip\` /"
-            echo "\`.AppImage.tar.gz\` 由 Tauri 客户端自动消费，手动下载请直接选上方表格里的安装包。"
-          } > release_notes.md
 
           echo "--- release_notes.md ---"
           cat release_notes.md
