@@ -7,24 +7,29 @@
 //   3. 前端 openUrl(loginUrl) 打开系统浏览器
 //   4. 用户完成 OAuth → SaaS 302 到 http://127.0.0.1:<port>/auth/callback?code=...&returnTo=openloaf-login:<state>
 //   5. callback.rs 拿到 code + state → 调用本模块的 handle_login_callback
-//   6. handle_login_callback：exchange token → 写 Keychain → emit 事件 openspeech://openloaf-login
+//   6. handle_login_callback：exchange token（SDK 自动 persist 到注入的 KeyringAuthStorage）→ emit 事件
 //   7. 前端通过 listen(event) 得到最终结果
 //
-// refresh_token 存系统 Keychain；access_token 在 SaaSClient 内部。
+// 持久化全部走 SDK 0.3.2 的 `AuthStorage` 抽象（见 `storage.rs`），keychain 命名采用
+// SDK 0.3.2 推荐的 service `"ai.openloaf.saas"` / account `"default"` —— 跟 OpenLoaf 自家
+// 其他桌面 App 共享同一空间，启动时若已有 family_token 直接 SSO。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use keyring::Entry;
 use openloaf_saas::{
-    AuthClientInfo, AuthSession, AuthUser, OAuthStartOptions, SaaSClient, SaaSClientConfig,
+    AuthClientInfo, AuthStorage, AuthUser, OAuthStartOptions, SaaSClient, SaaSClientConfig,
     SaaSError, SaaSResult, UserMembershipLevel, UserSelf,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 mod callback;
+mod dev_session;
+mod storage;
+use dev_session::{clear_dev_session, dump_dev_session};
+use storage::KeyringAuthStorage;
 
 // OpenLoaf SaaS REST 基址。构建期常量，按 build profile 分岔：
 //   - debug（`cargo run` / `cargo build`）  → localhost:5180 本地开发服务
@@ -62,10 +67,6 @@ const LOGIN_EVENT: &str = "openspeech://openloaf-login";
 const RESTORED_EVENT: &str = "openspeech://openloaf-restored";
 /// 自动 refresh 彻底失败（refresh token 也无效）时广播给前端，让 UI 切回未登录态。
 const AUTH_LOST_EVENT: &str = "openspeech://openloaf-auth-lost";
-
-// Keychain service 与 secrets 模块保持一致，按 bundle identifier 归档。
-const KEYCHAIN_SERVICE: &str = "com.openspeech.app";
-const REFRESH_TOKEN_KEY: &str = "openloaf_refresh_token";
 
 /// 对前端暴露的用户视图；与 SDK 的 AuthUser 一一对应，但 camelCase 输出。
 #[derive(Debug, Clone, Serialize)]
@@ -114,6 +115,9 @@ struct PendingLogin {
 
 pub struct OpenLoafState {
     client: SaaSClient,
+    /// SDK 内部对同一个 `Arc<dyn AuthStorage>` 也持有一份 —— 这里多保留一个 owned 句柄
+    /// 是为了在不走 SDK auth 路径时（例如 401 主动清场 / 一次性诊断）也能直接 `clear()`。
+    storage: Arc<KeyringAuthStorage>,
     user: Mutex<Option<PublicUser>>,
     pending: Mutex<HashMap<String, PendingLogin>>,
     callback_port: OnceLock<u16>,
@@ -125,13 +129,16 @@ pub type SharedOpenLoaf = Arc<OpenLoafState>;
 
 impl OpenLoafState {
     pub fn new() -> Self {
+        let storage = KeyringAuthStorage::new();
         let client = SaaSClient::new(SaaSClientConfig {
             base_url: DEFAULT_BASE_URL.into(),
             locale: Some("zh-CN".into()),
+            auth_storage: Some(storage.clone()),
             ..Default::default()
         });
         Self {
             client,
+            storage,
             user: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             callback_port: OnceLock::new(),
@@ -177,8 +184,11 @@ impl OpenLoafState {
     /// 在 Mutex 内尝试刷新 access token。
     /// - 进入 Mutex 前先记下当前 token，入 Mutex 后再读一次：如果已变化，说明别的任务
     ///   刚刚已经 refresh 成功了，本次直接 true 返回，避免重复请求；
-    /// - 否则读 Keychain 里的 refresh_token 发 refresh；成功 → `apply_session` → true；
-    /// - Keychain 无 refresh_token 或 refresh 服务端拒绝 → false（由调用方负责清会话）。
+    /// - 否则调 SDK `auth.bootstrap` —— SDK 内部从注入的 storage 读 family/refresh
+    ///   token，挑首选路径调 `/auth/family/exchange` 或 `/auth/refresh`，成功就自动
+    ///   把新 access_token 写进 client + 把新 session persist 回 storage。
+    /// - SDK 明确判失效（在 bootstrap 内部接住）→ storage 已被 SDK 清，返回 false
+    ///   由调用方负责清场（emit auth-lost）。
     async fn ensure_fresh_token(&self) -> bool {
         let stale = self.client.access_token();
         let _guard = self.refresh_lock.lock().await;
@@ -189,20 +199,28 @@ impl OpenLoafState {
             return true;
         }
 
-        let Some(rt) = load_refresh_token() else {
-            return false;
-        };
         let client = self.client.clone();
         let result = tokio::task::spawn_blocking(move || {
-            client.auth().refresh(&rt, Some(&client_info()))
+            client.auth().bootstrap(Some(&client_info()))
         })
         .await;
 
         match result {
-            Ok(Ok(session)) => {
-                apply_session(self, session);
-                log::info!("openloaf: access token refreshed");
+            Ok(Ok(Some(restored))) => {
+                // SDK 已写好 access_token + storage；这里只补 user 缓存 + dev_session dump。
+                let user: PublicUser = restored.user.into();
+                self.set_user(Some(user));
+                dump_dev_session(&restored.access_token, &restored.refresh_token);
+                log::info!(
+                    "openloaf: access token refreshed via {:?}, jwt {}",
+                    restored.via,
+                    summarize_jwt_claims(&restored.access_token)
+                );
                 true
+            }
+            Ok(Ok(None)) => {
+                log::warn!("openloaf: refresh aborted — storage empty or token rejected");
+                false
             }
             Ok(Err(err)) => {
                 log::warn!("openloaf: auto-refresh failed: {err}");
@@ -213,24 +231,6 @@ impl OpenLoafState {
                 false
             }
         }
-    }
-}
-
-fn keychain() -> Result<Entry, String> {
-    Entry::new(KEYCHAIN_SERVICE, REFRESH_TOKEN_KEY).map_err(|e| e.to_string())
-}
-
-fn load_refresh_token() -> Option<String> {
-    keychain().ok()?.get_password().ok()
-}
-
-fn save_refresh_token(token: &str) -> Result<(), String> {
-    keychain()?.set_password(token).map_err(|e| e.to_string())
-}
-
-fn clear_refresh_token() {
-    if let Ok(e) = keychain() {
-        let _ = e.delete_credential();
     }
 }
 
@@ -248,96 +248,85 @@ fn saas_err_to_string(e: SaaSError) -> String {
     e.to_string()
 }
 
-/// 把 session 应用到 client + 内存 + Keychain。
-fn apply_session(state: &OpenLoafState, session: AuthSession) -> PublicUser {
-    state
-        .client
-        .set_access_token(Some(session.access_token.clone()));
-    if let Err(err) = save_refresh_token(&session.refresh_token) {
-        log::warn!("openloaf: save refresh token failed: {err}");
-    }
-    dump_dev_session(&session.access_token, &session.refresh_token);
-    let user: PublicUser = session.user.into();
-    state.set_user(Some(user.clone()));
-    user
+/// 登录 / refresh 成功后的本地补偿：SDK 已经把 access_token 设进 client、把 StoredAuth 写进
+/// keychain；这里只补 SDK 不管的两件事——前端用的 user 缓存 + debug 旁路 dump。
+///
+/// 入参用 `&AuthSession` / `&BootstrapResult` 都不方便（两者字段不一样），干脆解构成裸字段。
+fn apply_session_local(
+    state: &OpenLoafState,
+    access_token: &str,
+    refresh_token: &str,
+    user: AuthUser,
+) -> PublicUser {
+    dump_dev_session(access_token, refresh_token);
+    log::info!(
+        "openloaf: session applied, base_url={DEFAULT_BASE_URL}, jwt {}",
+        summarize_jwt_claims(access_token)
+    );
+    let public: PublicUser = user.into();
+    state.set_user(Some(public.clone()));
+    public
 }
 
+/// 把 access_token 的 JWT payload 解出来，挑 iss/aud/sub/exp/iat 5 个 claim 输出成单行
+/// 字符串，**不**输出整个 payload（避免 PII / 角色 / scope 等敏感字段泄进日志）。
+///
+/// 用途：401 排错时跟服务端 `.env` 的 JWT_ISSUER / JWT_AUDIENCE 对照，5 秒就能定位
+/// "签发 / 验签端配置不一致"。所有解析错误都不抛——只回退成 `<...>` 占位字符串，
+/// 不影响登录主路径。
+fn summarize_jwt_claims(token: &str) -> String {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return "<malformed jwt>".into();
+    }
+    use base64::Engine;
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(parts[1]));
+    let payload_bytes = match payload_bytes {
+        Ok(b) => b,
+        Err(e) => return format!("<base64 decode failed: {e}>"),
+    };
+    let claims: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
+        Ok(v) => v,
+        Err(e) => return format!("<json parse failed: {e}>"),
+    };
+    let pick = |k: &str| -> String {
+        claims
+            .get(k)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "null".into())
+    };
+    format!(
+        "iss={} aud={} sub={} exp={} iat={}",
+        pick("iss"),
+        pick("aud"),
+        pick("sub"),
+        pick("exp"),
+        pick("iat"),
+    )
+}
+
+/// 把会话清干净。SDK 的 `auth.logout` / `auth.family_revoke` 已经会自动清 storage；
+/// 这个函数是给"无服务端协作"的强清场用的（401 主动清 / 用户取消 / refresh 彻底失败）。
 fn clear_session(state: &OpenLoafState) {
     state.client.set_access_token(None);
     state.set_user(None);
-    clear_refresh_token();
+    if let Err(e) = state.storage.clear() {
+        log::warn!("openloaf: storage.clear failed: {e}");
+    }
     clear_dev_session();
 }
 
-// ─── Dev-only session dump ───────────────────────────────────────
-//
-// Debug build（`cargo run` / `pnpm tauri dev`）下每次 apply_session 同步把
-// access_token + refresh_token + base_url dump 到 `~/.openspeech/dev_session.json`，
-// logout/clear_session 时删除。**只给测试工具（如 `examples/test_realtime_asr.rs`）
-// 读取**，release build 编译时直接编译掉（`#[cfg(not(debug_assertions))]` 空实现）。
-//
-// 文件权限设 0600 避免同机其他用户读到；不加密——dev 场景已经是"可信本机"语境。
-
-#[cfg(debug_assertions)]
-fn dev_session_path() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|h| std::path::PathBuf::from(h).join(".openspeech/dev_session.json"))
-}
-
-#[cfg(debug_assertions)]
-fn dump_dev_session(access_token: &str, refresh_token: &str) {
-    let Some(path) = dev_session_path() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::warn!("openloaf: mkdir ~/.openspeech failed: {e}");
-            return;
-        }
-    }
-    let payload = serde_json::json!({
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "base_url": DEFAULT_BASE_URL,
-        "note": "DEV ONLY — dumped by cfg(debug_assertions) build. Do NOT commit.",
-    });
-    let bytes = match serde_json::to_vec_pretty(&payload) {
-        Ok(b) => b,
-        Err(e) => {
-            log::warn!("openloaf: serialize dev session: {e}");
-            return;
-        }
-    };
-    if let Err(e) = std::fs::write(&path, &bytes) {
-        log::warn!("openloaf: write dev session: {e}");
-        return;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            &path,
-            std::fs::Permissions::from_mode(0o600),
-        );
-    }
-    log::info!("openloaf: dev session dumped → {}", path.display());
-}
-
-#[cfg(debug_assertions)]
-fn clear_dev_session() {
-    if let Some(path) = dev_session_path() {
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-        }
+/// 任何业务路径（实时 ASR / 文件转写 / 其他直接调 SaaS 的 command）拿到 401 后调一次。
+/// 等价于 `call_authed` 路径里 refresh 失败后的清场动作：清本地 session + 广播
+/// `AUTH_LOST_EVENT`，前端 auth store 监听到后切未登录态并由 UI 决定弹登录框。
+pub fn handle_session_expired<R: Runtime>(app: &AppHandle<R>, state: &OpenLoafState) {
+    clear_session(state);
+    if let Err(e) = app.emit(AUTH_LOST_EVENT, ()) {
+        log::warn!("openloaf: emit auth-lost failed: {e}");
     }
 }
-
-#[cfg(not(debug_assertions))]
-fn dump_dev_session(_: &str, _: &str) {}
-
-#[cfg(not(debug_assertions))]
-fn clear_dev_session() {}
 
 // ─── 登录事件 payload ────────────────────────────────────────────
 
@@ -411,16 +400,25 @@ pub fn openloaf_cancel_login(state: State<'_, SharedOpenLoaf>, login_state: Stri
 #[tauri::command]
 pub async fn openloaf_logout(state: State<'_, SharedOpenLoaf>) -> Result<(), String> {
     let state = state.inner().clone();
-    let token = load_refresh_token();
 
-    // 服务端调用失败也要清本地会话，避免"登不出"。
-    if let Some(rt) = token {
+    // 0.3.2 引入 family token：优先 family_revoke（机器级登出，所有 OpenLoaf 桌面 App 一起踢），
+    // 没有 family 就回退 logout(refresh_token)；都没有就只清本地。
+    let stored = state.storage.load().ok().flatten();
+    if let Some(stored) = stored {
         let client = state.client.clone();
-        let _ = tokio::task::spawn_blocking(move || client.auth().logout(&rt))
-            .await
-            .map_err(|e| e.to_string())?;
+        tokio::task::spawn_blocking(move || {
+            if let Some(family_token) = stored.family_token.as_deref() {
+                let _ = client.auth().family_revoke(family_token);
+            } else if let Some(refresh_token) = stored.refresh_token.as_deref() {
+                let _ = client.auth().logout(refresh_token);
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
+    // SDK 的 logout / family_revoke 内部已经清 storage + access_token；这里 clear_session
+    // 兜底确保 user 缓存 + dev_session 也跟上（即便服务端调用失败）。
     clear_session(&state);
     Ok(())
 }
@@ -465,7 +463,7 @@ pub fn openloaf_is_authenticated(state: State<'_, SharedOpenLoaf>) -> bool {
     state.client.access_token().is_some()
 }
 
-/// 主动尝试用 Keychain 里的 refresh_token 静默恢复登录态。
+/// 主动调一次 SDK `auth.bootstrap` 静默恢复登录态。
 ///
 /// 调用时机：
 ///   - 用户按下听写快捷键、recording gate 发现未登录 → await 这个命令再判 gate；
@@ -474,11 +472,11 @@ pub fn openloaf_is_authenticated(state: State<'_, SharedOpenLoaf>) -> bool {
 ///
 /// 行为：
 ///   - 已登录（内存有 access_token）→ 直接返回 true，不动网络；
-///   - 未登录但 Keychain 有 refresh_token → 调 `auth.refresh`，
-///       成功 → `apply_session` + emit `RESTORED_EVENT`，返回 true；
-///       明确认证失效（401/403）→ 清 Keychain，返回 false；
-///       其他错误（网络/超时/5xx/dev 后端没起）→ 保留 token，返回 false（下次还能再试）；
-///   - Keychain 也没 refresh_token → 直接返回 false。
+///   - 否则调 SDK `bootstrap` —— 内部从 keychain 读 StoredAuth，命中 family_token 优先调
+///     `/auth/family/exchange`，否则 fallback `/auth/refresh`。
+///     成功 → SDK 自动 set_access_token + 写 storage；这里再 emit `RESTORED_EVENT`，返回 true；
+///     storage 为空 / token 已被服务端 reject → 返回 false；
+///     网络瞬时错误 → SDK 保留 storage 不清，下次再调时还能试，返回 false。
 #[tauri::command]
 pub async fn openloaf_try_recover(
     app: AppHandle,
@@ -490,36 +488,30 @@ pub async fn openloaf_try_recover(
         return Ok(true);
     }
 
-    let Some(refresh_token) = load_refresh_token() else {
-        return Ok(false);
-    };
-
     let client = ol.client.clone();
     let result = tokio::task::spawn_blocking(move || {
-        client.auth().refresh(&refresh_token, Some(&client_info()))
+        client.auth().bootstrap(Some(&client_info()))
     })
     .await
     .map_err(|e| format!("join error: {e}"))?;
 
     match result {
-        Ok(session) => {
-            let user = apply_session(&ol, session);
-            log::info!("openloaf: session recovered on demand");
+        Ok(Some(restored)) => {
+            let user = apply_session_local(
+                &ol,
+                &restored.access_token,
+                &restored.refresh_token,
+                restored.user,
+            );
+            log::info!("openloaf: session recovered on demand via {:?}", restored.via);
             if let Err(e) = app.emit(RESTORED_EVENT, user) {
                 log::warn!("openloaf: emit restored event failed: {e}");
             }
             Ok(true)
         }
+        Ok(None) => Ok(false),
         Err(err) => {
-            match &err {
-                SaaSError::Http { status: 401, .. } | SaaSError::Http { status: 403, .. } => {
-                    log::warn!("openloaf: refresh rejected on demand ({err}), clearing token");
-                    clear_refresh_token();
-                }
-                _ => {
-                    log::warn!("openloaf: on-demand refresh failed transiently: {err}");
-                }
-            }
+            log::warn!("openloaf: on-demand bootstrap failed: {err}");
             Ok(false)
         }
     }
@@ -674,7 +666,14 @@ pub async fn handle_login_callback(app: &AppHandle, state_str: String, login_cod
 
     match exchange {
         Ok(Ok(session)) => {
-            let user = apply_session(&ol, session);
+            // SDK 内部已经 set_access_token + 写 storage（含 family_token / refresh_token）；
+            // 这里只补 SDK 不管的 user 缓存 + dev_session dump。
+            let user = apply_session_local(
+                &ol,
+                &session.access_token,
+                &session.refresh_token,
+                session.user,
+            );
             emit_login(app, &state_str, Ok(user));
         }
         Ok(Err(err)) => {
@@ -708,8 +707,9 @@ fn emit_login(app: &AppHandle, state: &str, result: Result<PublicUser, String>) 
 
 /// 在 setup 中调用。
 pub async fn bootstrap(app: &AppHandle) {
-    // 启动本地回调 server。
     let shared: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
+
+    // 启动本地回调 server。
     match callback::start(app.clone()) {
         Ok(port) => {
             let _ = shared.callback_port.set(port);
@@ -717,43 +717,42 @@ pub async fn bootstrap(app: &AppHandle) {
         }
         Err(e) => {
             log::error!("openloaf: failed to start callback server: {e}");
-            // 不 return：即使回调服务起不来，Keychain 里已有的 refresh token
-            // 仍可用于恢复会话。
+            // 不 return：即使回调服务起不来，keychain 里已有的凭据仍可用于恢复会话。
         }
     }
 
-    // Keychain 恢复：
-    let Some(refresh_token) = load_refresh_token() else {
-        return;
-    };
+    // 一次性清理老命名空间的 keychain 条目（v0.2.6 之前用的 `com.openspeech.app /
+    // openloaf_refresh_token`）。0.3.2 起改用 SDK 推荐的 `ai.openloaf.saas / default`，
+    // 老条目对新版本无意义，留着只是噪音。`NoEntry` 静默忽略。
+    KeyringAuthStorage::cleanup_legacy();
 
+    // SDK 自身的 bootstrap：从注入的 storage 读 family/refresh token，
+    // 命中 family → `/auth/family/exchange`（首选，跨 App SSO），
+    // 否则 fallback `/auth/refresh`，都失败 → SDK 自动清 storage。
     let client = shared.client.clone();
     let result = tokio::task::spawn_blocking(move || {
-        client.auth().refresh(&refresh_token, Some(&client_info()))
+        client.auth().bootstrap(Some(&client_info()))
     })
     .await;
 
     match result {
-        Ok(Ok(session)) => {
-            let user = apply_session(&shared, session);
-            log::info!("openloaf: session restored from Keychain");
+        Ok(Ok(Some(restored))) => {
+            let user = apply_session_local(
+                &shared,
+                &restored.access_token,
+                &restored.refresh_token,
+                restored.user,
+            );
+            log::info!("openloaf: session restored from keychain via {:?}", restored.via);
             if let Err(e) = app.emit(RESTORED_EVENT, user) {
                 log::warn!("openloaf: emit restored event failed: {e}");
             }
         }
+        Ok(Ok(None)) => {
+            // 无凭据或凭据被服务端 reject：SDK 已自动 clear storage。无需任何动作，UI 走 OAuth。
+        }
         Ok(Err(err)) => {
-            // 只在 refresh token 被服务端明确判定失效时清 Keychain。
-            // 网络故障 / 超时 / 5xx / 本地 dev 后端没起，都保留 token 等下次启动再试，
-            // 避免把"暂时连不上"误判成"登录失效"导致用户被静默踢出。
-            match &err {
-                SaaSError::Http { status: 401, .. } | SaaSError::Http { status: 403, .. } => {
-                    log::warn!("openloaf: refresh rejected ({err}), clearing stored token");
-                    clear_refresh_token();
-                }
-                _ => {
-                    log::warn!("openloaf: refresh failed transiently, keeping token: {err}");
-                }
-            }
+            log::warn!("openloaf: bootstrap failed transiently: {err}");
         }
         Err(join_err) => {
             log::warn!("openloaf: bootstrap join error: {join_err}");

@@ -173,6 +173,32 @@ jobs:
         # 发版构建在这里临时 override 打开，CI 的 TAURI_SIGNING_PRIVATE_KEY 已注入。
         run: pnpm tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
+      # 防 ad-hoc 倒灌：tauri-action / Tauri CLI 在 Apple secrets 缺失时会**自动跳签**，产物变 ad-hoc。
+      # ad-hoc 包跑起来每次访问 Keychain 都会弹"输入登录密码"框（每次签名指纹都变 → ACL 不认）。
+      # 这里强校验 `Authority=Developer ID Application` + `TeamIdentifier != not set`，secrets 漏一个 CI 立红。
+      - name: Verify macOS code signature
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/${RUST_TARGET}/release/bundle/macos/OpenSpeech.app"
+          out=$(codesign -dvvv "$app" 2>&1)
+          echo "$out"
+          if echo "$out" | grep -qE '^Signature=adhoc'; then
+            echo "::error::OpenSpeech.app 是 ad-hoc 签名 — Apple Developer ID secrets 没生效"
+            exit 1
+          fi
+          if echo "$out" | grep -qE '^TeamIdentifier=not set'; then
+            echo "::error::OpenSpeech.app 缺 TeamIdentifier — 不是 Developer ID Application 证书"
+            exit 1
+          fi
+          if ! echo "$out" | grep -qE '^Authority=Developer ID Application'; then
+            echo "::error::OpenSpeech.app 不是 Developer ID Application 签名"
+            exit 1
+          fi
+
       # macOS .app.tar.gz 默认命名是 `OpenSpeech.app.tar.gz` —— 不带 arch！ARM64 + Intel 两个 job
       # 上传同名 artifact 互不影响（按 artifact name 分组），但下载到 release job 的 staging 目录
       # 时会同名覆盖。因此在 upload 之前就给它加上 arch 后缀，跟 dmg/exe/AppImage 那种"自带 arch
