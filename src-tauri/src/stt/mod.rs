@@ -7,10 +7,14 @@
 //    解码，sample rate / channel / encoding 都不需要客户端告知；payload 由 audio
 //    callback 重采样到 16k 后送进来。
 //    入参 `mode`：
-//       "auto"   ⇒ vadMode = ServerVad（默认）。服务端按停顿自动切句，多次 Final，
-//                  客户端按 sentenceId 累积拼接。
-//       "manual" ⇒ vadMode = None。整段录音视为一句话；松手时 send `finish` 才出
-//                  唯一一个 Final。"按下到松开 = 一次完整对话"。
+//       "manual" ⇒ vadMode = None（**默认 / 推荐**）。整段录音视为一句话；松手时
+//                  send `finish` 才出唯一一个 Final。"按下到松开 = 一次完整对话"。
+//                  push-to-talk 听写场景文档明确推荐：模型有完整上下文 → 更准；
+//                  不会被 VAD 误切（用户停顿 >500ms 不会丢前文）。
+//       "auto"   ⇒ vadMode = ServerVad。服务端按停顿自动切句，多次 Final，客户端
+//                  按 sentenceId 累积拼接。仅适合会议字幕 / 直播 / 同传等需要按句
+//                  独立 transcript 的无人值守场景。
+//    依据：~/.agents/skills/openloaf-saas-sdk/tools/OL-TL-RT-002-realtime-asr-llm.md
 // 2. `stt_finalize` —— 前端在 hotkey 释放、录音 stop 之后调用。让 worker 调
 //    session.finish()，阻塞等最多 FINALIZE_WAIT_MS 拿 Final 事件里的最终文字。
 // 3. `stt_cancel` —— Esc / 误触时调用。让 worker 立即退出，不等 Final。
@@ -145,9 +149,13 @@ fn parse_language(lang: Option<&str>) -> RealtimeAsrLlmLanguage {
 }
 
 fn parse_mode(mode: Option<&str>) -> RealtimeAsrLlmVadMode {
+    // 默认 None（manual）：与前端 settings 默认值一致 + 符合文档对 push-to-talk
+    // 听写的推荐。前端如果没传 mode 也走 manual 兜底。
     match mode.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("manual") | Some("none") => RealtimeAsrLlmVadMode::None,
-        _ => RealtimeAsrLlmVadMode::ServerVad,
+        Some("auto") | Some("server_vad") | Some("server-vad") => {
+            RealtimeAsrLlmVadMode::ServerVad
+        }
+        _ => RealtimeAsrLlmVadMode::None,
     }
 }
 
