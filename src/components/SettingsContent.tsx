@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { SECRET_STT_API_KEY, getSecret, setSecret } from "@/lib/secrets";
@@ -885,6 +886,11 @@ function AboutTab() {
   const navigate = useNavigate();
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const [appVersion, setAppVersion] = useState("");
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
+  }, []);
 
   const rerunOnboarding = async () => {
     // 把 onboardingCompleted 翻回 false 并跳到 /onboarding。SettingsDialog 与
@@ -907,19 +913,21 @@ function AboutTab() {
     <div>
       <SectionTitle>构建</SectionTitle>
       <Row label="版本">
-        <span className="font-mono text-sm text-te-fg">v0.1.0</span>
+        <span className="font-mono text-sm text-te-fg">
+          {appVersion ? `v${appVersion}` : "—"}
+        </span>
       </Row>
       <Row label="许可证">
         <span className="font-mono text-sm text-te-fg">MIT</span>
       </Row>
       <Row label="源代码">
         <a
-          href="https://github.com/openspeech/openspeech"
+          href="https://github.com/OpenLoaf/OpenSpeech"
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 font-mono text-sm text-te-light-gray transition-colors hover:text-te-accent"
         >
-          github.com/openspeech/openspeech
+          github.com/OpenLoaf/OpenSpeech
           <ExternalLink className="size-3.5" />
         </a>
       </Row>

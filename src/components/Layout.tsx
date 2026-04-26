@@ -220,6 +220,24 @@ export default function Layout() {
     };
   }, [navigate, openSettings]);
 
+  // 全局快捷键：Cmd+, (macOS) / Ctrl+, (Windows/Linux) 打开设置。
+  // 设置已打开时跳过，避免覆盖当前 tab；HotkeyField 录制冲突也由此规避。
+  useEffect(() => {
+    const isMac = detectPlatform() === "macos";
+    const onKeyDown = (e: KeyboardEvent) => {
+      const modOk = isMac
+        ? e.metaKey && !e.ctrlKey && !e.altKey
+        : e.ctrlKey && !e.metaKey && !e.altKey;
+      if (!modOk || e.shiftKey) return;
+      if (e.code !== "Comma" && e.key !== ",") return;
+      if (useUIStore.getState().settingsOpen) return;
+      e.preventDefault();
+      openSettings();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openSettings]);
+
   // 设置页等处改 inputDevice 后通知 Rust 重建托盘菜单，让"选择麦克风"的 ✓
   // 跟随最新选择。空依赖 + subscribe 自带首次调用豁免（prev === next）。
   useEffect(() => {
