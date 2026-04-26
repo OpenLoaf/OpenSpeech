@@ -562,14 +562,14 @@ function GeneralTab() {
           onChange={(v) => void setGeneral("asrSegmentMode", v)}
           options={[
             {
-              value: "AUTO",
-              label: "自动分句",
-              hint: "服务端按停顿自动切句，录音过程中实时回填文字。",
+              value: "MANUAL",
+              label: "手动分句（推荐）",
+              hint: "整段录音视为一次完整对话，松开按键后再返回转写结果；模型有完整上下文，更准、更不易被停顿误切。",
             },
             {
-              value: "MANUAL",
-              label: "手动分句",
-              hint: "整段录音视为一次完整对话，松开按键后才返回转写结果。",
+              value: "AUTO",
+              label: "自动分句",
+              hint: "服务端按停顿自动切句、录音过程中实时回填；适合长会议字幕、直播转写等无人值守场景。",
             },
           ]}
         />

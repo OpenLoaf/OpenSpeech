@@ -4,7 +4,7 @@ import { Store } from "@tauri-apps/plugin-store";
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
 export type InjectMethod = "CLIPBOARD + PASTE" | "SIMULATE KEYBOARD";
@@ -96,7 +96,11 @@ const DEFAULT_GENERAL: GeneralSettings = {
   autoUpdate: true,
   closeBehavior: "ASK",
   onboardingCompleted: false,
-  asrSegmentMode: "AUTO",
+  // 默认 MANUAL（vadMode=none）：push-to-talk 听写场景下，文档明确给出"更准、
+  // 更便宜、不被 VAD 错切"。AUTO（server_vad）留给会议字幕 / 直播 / 同传等需要
+  // 按句独立 transcript 的无人值守场景。详见
+  // ~/.agents/skills/openloaf-saas-sdk/tools/OL-TL-RT-002-realtime-asr-llm.md
+  asrSegmentMode: "MANUAL",
 };
 
 const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
@@ -154,6 +158,14 @@ function migrateV1(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
   return { ...(cleaned as Partial<GeneralSettings>), closeBehavior };
 }
 
+// v2 → v3：纠正之前 asrSegmentMode 默认错配为 AUTO 的历史包袱。push-to-talk
+// 听写场景文档明确推荐 MANUAL（none）：模型有完整上下文 → 更准、不被 VAD 误切。
+// 老用户不论之前是默认填的 AUTO 还是主动选过 AUTO，都一并搬到 MANUAL——主动想用
+// AUTO 的用户在升级后还能在设置里再切回去（v3 之后 schemaVersion 不再覆盖）。
+function migrateV2(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
+  return { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: "MANUAL" };
+}
+
 async function readPersisted(): Promise<PersistShape> {
   const s = await store();
   const raw = await s.get<unknown>("root");
@@ -165,14 +177,26 @@ async function readPersisted(): Promise<PersistShape> {
   if (!raw || typeof raw !== "object") return defaults;
   const r = raw as Partial<PersistShape> & { schemaVersion?: number };
 
-  // 迁移：v1 → v2
+  // 迁移：v1 → v2 → v3 链式
   if (r.schemaVersion === 1) {
-    const migratedGeneral = migrateV1(
+    const v2General = migrateV1(
       (r.general ?? {}) as Record<string, unknown>,
     );
+    const v3General = migrateV2(v2General as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...migratedGeneral },
+      general: { ...DEFAULT_GENERAL, ...v3General },
+      personalization: {
+        ...DEFAULT_PERSONALIZATION,
+        ...(r.personalization ?? {}),
+      },
+    };
+  }
+  if (r.schemaVersion === 2) {
+    const v3General = migrateV2((r.general ?? {}) as Record<string, unknown>);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...v3General },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),

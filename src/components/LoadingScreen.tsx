@@ -8,6 +8,12 @@ import { PulsarGrid } from "@/components/PulsarGrid";
 export function LoadingScreen() {
   return (
     <section className="relative h-svh w-full overflow-hidden bg-te-bg">
+      {/* 顶部窗口拖拽条 */}
+      <div
+        data-tauri-drag-region
+        className="absolute inset-x-0 top-0 z-50 h-8"
+      />
+
       {/* 交互式脉冲网格动画背景 */}
       <PulsarGrid />
 
