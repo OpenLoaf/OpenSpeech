@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl,
+    webview::Color, AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl,
     WebviewWindowBuilder,
 };
 
@@ -34,6 +34,9 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // overlay 加载同一份 index.html；前端根据 window label 分流渲染 OverlayPage。
     // Transparent 窗口在 Tauri 2 需要额外 Cargo feature + conf 配置；这里改用
     // solid TE 黑底，窗口 280x56 就是内容尺寸，视觉上等同于浮条。
+    // background_color 把 NSWindow / wry webview 默认色都设成 te-bg 黑——否则
+    // window.show / 窗口尺寸变化的瞬间，webview 第一帧合成前会露出系统 NSWindow
+    // 默认背景（macOS light mode 下是白），表现为出现/消失时一闪白色。
     let builder = WebviewWindowBuilder::new(
         app,
         OVERLAY_LABEL,
@@ -47,6 +50,7 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .focused(false)
     .shadow(false)
     .visible(false)
+    .background_color(Color(0, 0, 0, 255))
     .title("OpenSpeech Overlay");
 
     #[cfg(target_os = "macos")]
