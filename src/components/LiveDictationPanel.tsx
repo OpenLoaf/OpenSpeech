@@ -1,9 +1,13 @@
+import { useTranslation } from "react-i18next";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RecordingState } from "@/stores/recording";
+import type { TFunction } from "i18next";
 
 // 实时听写面板：左波形 + 右 realtime 转写 + 状态文案。Home 与 Onboarding Try-It 共用。
 // audioLevels / liveTranscript 由调用方注入（通常来自 useRecordingStore）。
 // 全系统 toggle 语义：按一下开始、再按一下结束（不再有 hold / 长按模式）。
+// 调用方传 onClose 进入"结果模式"：录音结束后挂留最近一次转写结果，等用户点 ✕ 或再次按快捷键。
 
 function Waveform({
   levels,
@@ -33,30 +37,31 @@ function Waveform({
 
 function statusCopy(
   state: RecordingState,
+  t: TFunction,
 ): { tag: string; primary: string; secondary?: string } {
   switch (state) {
     case "preparing":
       return {
         tag: "// READY",
-        primary: "开始说话…",
-        secondary: "Esc 取消",
+        primary: t("overlay:panel.primary.ready"),
+        secondary: t("overlay:panel.secondary.ready"),
       };
     case "recording":
       return {
         tag: "// LISTENING",
-        primary: "再按一次快捷键 结束并转写",
-        secondary: "Esc 取消本次录音",
+        primary: t("overlay:panel.primary.listening"),
+        secondary: t("overlay:panel.secondary.listening"),
       };
     case "transcribing":
       return {
         tag: "// TRANSCRIBING",
-        primary: "正在转写…",
-        secondary: "Esc 放弃这次结果",
+        primary: t("overlay:panel.primary.transcribing"),
+        secondary: t("overlay:panel.secondary.transcribing"),
       };
     case "injecting":
-      return { tag: "// INJECTING", primary: "正在写入输入框…" };
+      return { tag: "// INJECTING", primary: t("overlay:panel.primary.injecting") };
     case "error":
-      return { tag: "// ERROR", primary: "出错了，检查日志或重试" };
+      return { tag: "// ERROR", primary: t("overlay:panel.primary.error") };
     default:
       return { tag: "// IDLE", primary: "" };
   }
@@ -66,13 +71,23 @@ export function LiveDictationPanel({
   state,
   audioLevels,
   liveTranscript,
+  onClose,
 }: {
   state: RecordingState;
   audioLevels: number[];
   liveTranscript: string;
+  onClose?: () => void;
 }) {
-  const { tag, primary, secondary } = statusCopy(state);
-  const waveActive = state === "preparing" || state === "recording";
+  const { t } = useTranslation();
+  const isResultMode = !!onClose && state === "idle";
+  const { tag, primary, secondary } = isResultMode
+    ? {
+        tag: "// RESULT",
+        primary: t("overlay:panel.primary.result"),
+        secondary: t("overlay:panel.secondary.result"),
+      }
+    : statusCopy(state, t);
+  const waveActive = !isResultMode && (state === "preparing" || state === "recording");
   const hasText = liveTranscript.trim().length > 0;
   const textToneClass =
     state === "recording" || state === "preparing"
@@ -81,7 +96,7 @@ export function LiveDictationPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3">
         <span
           className={cn(
             "font-mono text-[10px] uppercase tracking-widest md:text-xs",
@@ -91,9 +106,21 @@ export function LiveDictationPanel({
         >
           {tag}
         </span>
-        <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
-          {hasText ? `${liveTranscript.length} CHARS` : "LIVE"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
+            {hasText ? `${liveTranscript.length} CHARS` : "LIVE"}
+          </span>
+          {isResultMode ? (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t("overlay:aria.close_result")}
+              className="grid size-5 place-items-center border border-te-gray/60 text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
+            >
+              <X className="size-3" />
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid grid-cols-[minmax(0,40%)_minmax(0,1fr)] gap-4 md:gap-6">
@@ -112,7 +139,7 @@ export function LiveDictationPanel({
               hasText ? textToneClass : "text-te-fg/40",
             )}
           >
-            {hasText ? liveTranscript : "实时转写文字将出现在这里…"}
+            {hasText ? liveTranscript : t("overlay:panel.placeholder")}
           </p>
           <div className="flex flex-col gap-0.5">
             <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">

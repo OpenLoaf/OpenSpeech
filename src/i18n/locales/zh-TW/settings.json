@@ -1,0 +1,118 @@
+{
+  "page": {
+    "section_index": "[04] 系統",
+    "title": "設定",
+    "subtitle": "設定聽寫、模型端點與應用程式行為。變更即時生效，無需儲存。",
+    "dialog_title": "設定",
+    "dialog_sr": "OpenSpeech 設定"
+  },
+  "tabs": {
+    "account": "帳戶",
+    "general": "一般",
+    "model": "模型",
+    "personalization": "個人化",
+    "about": "關於"
+  },
+  "hotkeys": {
+    "how_it_works": "// HOW IT WORKS",
+    "how_it_works_body": "按一下快速鍵開始說話，再按一下結束並將文字插入目前焦點。兩次按下間隔 < 300 ms 會視為快速雙擊誤觸，本次錄音將捨棄。"
+  },
+  "section": {
+    "shortcuts": "鍵盤快速鍵",
+    "language": "語言",
+    "audio": "音訊",
+    "asr_segment": "分句模式",
+    "text_injection": "文字注入",
+    "behavior": "行為",
+    "model_rest": "大型模型（REST）",
+    "ai_enhance": "AI 增強",
+    "dictionary_learning": "詞典學習",
+    "identity": "身份",
+    "session": "工作階段",
+    "build": "建置",
+    "third_party": "第三方依賴"
+  },
+  "general": {
+    "interface_lang": "介面語言",
+    "dictation_lang": "聽寫語言",
+    "translation_target": "翻譯目標",
+    "lang_variant": "語言變體",
+    "input_device": "輸入裝置",
+    "input_level": "輸入音量",
+    "input_level_hint_listening": "即時音量 · 正在監聽：{{name}}",
+    "input_level_hint": "即時麥克風音量",
+    "cue_sound": "開始／結束提示音",
+    "restore_clipboard": "貼上後還原剪貼簿",
+    "restore_clipboard_hint": "建議保持開啟",
+    "launch_startup": "開機自動啟動",
+    "show_dock": "在 Dock 中顯示應用程式",
+    "show_dock_hint": "在 macOS Dock 顯示 OpenSpeech 圖示，方便快速存取。關閉後應用程式作為純選單列應用程式執行（仍可透過系統列開啟主視窗）",
+    "overlay_always_visible": "懸浮錄音列常駐顯示",
+    "overlay_always_visible_hint": "開啟後錄音列會持續懸浮於螢幕上（即使未錄音），方便檢視狀態",
+    "close_to_tray": "關閉時最小化至系統列",
+    "close_to_tray_hint": "開啟後關閉主視窗會直接隱藏至系統列；關閉時每次都會跳出確認對話框",
+    "auto_update": "自動更新",
+    "auto_update_hint": "啟動時靜默檢查並安裝新版本；關閉後僅能透過系統列「檢查更新」手動觸發",
+    "loading": "// loading settings…"
+  },
+  "device": {
+    "system_default": "跟隨系統",
+    "system_default_with_current": "跟隨系統（目前：{{name}}）",
+    "is_default_suffix": "{{name}} · 系統預設",
+    "disconnected_with_fallback": "{{name}} · 已中斷，暫用系統預設（{{fallback}}）",
+    "disconnected": "{{name}} · 已中斷"
+  },
+  "asr_segment": {
+    "manual_label": "手動分句（推薦）",
+    "manual_hint": "整段錄音視為一次完整對話，放開按鍵後再回傳轉寫結果；模型擁有完整上下文，更準確且不易被停頓誤切。",
+    "auto_label": "自動分句",
+    "auto_hint": "伺服器端依停頓自動切句，錄音過程中即時回填；適合長時間會議字幕、直播轉寫等無人值守情境。"
+  },
+  "inject": {
+    "clipboard_label": "剪貼簿 + 貼上",
+    "clipboard_hint": "預設方式，快速且穩定。",
+    "keyboard_label": "模擬鍵盤",
+    "keyboard_hint": "逐字元鍵入。"
+  },
+  "model": {
+    "byo_unavailable_tag": "// BYO-MODEL · 尚未實作",
+    "byo_unavailable_body": "自訂 STT REST 端點（端點 URL／API Key／模型名稱／測試連線）尚未接入，目前所有聽寫均走 OpenLoaf SaaS。此入口開發中，下一版本將啟用。",
+    "endpoint": "端點 URL",
+    "api_key": "API Key",
+    "api_key_hint": "儲存於系統金鑰圈；失去焦點時自動儲存",
+    "model_name": "模型名稱",
+    "timeout_seconds": "請求逾時（秒）",
+    "audio_format": "音訊格式",
+    "test_connection_disabled": "測試連線（尚未實作）",
+    "show_key": "顯示 API Key",
+    "hide_key": "隱藏 API Key",
+    "key_saved_toast": "API Key 已儲存至系統金鑰圈",
+    "key_save_failed_toast": "API Key 儲存失敗: {{error}}"
+  },
+  "personalization": {
+    "auto_polish": "AI 自動潤飾",
+    "auto_polish_hint": "移除口頭禪與口誤",
+    "context_style": "上下文風格",
+    "context_style_hint": "將前景應用程式名稱傳給模型以調整語氣",
+    "sensitivity": "學習靈敏度",
+    "sensitivity_hint": "控制新詞彙被自動收集的積極程度",
+    "low": "低",
+    "normal": "標準",
+    "high": "高"
+  },
+  "account": {
+    "email": "電子郵件",
+    "subscription": "訂閱",
+    "subscription_hint": "使用自備的模型 Key",
+    "free_byo_badge": "免費 / 自備模型",
+    "sign_out": "登出",
+    "sign_out_hint": "登出後會清除本機登入狀態。本機錄音、歷史紀錄與詞典將保留。"
+  },
+  "about": {
+    "version": "版本",
+    "license": "授權",
+    "source": "原始碼",
+    "check_update": "檢查更新",
+    "rerun_onboarding": "重新執行首次導覽"
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, AlertCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -63,6 +64,7 @@ export function HotkeyField({
   fieldLeadingSlot,
   bottomSlot,
 }: Props) {
+  const { t } = useTranslation();
   const platform = detectPlatform();
   const [state, setState] = useState<FieldState>({ kind: "idle" });
   const rootRef = useRef<HTMLDivElement>(null);
@@ -196,7 +198,7 @@ export function HotkeyField({
     const mods = normalizeMods(pressedModsRef.current);
     const legal = isLegalMainKey(code, mods, allowSpecialKeys);
     if (!legal.ok) {
-      flashError(legal.reason ?? "非法组合");
+      flashError(legal.reason ?? t("dialogs:hotkey_field.error_illegal_combo"));
       return;
     }
     const candidate: HotkeyBinding = {
@@ -328,7 +330,7 @@ export function HotkeyField({
                   )}
                   onClick={exitToIdle}
                 >
-                  按下新快捷键...
+                  {t("dialogs:hotkey_field.press_new")}
                 </motion.button>
               ) : (
                 <motion.button
@@ -357,8 +359,8 @@ export function HotkeyField({
             {showClear ? (
               <button
                 type="button"
-                title="清除"
-                aria-label="清除快捷键"
+                title={t("dialogs:hotkey_field.clear_title")}
+                aria-label={t("dialogs:hotkey_field.clear_aria")}
                 onClick={(e) => {
                   e.stopPropagation();
                   onChange(null);
@@ -382,7 +384,9 @@ export function HotkeyField({
             className="flex items-center gap-1.5 text-right font-mono text-[11px] text-te-accent"
           >
             <AlertCircle className="size-3" />
-            <span>ERROR: {state.message}</span>
+            <span>
+              {t("dialogs:hotkey_field.error_prefix")}: {state.message}
+            </span>
           </motion.div>
         )}
         {state.kind === "conflict" && (
@@ -393,11 +397,15 @@ export function HotkeyField({
             className="flex items-center justify-end gap-3 font-mono text-[11px] text-te-light-gray"
           >
             <span>
-              此组合已被「{BINDING_LABELS[state.with]}」使用
+              {t("dialogs:hotkey_field.conflict_with", {
+                name: BINDING_LABELS[state.with],
+              })}
             </span>
-            <ConflictBtn onClick={confirmReplace}>替换</ConflictBtn>
+            <ConflictBtn onClick={confirmReplace}>
+              {t("dialogs:hotkey_field.replace")}
+            </ConflictBtn>
             <ConflictBtn onClick={cancelReplace} variant="ghost">
-              取消
+              {t("dialogs:hotkey_field.cancel")}
             </ConflictBtn>
           </motion.div>
         )}

@@ -1,0 +1,46 @@
+{
+  "auth": {
+    "login_timeout": "登录超时，请重试",
+    "login_failed": "登录失败，请重试",
+    "login_connection_reset": "登录服务器连接被重置，请稍后重试",
+    "login_unreachable": "无法连接登录服务器，请检查网络后重试",
+    "internal": "内部错误，请稍后再试",
+    "not_authenticated": "未登录",
+    "not_authenticated_openloaf": "未登录 OpenLoaf",
+    "not_authenticated_openspeech": "未登录 OpenSpeech",
+    "session_expired": "会话已过期，请重新登录"
+  },
+  "network": {
+    "offline": "无互联网连接",
+    "unreachable": "网络不可达",
+    "service_unreachable": "无法连接到服务",
+    "service_unreachable_desc": "网络不可达或服务端异常，已取消本次录音",
+    "check_and_retry": "请检查网络后重试"
+  },
+  "recording": {
+    "start_failed": "录音启动失败",
+    "save_failed": "录音保存失败",
+    "mic_not_ready": "麦克风未就绪",
+    "realtime_not_started": "实时转写未启动",
+    "register_failed": "注册失败：{{id}}（{{error}}）",
+    "hotkey_sync_failed": "同步快捷键到 Rust 失败：{{error}}"
+  },
+  "stt": {
+    "transcribe_failed": "转写失败",
+    "transcribe_empty": "未拿到转写结果",
+    "transcribe_empty_desc": "服务端超时或全程静音",
+    "transcribe_placeholder": "（未能获取转写结果）",
+    "session_timeout": "会话超时",
+    "saas_5xx": "SaaS 服务端错误（5xx）",
+    "saas_4xx": "SaaS 鉴权失败（4xx）",
+    "unknown": "未知错误"
+  },
+  "clipboard": {
+    "copy_failed": "复制到剪贴板失败",
+    "paste_failed": "自动粘贴失败"
+  },
+  "update": {
+    "check_failed": "检查更新失败",
+    "available": "发现新版本 {{version}}"
+  }
+}

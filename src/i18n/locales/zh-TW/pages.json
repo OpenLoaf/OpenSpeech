@@ -1,0 +1,142 @@
+{
+  "home": {
+    "hero": {
+      "title_line1": "說出來。",
+      "title_line2": "就成文。",
+      "description": "按一下快捷鍵，開口說話，再按一下結束——文字即刻出現在任意應用程式中。不綁定編輯器，錄音只留本機，無任何遙測。",
+      "feature_push_to_talk": "// PUSH-TO-TALK 按鍵聽寫",
+      "feature_byo": "// 模型自選 SAAS · BYO",
+      "feature_cross_platform": "// 跨平台 WIN · MAC · LINUX"
+    },
+    "hotkey_hint": "按一下快捷鍵開始錄音，再按一下結束並把文字寫入目前輸入框。按 <esc>Esc</esc> 取消；焦點必須在可編輯區域。",
+    "stats": {
+      "section_title": "今日 / 本次工作階段",
+      "live_metrics": "// LIVE METRICS",
+      "duration_label": "口述時長",
+      "duration_unit": "HH:MM",
+      "words_label": "口述字數",
+      "words_unit": "總計",
+      "wpm_label": "平均速度",
+      "wpm_unit": "字/分鐘",
+      "saved_label": "節省時間",
+      "saved_unit": "HH:MM"
+    }
+  },
+  "history": {
+    "title": "歷史記錄",
+    "subtitle": "歷史記錄保存在本裝置。",
+    "search_placeholder": "搜尋歷史...",
+    "more": "更多",
+    "export": "匯出",
+    "delete_all": "刪除全部歷史",
+    "retention": {
+      "title": "RETENTION POLICY",
+      "description": "歷史保留時長 — 控制本機資料庫中的記錄留存時間。",
+      "options": {
+        "forever": "永遠",
+        "90d": "90 天",
+        "30d": "30 天",
+        "7d": "7 天",
+        "off": "不儲存"
+      }
+    },
+    "filters": {
+      "all": "全部",
+      "dictation": "聽寫",
+      "ask": "隨便問",
+      "translate": "翻譯"
+    },
+    "buckets": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "this_week": "本週",
+      "earlier": "更早"
+    },
+    "empty": "// 暫無記錄 //",
+    "status": {
+      "success": "成功",
+      "failed": "失敗",
+      "cancelled": "已取消"
+    },
+    "row": {
+      "play": "播放原始錄音",
+      "pause": "暫停",
+      "copy": "複製到剪貼簿",
+      "copied": "已複製",
+      "reinject": "重新注入",
+      "delete": "刪除",
+      "retry": "重試",
+      "retrying_label": "重試中",
+      "retry_no_audio": "無可用音訊，無法重試",
+      "retry_too_long": "暫不支援超過 5 分鐘的錄音重試",
+      "retry_in_progress": "重試中…",
+      "retry_tooltip": "重試轉錄",
+      "failed_placeholder": "您的轉錄被中斷。但 OpenSpeech 仍可以為您重試。"
+    },
+    "toast": {
+      "copy_success": "已複製到剪貼簿",
+      "copy_failed": "複製失敗",
+      "retry_success": "重試成功",
+      "retry_failed": "重試失敗",
+      "delete_failed": "刪除失敗"
+    },
+    "confirm_clear": {
+      "title": "刪除全部歷史",
+      "description": "清空本機歷史記錄",
+      "body": "將刪除本機的 <count>{{count}}</count> 筆歷史記錄，操作不可復原。",
+      "tip": "// 建議先匯出備份",
+      "confirm": "確認刪除"
+    }
+  },
+  "dictionary": {
+    "title": "詞典",
+    "subtitle": "自訂詞彙 · 最多 2,000 條",
+    "new_word": "+ 新詞",
+    "search_placeholder": "搜尋詞條...",
+    "filters": {
+      "all": "全部",
+      "auto": "自動新增",
+      "manual": "手動新增"
+    },
+    "empty": "// 暫無詞條 //",
+    "count_total": "// 共 {{count}} 條 //",
+    "card": {
+      "auto_tooltip": "自動新增",
+      "manual_tooltip": "手動新增",
+      "edit": "編輯",
+      "delete": "刪除"
+    },
+    "new_dialog": {
+      "title": "新詞",
+      "description": "新增自訂詞典條目",
+      "term_label": "term",
+      "term_placeholder": "例如 OpenSpeech",
+      "error_empty": "term 不能為空",
+      "error_duplicate": "該詞條已存在",
+      "submitting": "新增中…",
+      "submit": "新增"
+    }
+  },
+  "layout": {
+    "nav": {
+      "home": "首頁",
+      "history": "歷史記錄",
+      "dictionary": "詞典"
+    },
+    "account_fallback": "帳戶",
+    "login": "登入",
+    "credits": "Credits",
+    "credits_unlimited": "UNLIMITED",
+    "settings": "設定",
+    "tray": {
+      "update_found_title": "發現新版本",
+      "update_none": "目前已是最新版本",
+      "update_check_failed": "檢查更新失敗"
+    }
+  },
+  "search_box": {
+    "placeholder": "搜尋...",
+    "clear": "清空搜尋",
+    "open": "搜尋"
+  }
+}

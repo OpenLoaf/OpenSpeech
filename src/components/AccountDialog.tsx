@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Gift, LogOut, Mail, Sparkles } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -11,18 +12,17 @@ import {
 } from "@/components/ui/dialog";
 import { useAuthStore } from "@/stores/auth";
 
-/** 根据 membershipLevel 返回显示标签（UI 用）。 */
-function membershipLabel(level: string | undefined): string {
+function membershipKey(level: string | undefined): string {
   switch (level) {
     case "lite":
-      return "LITE / 轻享";
+      return "dialogs:account.membership.lite";
     case "pro":
-      return "PRO / 专业";
+      return "dialogs:account.membership.pro";
     case "premium":
-      return "PREMIUM / 旗舰";
+      return "dialogs:account.membership.premium";
     case "free":
     default:
-      return "FREE / 免费";
+      return "dialogs:account.membership.free";
   }
 }
 
@@ -60,17 +60,17 @@ function Row({
 }
 
 export function AccountDialog({ open, onOpenChange }: Props) {
+  const { t, i18n } = useTranslation();
   const { user, profile, isAuthenticated, init, loaded, logout } = useAuthStore();
   const [loggingOut, setLoggingOut] = useState(false);
   const level = profile?.membershipLevel;
   const unlimited = isUnlimited(level);
-  // 文案按等级切：free/lite → "订阅 / 升级"；pro → "升级到 PREMIUM"；premium → "管理订阅"。
   const subscribeButtonLabel =
     level === "premium"
-      ? "管理订阅"
+      ? t("dialogs:account.subscribe_button.manage")
       : level === "pro"
-        ? "升级到 PREMIUM"
-        : "订阅 / 升级套餐";
+        ? t("dialogs:account.subscribe_button.upgrade_to_premium")
+        : t("dialogs:account.subscribe_button.default");
 
   // 首次打开面板时确保 store 已初始化（Rust 端 bootstrap 是异步的，
   // 这里再主动读一次最新状态）。
@@ -105,17 +105,17 @@ export function AccountDialog({ open, onOpenChange }: Props) {
       <DialogContent className="flex max-h-[88vh] min-h-[640px] w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0">
         <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
-            账户
+            {t("dialogs:account.title")}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            OpenSpeech 账户与订阅
+            {t("dialogs:account.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-5 py-5">
           {!loaded ? (
             <div className="py-10 text-center font-mono text-xs uppercase tracking-[0.25em] text-te-light-gray">
-              // 正在加载 //
+              {t("dialogs:account.loading")}
             </div>
           ) : (
             <>
@@ -124,32 +124,32 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                 <div className="mb-3 flex items-center gap-2">
                   <span className="h-px w-4 bg-te-accent" />
                   <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                    身份
+                    {t("dialogs:account.section.identity")}
                   </span>
                 </div>
-                <Row label="电子邮件">
+                <Row label={t("dialogs:account.row.email")}>
                   <span className="inline-flex items-center gap-2 font-mono text-sm text-te-fg">
                     <Mail className="size-3.5 text-te-light-gray" />
                     {emailDisplay}
                   </span>
                 </Row>
-                <Row label="订阅">
+                <Row label={t("dialogs:account.row.subscription")}>
                   <span className="inline-flex items-center gap-2 border border-te-accent/60 bg-te-accent/8 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.15em] text-te-accent">
                     <span className="size-1.5 bg-te-accent" />
-                    {membershipLabel(level)}
+                    {t(membershipKey(level))}
                   </span>
                 </Row>
                 {unlimited ? (
-                  <Row label="SaaS 调用">
+                  <Row label={t("dialogs:account.row.saas_calls")}>
                     <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-te-accent">
-                      无限 · 不扣积分
+                      {t("dialogs:account.unlimited")}
                     </span>
                   </Row>
                 ) : (
-                  <Row label="剩余积分">
+                  <Row label={t("dialogs:account.row.credits_balance")}>
                     <span className="font-mono text-sm tabular-nums text-te-fg">
                       {Math.round(profile?.creditsBalance ?? 0).toLocaleString(
-                        "zh-CN",
+                        i18n.language,
                       )}
                     </span>
                   </Row>
@@ -161,7 +161,7 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                 <div className="mb-3 flex items-center gap-2">
                   <span className="h-px w-4 bg-te-accent" />
                   <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                    订阅
+                    {t("dialogs:account.section.subscription")}
                   </span>
                 </div>
                 <button
@@ -174,8 +174,8 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                 </button>
                 <p className="mt-2 font-sans text-xs text-te-light-gray">
                   {unlimited
-                    ? "当前套餐在 OpenLoaf 站点统一管理。"
-                    : "在 OpenLoaf 网站购买 Pro 或 Premium 套餐后，OpenSpeech 云端调用即变为无限。"}
+                    ? t("dialogs:account.subscribe_hint.unlimited")
+                    : t("dialogs:account.subscribe_hint.default")}
                 </p>
               </div>
 
@@ -185,7 +185,7 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                   <div className="mb-3 flex items-center gap-2">
                     <span className="h-px w-4 bg-te-accent" />
                     <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                      充值积分
+                      {t("dialogs:account.section.recharge")}
                     </span>
                   </div>
                   <button
@@ -194,10 +194,10 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                     className="inline-flex w-full items-center justify-center gap-2 border border-te-gray px-4 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
                   >
                     <Gift className="size-4" />
-                    充值
+                    {t("dialogs:account.recharge_button")}
                   </button>
                   <p className="mt-2 font-sans text-xs text-te-light-gray">
-                    1 元 = 100 积分。不订阅套餐也可直接充值。
+                    {t("dialogs:account.recharge_hint")}
                   </p>
                 </div>
               ) : null}
@@ -207,7 +207,7 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                 <div className="mb-3 flex items-center gap-2">
                   <span className="h-px w-4 bg-te-accent" />
                   <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                    会话
+                    {t("dialogs:account.section.session")}
                   </span>
                 </div>
                 <button
@@ -217,10 +217,12 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                   className="inline-flex w-full items-center justify-center gap-2 border border-te-gray px-4 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:opacity-50"
                 >
                   <LogOut className="size-4" />
-                  {loggingOut ? "正在退出..." : "退出登录"}
+                  {loggingOut
+                    ? t("dialogs:account.logout_busy")
+                    : t("dialogs:account.logout_button")}
                 </button>
                 <p className="mt-2 font-sans text-xs text-te-light-gray">
-                  退出后将清除本地登录状态。本地录音、历史与词典将保留。
+                  {t("dialogs:account.logout_hint")}
                 </p>
               </div>
             </>

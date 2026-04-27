@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { Check, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HotkeyPreview } from "@/components/HotkeyPreview";
@@ -10,16 +11,6 @@ import { useRecordingStore, type RecordingState } from "@/stores/recording";
 // checklist 4 项基于 state 单调推进（preparing→1、recording 持续≥800ms→2、
 // transcribing→3、injecting 走完→4）。
 
-const FAKE_TRANSCRIPT_SLICES = [
-  "今",
-  "今天",
-  "今天天气",
-  "今天天气真好",
-  "今天天气真好，",
-  "今天天气真好，我打开",
-  "今天天气真好，我打开了 OpenSpeech",
-  "今天天气真好，我打开了 OpenSpeech 试试看。",
-];
 
 function fakeWaveform(seed: number, len = 60): number[] {
   return Array.from({ length: len }, (_, i) => {
@@ -31,13 +22,6 @@ function fakeWaveform(seed: number, len = 60): number[] {
 
 const SILENT_LEVELS = Array.from({ length: 60 }, () => 0);
 
-const CHECKLIST = [
-  "按一下听写快捷键开始",
-  "对着麦克风说一句话",
-  "再按一下结束",
-  "看到文字写入下方",
-] as const;
-
 type Source = "real" | "mock";
 
 export function StepTryIt({
@@ -45,10 +29,35 @@ export function StepTryIt({
 }: {
   onComplete: () => void;
 }) {
+  const { t } = useTranslation();
   // 真实流：订阅 useRecordingStore（与 Home 页面一致）。
   const realState = useRecordingStore((s) => s.state);
   const realLevels = useRecordingStore((s) => s.audioLevels);
   const realTranscript = useRecordingStore((s) => s.liveTranscript);
+
+  // 此步要让用户看到「实时出字」效果，必须走 AUTO（服务端 VAD + partial 回填）。
+  // 用户默认设置是 MANUAL，只在松手才出 Final，会让人误以为实时输出坏了。
+  // 仅在 Onboarding 这一步内覆盖，组件卸载即恢复用户原始偏好。
+  useEffect(() => {
+    const setOverride = useRecordingStore.getState().setSegmentModeOverride;
+    setOverride("AUTO");
+    return () => setOverride(null);
+  }, []);
+
+  const checklist = useMemo(
+    () => [
+      t("onboarding:try_it.checklist.step1"),
+      t("onboarding:try_it.checklist.step2"),
+      t("onboarding:try_it.checklist.step3"),
+      t("onboarding:try_it.checklist.step4"),
+    ],
+    [t],
+  );
+
+  const fakeTranscriptSlices = useMemo<string[]>(() => {
+    const arr = t("onboarding:try_it.mock_slices", { returnObjects: true });
+    return Array.isArray(arr) ? (arr as string[]) : [];
+  }, [t]);
 
   // 模拟流：本地状态机，仅在用户点"模拟一次"时驱动显示。
   const [mockActive, setMockActive] = useState(false);
@@ -150,10 +159,10 @@ export function StepTryIt({
     };
 
     at(220, () => setMockState("recording"));
-    FAKE_TRANSCRIPT_SLICES.forEach((slice, i) => {
+    fakeTranscriptSlices.forEach((slice, i) => {
       at(280 + i * 280, () => setMockTranscript(slice));
     });
-    const totalRecMs = 280 + FAKE_TRANSCRIPT_SLICES.length * 280;
+    const totalRecMs = 280 + fakeTranscriptSlices.length * 280;
     at(totalRecMs + 200, () => setMockState("transcribing"));
     at(totalRecMs + 700, () => setMockState("injecting"));
     at(totalRecMs + 1100, () => {
@@ -180,13 +189,13 @@ export function StepTryIt({
       >
         <div className="flex flex-col gap-2">
           <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-accent">
-            // step 03 / try it
+            {t("onboarding:try_it.section_tag")}
           </span>
           <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
-            试一次。
+            {t("onboarding:try_it.title")}
           </h2>
           <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
-            按一下下方快捷键开始 · 说一句话 · 再按一下结束
+            {t("onboarding:try_it.subhead")}
           </span>
         </div>
 
@@ -194,10 +203,10 @@ export function StepTryIt({
         <div className="grid flex-1 grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)] gap-3">
           <div className="flex flex-col gap-3 border border-te-gray/60 bg-te-surface p-4">
             <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-              // CHECKLIST
+              {t("onboarding:try_it.checklist_tag")}
             </span>
             <div className="flex flex-col gap-2.5">
-              {CHECKLIST.map((label, i) => {
+              {checklist.map((label, i) => {
                 const done = stepDone[i];
                 const active = !done && progress === i;
                 return (
@@ -233,8 +242,8 @@ export function StepTryIt({
             <div className="mt-auto border-t border-te-gray/40 pt-3">
               <HotkeyPreview
                 index="HOTKEY"
-                title="你的听写快捷键"
-                hint="单击开始 · 再按一次结束"
+                title={t("onboarding:try_it.hotkey_title")}
+                hint={t("onboarding:try_it.hotkey_hint")}
                 stack
               />
             </div>
@@ -253,10 +262,10 @@ export function StepTryIt({
             <PartyPopper className="size-4 shrink-0 text-te-accent" />
             <div className="flex flex-col gap-0.5">
               <span className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-te-accent">
-                配置完成，可以开始使用了
+                {t("onboarding:try_it.completed_title")}
               </span>
               <span className="font-sans text-xs text-te-fg/80">
-                正式使用时光标在哪个 App，文字就写到哪个 App。
+                {t("onboarding:try_it.completed_desc")}
               </span>
             </div>
           </div>
@@ -270,7 +279,7 @@ export function StepTryIt({
                 onClick={reset}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
               >
-                重置
+                {t("onboarding:try_it.reset")}
               </button>
             ) : null}
             <button
@@ -284,7 +293,9 @@ export function StepTryIt({
                   : "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent",
               )}
             >
-              {mockActive ? "演示中…" : "▶ 模拟一次"}
+              {mockActive
+                ? t("onboarding:try_it.mock_running")
+                : t("onboarding:try_it.mock_run")}
             </button>
             <button
               type="button"
@@ -296,7 +307,11 @@ export function StepTryIt({
                   : "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent",
               )}
             >
-              <span>{completed ? "完成引导" : "跳过并完成"}</span>
+              <span>
+                {completed
+                  ? t("onboarding:try_it.finish")
+                  : t("onboarding:try_it.skip_finish")}
+              </span>
               <Check className="size-3.5 transition-transform group-hover:translate-x-1" />
             </button>
           </div>
@@ -310,32 +325,41 @@ export function StepTryIt({
 /*  Step 4 实时面板：上 = 音频波形 / 下 = 实时转写文字                  */
 /* ──────────────────────────────────────────────────────────────── */
 
-function statusCopy(state: RecordingState): {
-  tag: string;
-  primary: string;
-  secondary?: string;
-} {
+function statusCopy(
+  state: RecordingState,
+  t: (k: string) => string,
+): { tag: string; primary: string; secondary?: string } {
   switch (state) {
     case "preparing":
-      return { tag: "// READY", primary: "开始说话…", secondary: "Esc 取消" };
+      return {
+        tag: t("onboarding:try_it.status.ready_tag"),
+        primary: t("onboarding:try_it.status.ready_primary"),
+        secondary: t("onboarding:try_it.status.ready_secondary"),
+      };
     case "recording":
       return {
-        tag: "// LISTENING",
-        primary: "再按一次快捷键 结束并转写",
-        secondary: "Esc 取消本次录音",
+        tag: t("onboarding:try_it.status.listening_tag"),
+        primary: t("onboarding:try_it.status.listening_primary"),
+        secondary: t("onboarding:try_it.status.listening_secondary"),
       };
     case "transcribing":
       return {
-        tag: "// TRANSCRIBING",
-        primary: "正在转写…",
-        secondary: "Esc 放弃这次结果",
+        tag: t("onboarding:try_it.status.transcribing_tag"),
+        primary: t("onboarding:try_it.status.transcribing_primary"),
+        secondary: t("onboarding:try_it.status.transcribing_secondary"),
       };
     case "injecting":
-      return { tag: "// INJECTING", primary: "正在写入输入框…" };
+      return {
+        tag: t("onboarding:try_it.status.injecting_tag"),
+        primary: t("onboarding:try_it.status.injecting_primary"),
+      };
     case "error":
-      return { tag: "// ERROR", primary: "出错了，检查日志或重试" };
+      return {
+        tag: t("onboarding:try_it.status.error_tag"),
+        primary: t("onboarding:try_it.status.error_primary"),
+      };
     default:
-      return { tag: "// IDLE", primary: "" };
+      return { tag: t("onboarding:try_it.status.idle_tag"), primary: "" };
   }
 }
 
@@ -346,7 +370,8 @@ function TryItAudioRow({
   state: RecordingState;
   audioLevels: number[];
 }) {
-  const { tag } = statusCopy(state);
+  const { t } = useTranslation();
+  const { tag } = statusCopy(state, t);
   const active = state === "preparing" || state === "recording";
   return (
     <div className="flex flex-col gap-2">
@@ -360,7 +385,7 @@ function TryItAudioRow({
           {tag}
         </span>
         <span className="font-mono text-[9px] uppercase tracking-widest text-te-light-gray">
-          AUDIO · {audioLevels.length} SAMPLES
+          {t("onboarding:try_it.samples_label", { count: audioLevels.length })}
         </span>
       </div>
       <div className="flex h-14 w-full items-center gap-[2px]">
@@ -389,7 +414,8 @@ function TryItTranscriptRow({
   state: RecordingState;
   transcript: string;
 }) {
-  const { primary, secondary } = statusCopy(state);
+  const { t } = useTranslation();
+  const { primary, secondary } = statusCopy(state, t);
   const hasText = transcript.trim().length > 0;
   const tone =
     state === "recording" || state === "preparing"
@@ -399,10 +425,12 @@ function TryItTranscriptRow({
     <div className="flex min-h-0 flex-col justify-between gap-2 border-t border-te-gray/40 pt-2">
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-          // LIVE TRANSCRIPT
+          {t("onboarding:try_it.live_transcript_tag")}
         </span>
         <span className="font-mono text-[9px] text-te-light-gray">
-          {hasText ? `${transcript.length} CHARS` : "—"}
+          {hasText
+            ? t("onboarding:try_it.transcript_chars", { count: transcript.length })
+            : "—"}
         </span>
       </div>
       <p
@@ -411,7 +439,7 @@ function TryItTranscriptRow({
           hasText ? tone : "text-te-fg/40",
         )}
       >
-        {hasText ? transcript : "实时转写文字将出现在这里…"}
+        {hasText ? transcript : t("onboarding:try_it.transcript_placeholder")}
       </p>
       <div className="flex flex-col gap-0.5">
         {primary ? (

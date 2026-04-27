@@ -1,0 +1,108 @@
+{
+  "aria": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "close_result": "Close result"
+  },
+  "status": {
+    "error_fallback": "Error"
+  },
+  "panel": {
+    "tag": {
+      "ready": "// READY",
+      "listening": "// LISTENING",
+      "transcribing": "// TRANSCRIBING",
+      "injecting": "// INJECTING",
+      "error": "// ERROR",
+      "idle": "// IDLE"
+    },
+    "primary": {
+      "ready": "Start speaking…",
+      "listening": "Press the hotkey again to stop and transcribe",
+      "transcribing": "Transcribing…",
+      "injecting": "Inserting into input…",
+      "error": "Something went wrong — check logs or retry",
+      "result": "Inserted into input · press the hotkey to dictate again"
+    },
+    "secondary": {
+      "ready": "Esc to cancel",
+      "listening": "Esc to cancel this recording",
+      "transcribing": "Esc to discard this result",
+      "result": "Or click ✕ to dismiss"
+    },
+    "placeholder": "Live transcript will appear here…",
+    "meter": {
+      "live": "LIVE",
+      "chars": "{{count}} CHARS",
+      "samples": "AUDIO · {{count}} SAMPLES"
+    }
+  },
+  "toast": {
+    "stt_start_failed": {
+      "title": "Live transcription didn't start",
+      "description": "{{reason}} · recording locally only"
+    },
+    "recording_start_failed": {
+      "title": "Failed to start recording"
+    },
+    "transcribe_failed": {
+      "title": "Transcription failed"
+    },
+    "no_transcript": {
+      "title": "No transcript received",
+      "description": "Server timeout or silence throughout"
+    },
+    "recording_save_failed": {
+      "title": "Failed to save recording"
+    },
+    "clipboard_failed": {
+      "title": "Failed to copy to clipboard"
+    },
+    "paste_failed": {
+      "title": "Auto-paste failed",
+      "description": "Text is on the clipboard — press Cmd/Ctrl+V manually"
+    },
+    "not_logged_in": {
+      "title": "Not signed in to OpenSpeech",
+      "description": "Sign in to use voice input",
+      "action": "Sign in"
+    },
+    "offline": {
+      "title": "No internet connection",
+      "description": "Check your network and try again"
+    },
+    "service_unreachable": {
+      "title": "Can't reach the service",
+      "description": "Network unreachable or server error — recording cancelled"
+    },
+    "asr_error": {
+      "title": "Transcription error",
+      "unknown": "Unknown error"
+    },
+    "insufficient_credits": {
+      "title": "Insufficient credits",
+      "description": "This transcription was cancelled — top up in your account",
+      "error_message": "Insufficient credits — transcription cancelled"
+    },
+    "session_timeout": {
+      "title": "Session timed out",
+      "description": "Reached the 2-hour server limit"
+    },
+    "esc_arm": {
+      "title": "Press ESC again to cancel",
+      "description": "Within 1.5 seconds"
+    }
+  },
+  "transcript": {
+    "placeholder": "(Transcript unavailable)"
+  },
+  "error": {
+    "stt_not_authenticated": "Not signed in to OpenLoaf",
+    "stt_5xx": "SaaS server error (5xx)",
+    "stt_4xx": "SaaS auth failed (4xx)",
+    "stt_mic_not_ready": "Microphone not ready",
+    "stt_network": "Network unreachable",
+    "register_failed": "Registration failed: {{id}} ({{error}})",
+    "sync_hotkey_failed": "Failed to sync hotkeys to Rust: {{error}}"
+  }
+}

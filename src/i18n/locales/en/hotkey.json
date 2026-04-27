@@ -1,0 +1,21 @@
+{
+  "binding": {
+    "dictate_ptt": "Dictation",
+    "ask_ai": "Ask AI",
+    "translate": "Translate"
+  },
+  "format": {
+    "unbound": "Unbound",
+    "double_tap": "2× {{mod}}"
+  },
+  "validation": {
+    "needs_main_key": "Needs to be combined with a main key",
+    "special_keys_locked": "Esc / Tab / Enter and similar keys require enabling them in advanced settings",
+    "needs_modifier": "Needs to be combined with a modifier key",
+    "fn_macos_only": "Fn is only reliable on macOS — use Ctrl + Win or Right Alt instead",
+    "modifier_only_no_main": "Modifier-only bindings can't include a main key",
+    "modifier_only_min": "At least one modifier key is required",
+    "double_tap_no_main": "Double-tap bindings can't include a main key",
+    "double_tap_single_mod": "Double-tap only supports a single modifier key"
+  }
+}

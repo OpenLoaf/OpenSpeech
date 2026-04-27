@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import {
   Dialog,
@@ -18,6 +19,7 @@ type Props = {
 // 打开期间订阅 window 'online' 事件——一旦恢复网络立即自动关闭，
 // 用户无需手动点 X，紧接着可以再按一次快捷键正常录音。
 export function NoInternetDialog({ open, onOpenChange }: Props) {
+  const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
   const [stillOffline, setStillOffline] = useState(false);
 
@@ -53,21 +55,21 @@ export function NoInternetDialog({ open, onOpenChange }: Props) {
         <DialogHeader className="flex flex-row items-center gap-2 border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
           <AlertCircle className="size-4 shrink-0 text-te-accent" aria-hidden />
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
-            没有互联网连接
+            {t("dialogs:no_internet.title")}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            您的计算机未连接到互联网，请检查网络后重试
+            {t("dialogs:no_internet.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="px-5 py-5">
           <p className="font-sans text-sm leading-relaxed text-te-light-gray">
-            您的计算机未连接到互联网。请检查网络连接后重试。
+            {t("dialogs:no_internet.body")}
           </p>
 
           {stillOffline ? (
             <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.18em] text-te-accent">
-              仍未检测到网络
+              {t("dialogs:no_internet.still_offline")}
             </p>
           ) : null}
 
@@ -87,7 +89,7 @@ export function NoInternetDialog({ open, onOpenChange }: Props) {
                 className={cn("size-3.5", retrying && "animate-spin")}
                 aria-hidden
               />
-              重试
+              {t("dialogs:no_internet.retry")}
             </button>
           </div>
         </div>

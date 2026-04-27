@@ -111,7 +111,10 @@ src/
 ├── pages/                      每页一个目录 + index.tsx
 │   └── Onboarding/             4 步引导（当前为 UI mock，未接业务）
 ├── stores/                     Zustand：hotkeys / recording / settings / ui / history / dictionary / playback
-├── lib/                        invoke 封装：audio / stt / secrets / db / ids / autostart / permissions
+├── lib/                        invoke 封装：audio / stt / secrets / db / ids / autostart / permissions / i18n-sync / errors
+├── i18n/
+│   ├── index.ts                i18next 初始化（auto-glob locales/*/*.json）
+│   └── locales/{zh-CN,zh-TW,en}/{common,settings,pages,onboarding,overlay,dialogs,errors,hotkey,tray}.json
 ├── router.tsx                  React Router v7 createBrowserRouter
 ├── App.css                     Tailwind v4 + shadcn vars + TE 双主题 vars
 └── main.tsx                    bootPromise 解析后切到 RouterProvider
@@ -159,8 +162,28 @@ src-tauri/
 - 路径别名 `@/` 已配；新建文件优先用 `@/...`。
 - Rust 新模块在 `src-tauri/src/<domain>/mod.rs`；`lib.rs` 只装配。
 - 任何面向用户的行为**先读 `docs/` 对应文件**，不要凭感觉实现。
-- 文案当前**硬编码中文**，i18next 已装但未启用；未来一次性迁移。
-  - 保留不翻：品牌词、按键名（`Fn / Ctrl / Space / Esc` 等）、技术缩写（`STT / API / WAV` 等）、专有名词（`Tauri / React / Whisper` 等）、TE 装饰性英文小标签。
+
+### i18n（zh-CN / zh-TW / en，已启用）
+
+> 真相来源：`src/i18n/index.ts` + `src/i18n/locales/{lang}/{ns}.json`。本节只讲源码读不出的规约。
+
+- **加载机制**：`import.meta.glob("./locales/*/*.json", { eager: true })` 编译期收齐所有 namespace。**新增 namespace 只需加 3 个语言下同名 json**，不必改 `index.ts`。
+- **defaultNS = `common`**：`actions / lang / value` 这类通用 key 写在 `common.json`，调用 `t("actions.cancel")` 不带前缀；其他 ns 一律 `t("ns:section.key")` 形式（如 `t("settings:lang.label")`）。
+- **语言来源唯一入口**：`useSettingsStore.general.interfaceLang`，类型 `LanguagePref = "system" | "zh-CN" | "zh-TW" | "en"`。**不要直接 `i18n.changeLanguage`**——一律 `setGeneral("interfaceLang", v)`，store 内会自动调 `syncI18nFromSettings`（`src/lib/i18n-sync.ts`）：切 i18n 当前语言 + 把翻好的托盘 labels 推给 Rust。
+- **托盘菜单文案前端推**：Rust 不嵌 i18n。`src-tauri/src/lib.rs` 的 `TrayLabels` 全局态由 invoke `update_tray_labels` 写入；空时英文兜底。tray.json 的 10 个 key 名固定，与 `src/lib/i18n-sync.ts::pushTrayLabels` 严格一致，**改 key 名两边一起改**。占位符用 `{{name}}` / `{{version}}`（双花括号，Rust 端 `replace` 用这个语法）。
+- **后端面向用户的字符串发 stable code，不发翻译文案**：如 `Err("AUTH_LOGIN_TIMEOUT".into())`。前端 `src/lib/errors.ts::translateBackendError` 做 code → `t("errors:auth.login_timeout")` 映射。**Rust 内部 log（`log::warn!` 等）保留中文/英文随意，不翻译**——日志不是用户面。
+- **保留不翻清单**（跨语言原样保留）：
+  - 品牌：`OpenSpeech / OpenLoaf / Tauri / React / Whisper / TypeLess / GitHub / shadcn / Apple / macOS / Windows / Linux`
+  - 按键名：`Fn / Ctrl / Cmd / Alt / Shift / Space / Esc / Tab / Enter / Caps`
+  - 技术缩写：`STT / API / WAV / PCM / VAD / ASR / LLM / SDK / OS / URL / Key / Token / WebSocket / REST / SaaS / BYO / TCC`
+  - **TE 装饰性全大写英文 mono 小标签**（section 标题如 `GENERAL` / `PERSONALIZATION`）—— 这是 TE 美学的一部分，跨语言保留有视觉统一感。
+- **新增文案的标准动作**：
+  1. 找最贴近的 ns（`common / settings / pages / onboarding / overlay / dialogs / errors / hotkey / tray`），不够再开新 ns。
+  2. zh-CN / zh-TW / en **同时**加，不要只加一个语言。
+  3. zh-TW 必须真正繁体化（"设置→設定 / 软件→軟體 / 录音→錄音 / 用户→使用者 / 网络→網路 / 保存→儲存 / 登录→登入"），按台湾正体习惯，不要简单繁简机翻。
+  4. en 用 sentence case，不要滥用 Title Case。
+- **不翻**：注释、`console.log/warn/error` / `log::*` / `tracing::*` 中的中文、import 路径、内部对比用的字面量。
+- **Zustand store / 非 React 模块** 用 `import i18n from "@/i18n"; i18n.t(...)`；React 组件用 `useTranslation` hook。
 
 ### 状态管理
 - 跨窗口持久化 → `tauri-plugin-store` 或 SQLite。

@@ -1,0 +1,108 @@
+{
+  "aria": {
+    "cancel": "取消",
+    "confirm": "確定",
+    "close_result": "關閉結果"
+  },
+  "status": {
+    "error_fallback": "錯誤"
+  },
+  "panel": {
+    "tag": {
+      "ready": "// READY",
+      "listening": "// LISTENING",
+      "transcribing": "// TRANSCRIBING",
+      "injecting": "// INJECTING",
+      "error": "// ERROR",
+      "idle": "// IDLE"
+    },
+    "primary": {
+      "ready": "開始說話…",
+      "listening": "再按一次快捷鍵 結束並轉寫",
+      "transcribing": "轉寫中…",
+      "injecting": "寫入輸入框中…",
+      "error": "發生錯誤，請檢查日誌或重試",
+      "result": "已寫入輸入框 · 按快捷鍵開始下一次"
+    },
+    "secondary": {
+      "ready": "Esc 取消",
+      "listening": "Esc 取消這次錄音",
+      "transcribing": "Esc 放棄這次結果",
+      "result": "或點擊 ✕ 關閉"
+    },
+    "placeholder": "即時轉寫文字將出現在這裡…",
+    "meter": {
+      "live": "LIVE",
+      "chars": "{{count}} CHARS",
+      "samples": "AUDIO · {{count}} SAMPLES"
+    }
+  },
+  "toast": {
+    "stt_start_failed": {
+      "title": "即時轉寫未啟動",
+      "description": "{{reason}} · 本次僅本機錄音"
+    },
+    "recording_start_failed": {
+      "title": "錄音啟動失敗"
+    },
+    "transcribe_failed": {
+      "title": "轉寫失敗"
+    },
+    "no_transcript": {
+      "title": "未取得轉寫結果",
+      "description": "伺服器逾時或全程靜音"
+    },
+    "recording_save_failed": {
+      "title": "錄音儲存失敗"
+    },
+    "clipboard_failed": {
+      "title": "複製到剪貼簿失敗"
+    },
+    "paste_failed": {
+      "title": "自動貼上失敗",
+      "description": "文字已複製，請手動按 Cmd/Ctrl+V"
+    },
+    "not_logged_in": {
+      "title": "尚未登入 OpenSpeech",
+      "description": "請登入後再使用語音輸入",
+      "action": "登入"
+    },
+    "offline": {
+      "title": "沒有網際網路連線",
+      "description": "請檢查網路後重試"
+    },
+    "service_unreachable": {
+      "title": "無法連線至服務",
+      "description": "網路不可達或伺服器異常，已取消本次錄音"
+    },
+    "asr_error": {
+      "title": "轉寫異常",
+      "unknown": "未知錯誤"
+    },
+    "insufficient_credits": {
+      "title": "餘額不足",
+      "description": "已取消本次轉寫，請前往帳戶頁儲值",
+      "error_message": "餘額不足，已取消本次轉寫"
+    },
+    "session_timeout": {
+      "title": "工作階段逾時",
+      "description": "達到 2 小時伺服器上限"
+    },
+    "esc_arm": {
+      "title": "再次按 ESC 取消",
+      "description": "1.5 秒內按下生效"
+    }
+  },
+  "transcript": {
+    "placeholder": "（未能取得轉寫結果）"
+  },
+  "error": {
+    "stt_not_authenticated": "尚未登入 OpenLoaf",
+    "stt_5xx": "SaaS 伺服器錯誤（5xx）",
+    "stt_4xx": "SaaS 驗證失敗（4xx）",
+    "stt_mic_not_ready": "麥克風尚未就緒",
+    "stt_network": "網路不可達",
+    "register_failed": "註冊失敗：{{id}}（{{error}}）",
+    "sync_hotkey_failed": "同步快捷鍵到 Rust 失敗：{{error}}"
+  }
+}

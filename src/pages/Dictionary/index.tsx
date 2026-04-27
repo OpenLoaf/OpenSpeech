@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { Feather, Pencil, Sparkles, Trash2 } from "lucide-react";
 import {
   Dialog,
@@ -14,13 +15,14 @@ import { useDictionaryStore, type DictEntry } from "@/stores/dictionary";
 
 type FilterKey = "all" | "auto" | "manual";
 
-const FILTERS: { key: FilterKey; label: string; Icon?: typeof Sparkles }[] = [
-  { key: "all", label: "全部" },
-  { key: "auto", label: "自动添加", Icon: Sparkles },
-  { key: "manual", label: "手动添加", Icon: Feather },
+const FILTERS: { key: FilterKey; Icon?: typeof Sparkles }[] = [
+  { key: "all" },
+  { key: "auto", Icon: Sparkles },
+  { key: "manual", Icon: Feather },
 ];
 
 export default function DictionaryPage() {
+  const { t } = useTranslation();
   const entries = useDictionaryStore((s) => s.entries);
   const addToDb = useDictionaryStore((s) => s.add);
   const removeFromDb = useDictionaryStore((s) => s.remove);
@@ -66,10 +68,10 @@ export default function DictionaryPage() {
           >
             <div data-tauri-drag-region>
               <h1 className="font-mono text-3xl font-bold tracking-tighter text-te-fg">
-                词典
+                {t("pages:dictionary.title")}
               </h1>
               <p className="mt-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray">
-                自定义词汇 · 最多 2,000 条
+                {t("pages:dictionary.subtitle")}
               </p>
             </div>
 
@@ -79,7 +81,7 @@ export default function DictionaryPage() {
               onClick={() => setNewOpen(true)}
               className="shrink-0 bg-te-accent px-4 py-2 font-mono text-xs uppercase tracking-wider text-te-accent-fg transition-[filter] hover:brightness-110"
             >
-              + 新词
+              {t("pages:dictionary.new_word")}
             </button>
           </motion.div>
         </div>
@@ -101,7 +103,7 @@ export default function DictionaryPage() {
                   }`}
                 >
                   {f.Icon ? <f.Icon className="size-3.5" /> : null}
-                  <span>{f.label}</span>
+                  <span>{t(`pages:dictionary.filters.${f.key}`)}</span>
                   {active ? (
                     <motion.span
                       layoutId="dict-filter-underline"
@@ -116,7 +118,7 @@ export default function DictionaryPage() {
           <SearchBox
             value={query}
             onChange={setQuery}
-            placeholder="搜索词条..."
+            placeholder={t("pages:dictionary.search_placeholder")}
           />
         </div>
       </div>
@@ -131,7 +133,7 @@ export default function DictionaryPage() {
               animate={{ opacity: 1 }}
               transition={{ duration: 0.4 }}
             >
-              // 暂无词条 //
+              {t("pages:dictionary.empty")}
             </motion.div>
           ) : (
             <>
@@ -149,7 +151,9 @@ export default function DictionaryPage() {
               </div>
 
               <div className="mt-10 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
-                // 共 {filtered.length.toString().padStart(3, "0")} 条 //
+                {t("pages:dictionary.count_total", {
+                  count: filtered.length.toString().padStart(3, "0"),
+                })}
               </div>
             </>
           )}
@@ -181,6 +185,7 @@ function NewWordDialog({
   onAdd,
   existingTerms,
 }: NewWordDialogProps) {
+  const { t } = useTranslation();
   const [term, setTerm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -200,11 +205,11 @@ function NewWordDialog({
     if (submitting) return;
     const normalized = term.trim().replace(/\s+/g, " ");
     if (!normalized) {
-      setError("term 不能为空");
+      setError(t("pages:dictionary.new_dialog.error_empty"));
       return;
     }
     if (existingTerms.includes(normalized.toLowerCase())) {
-      setError("该词条已存在");
+      setError(t("pages:dictionary.new_dialog.error_duplicate"));
       return;
     }
     setSubmitting(true);
@@ -223,17 +228,18 @@ function NewWordDialog({
       <DialogContent className="!gap-0 rounded-none border border-te-gray bg-te-bg p-0 sm:max-w-md">
         <DialogHeader className="border-b border-te-gray/40 bg-te-surface-hover px-4 py-3">
           <DialogTitle className="font-mono text-sm font-bold tracking-tighter text-te-fg uppercase">
-            新词
+            {t("pages:dictionary.new_dialog.title")}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            添加自定义词典条目
+            {t("pages:dictionary.new_dialog.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 px-4 py-5">
           <label className="flex flex-col gap-1.5">
             <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-              term <span className="text-te-accent">*</span>
+              {t("pages:dictionary.new_dialog.term_label")}{" "}
+              <span className="text-te-accent">*</span>
             </span>
             <input
               autoFocus
@@ -246,7 +252,7 @@ function NewWordDialog({
               onKeyDown={(e) => {
                 if (e.key === "Enter") void submit();
               }}
-              placeholder="例如 OpenSpeech"
+              placeholder={t("pages:dictionary.new_dialog.term_placeholder")}
               className="border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg placeholder:text-te-light-gray focus:border-te-accent focus:outline-none"
             />
           </label>
@@ -264,7 +270,7 @@ function NewWordDialog({
             onClick={() => handleOpenChange(false)}
             className="border border-te-gray/60 px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
           >
-            取消
+            {t("actions.cancel")}
           </button>
           <button
             type="button"
@@ -272,7 +278,9 @@ function NewWordDialog({
             disabled={submitting}
             className="bg-te-accent px-4 py-1.5 font-mono text-xs uppercase tracking-wider text-te-accent-fg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {submitting ? "添加中…" : "添加"}
+            {submitting
+              ? t("pages:dictionary.new_dialog.submitting")
+              : t("pages:dictionary.new_dialog.submit")}
           </button>
         </DialogFooter>
       </DialogContent>
@@ -289,6 +297,7 @@ interface EntryCardProps {
 }
 
 function EntryCard({ entry, index, onDelete }: EntryCardProps) {
+  const { t } = useTranslation();
   const tip = entry.aliases?.length
     ? `${entry.term} · ${entry.aliases.join(" · ")}`
     : entry.term;
@@ -303,7 +312,11 @@ function EntryCard({ entry, index, onDelete }: EntryCardProps) {
     >
       <span
         className="shrink-0 text-te-light-gray"
-        title={entry.source === "auto" ? "自动添加" : "手动添加"}
+        title={
+          entry.source === "auto"
+            ? t("pages:dictionary.card.auto_tooltip")
+            : t("pages:dictionary.card.manual_tooltip")
+        }
       >
         {entry.source === "auto" ? (
           <Sparkles className="size-3.5" />
@@ -322,16 +335,16 @@ function EntryCard({ entry, index, onDelete }: EntryCardProps) {
       <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
         <button
           type="button"
-          aria-label="编辑"
-          title="编辑"
+          aria-label={t("pages:dictionary.card.edit")}
+          title={t("pages:dictionary.card.edit")}
           className="inline-flex size-6 items-center justify-center text-te-light-gray transition-colors hover:text-te-accent"
         >
           <Pencil className="size-3.5" />
         </button>
         <button
           type="button"
-          aria-label="删除"
-          title="删除"
+          aria-label={t("pages:dictionary.card.delete")}
+          title={t("pages:dictionary.card.delete")}
           onClick={onDelete}
           className="inline-flex size-6 items-center justify-center text-te-light-gray transition-colors hover:text-te-accent"
         >

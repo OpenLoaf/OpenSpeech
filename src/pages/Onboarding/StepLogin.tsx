@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type FC } from "react";
+import { useEffect, useMemo, useRef, useState, type FC } from "react";
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { ArrowRight, Loader2, Sparkles, ServerCog } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore, type LoginProvider } from "@/stores/auth";
@@ -9,20 +10,23 @@ import { useUIStore } from "@/stores/ui";
 // startLogin → 拉起浏览器 → 用户授权 → Rust emit success → isAuthenticated=true
 // → 这里 effect 自动跳下一步。失败显示错误并允许重试。
 
-// 与 LoginDialog 同款：raw 错误清洗成短中文。
-function friendlyLoginError(raw: string | null): string {
-  if (!raw) return "登录失败，请重试";
+function friendlyLoginError(
+  raw: string | null,
+  t: (k: string) => string,
+): string {
+  if (!raw) return t("onboarding:login.error_default");
   const m = raw.toLowerCase();
-  if (m.includes("connection reset")) return "登录服务器连接被重置，请重试";
-  if (m.includes("timed out") || m.includes("timeout")) return "登录超时，请重试";
+  if (m.includes("connection reset")) return t("onboarding:login.error_reset");
+  if (m.includes("timed out") || m.includes("timeout"))
+    return t("onboarding:login.error_timeout");
   if (
     m.includes("connection refused") ||
     m.includes("dns") ||
     m.includes("error sending request") ||
     m.includes("network error")
   )
-    return "无法连接登录服务器，请检查网络后重试";
-  return "登录失败，请重试";
+    return t("onboarding:login.error_network");
+  return t("onboarding:login.error_default");
 }
 
 function GoogleIcon({ className }: { className?: string }) {
@@ -56,21 +60,19 @@ function WechatIcon({ className }: { className?: string }) {
   );
 }
 
-const METHODS: Array<{
+type LoginMethod = {
   id: LoginProvider;
   label: string;
   sub: string;
   Icon: FC<{ className?: string }>;
-}> = [
-  { id: "wechat", label: "微信登录", sub: "扫码即可登录", Icon: WechatIcon },
-  { id: "google", label: "Google 登录", sub: "浏览器跳转登录", Icon: GoogleIcon },
-];
+};
 
 export function StepLogin({
   onNext,
 }: {
   onNext: () => void;
 }) {
+  const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const loginStatus = useAuthStore((s) => s.loginStatus);
   const loginError = useAuthStore((s) => s.loginError);
@@ -79,6 +81,24 @@ export function StepLogin({
 
   const [pending, setPending] = useState<LoginProvider | null>(null);
   const [advanced, setAdvanced] = useState(false);
+
+  const methods = useMemo<LoginMethod[]>(
+    () => [
+      {
+        id: "wechat",
+        label: t("onboarding:login.method_wechat_label"),
+        sub: t("onboarding:login.method_wechat_sub"),
+        Icon: WechatIcon,
+      },
+      {
+        id: "google",
+        label: t("onboarding:login.method_google_label"),
+        sub: t("onboarding:login.method_google_sub"),
+        Icon: GoogleIcon,
+      },
+    ],
+    [t],
+  );
 
   // 登录成功 → 自动进入下一步。延迟 600ms 让用户看到"登录成功"状态。
   useEffect(() => {
@@ -122,10 +142,10 @@ export function StepLogin({
   };
 
   const statusLabel = (() => {
-    if (isAuthenticated) return "登录成功，正在进入下一步…";
-    if (loginStatus === "opening") return "正在打开浏览器…";
-    if (loginStatus === "polling") return "等待在浏览器完成授权…";
-    if (loginStatus === "error") return friendlyLoginError(loginError);
+    if (isAuthenticated) return t("onboarding:login.status_success");
+    if (loginStatus === "opening") return t("onboarding:login.status_opening");
+    if (loginStatus === "polling") return t("onboarding:login.status_polling");
+    if (loginStatus === "error") return friendlyLoginError(loginError, t);
     return null;
   })();
   const statusTone =
@@ -145,24 +165,28 @@ export function StepLogin({
       >
         <div className="flex flex-col items-center gap-2 text-center">
           <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-accent">
-            // step 02 / account
+            {t("onboarding:login.section_tag")}
           </span>
           <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
-            登录 OpenLoaf 账号
+            {t("onboarding:login.title")}
           </h2>
           <div className="inline-flex w-fit items-center gap-2 border border-te-accent/40 bg-te-accent/5 px-3 py-1.5">
             <Sparkles className="size-3.5 shrink-0 text-te-accent" />
             <span className="font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-te-accent">
-              新用户立即到账 200 积分
+              {t("onboarding:login.bonus_main")}
             </span>
             <span className="font-sans text-xs text-te-light-gray">
-              · 约 <span className="font-mono text-te-fg">30 分钟</span> 语音
+              {t("onboarding:login.bonus_minutes_prefix")}{" "}
+              <span className="font-mono text-te-fg">
+                {t("onboarding:login.bonus_minutes_value")}
+              </span>{" "}
+              {t("onboarding:login.bonus_minutes_suffix")}
             </span>
           </div>
         </div>
 
         <div className="mt-8 flex flex-col gap-6">
-          {METHODS.map((m) => {
+          {methods.map((m) => {
             const loading = pending === m.id && isBusy;
             const success = pending === m.id && isAuthenticated;
             const disabled = (isBusy && !loading) || (isAuthenticated && !success);
@@ -226,7 +250,7 @@ export function StepLogin({
                   onClick={() => void cancelLogin()}
                   className="ml-3 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray underline-offset-4 transition-colors hover:text-te-fg hover:underline"
                 >
-                  取消
+                  {t("onboarding:login.cancel")}
                 </button>
               ) : null}
             </div>
@@ -239,15 +263,16 @@ export function StepLogin({
             onClick={() => setAdvanced((v) => !v)}
             className="px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray underline-offset-4 transition-colors hover:text-te-fg hover:underline"
           >
-            {advanced ? "↑ 收起" : "↓ 我有自己的 STT 端点"}
+            {advanced
+              ? t("onboarding:login.advanced_collapse")
+              : t("onboarding:login.advanced_expand")}
           </button>
         </div>
 
         {advanced ? (
           <div className="flex flex-col gap-2 border border-te-gray/60 bg-te-surface p-3">
             <p className="font-sans text-xs leading-snug text-te-light-gray">
-              配置自定义 REST STT 端点（OpenAI / Groq / Deepgram / 自部署）。
-              此选项仅推荐给开发者；普通用户请用上方账号登录。
+              {t("onboarding:login.advanced_desc")}
             </p>
             <button
               type="button"
@@ -257,7 +282,8 @@ export function StepLogin({
               }}
               className="inline-flex items-center gap-2 self-start border border-te-gray px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
             >
-              <ServerCog className="size-3" /> 跳过登录，去配置自定义端点
+              <ServerCog className="size-3" />{" "}
+              {t("onboarding:login.advanced_cta")}
             </button>
           </div>
         ) : null}

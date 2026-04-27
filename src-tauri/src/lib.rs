@@ -5,6 +5,7 @@
 // 必须 crate 级 inner attribute 才生效。upstream 不再维护，无法通过升级解决。
 #![allow(unexpected_cfgs)]
 
+use std::sync::Mutex;
 use tauri::{
     Emitter, Manager, Runtime, WindowEvent,
     menu::{
@@ -40,6 +41,60 @@ const TRAY_CHECK_UPDATE_EVENT: &str = "openspeech://tray-check-update";
 const TRAY_SELECT_MIC_EVENT: &str = "openspeech://tray-select-mic";
 // 反馈入口 MVP 走邮件，未来迁到网站可改常量。
 const FEEDBACK_URL: &str = "mailto:feedback@openspeech.app";
+
+// 托盘菜单文案：Rust 不嵌 i18n，文案完全由前端按当前语言推过来。bootPromise 完成后
+// 前端 syncI18nFromSettings 会调用 update_tray_labels 一次；之后切语言再推。空槽位
+// 用英文兜底（首次启动 / 前端未来得及推）。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TrayLabels {
+    pub feedback: String,
+    pub open_home: String,
+    pub open_settings: String,
+    pub mic_submenu: String,
+    pub auto_detect: String,
+    // "Auto-detect ({name})" 模板里的前缀，用于显示当前默认设备名。
+    pub auto_detect_with_name: String,
+    pub open_dictionary: String,
+    pub version_prefix: String,
+    pub check_update: String,
+    pub quit: String,
+}
+
+impl Default for TrayLabels {
+    fn default() -> Self {
+        Self {
+            feedback: "Feedback".into(),
+            open_home: "Open OpenSpeech".into(),
+            open_settings: "Settings…".into(),
+            mic_submenu: "Microphone".into(),
+            auto_detect: "Auto-detect".into(),
+            auto_detect_with_name: "Auto-detect ({{name}})".into(),
+            open_dictionary: "Add to dictionary".into(),
+            version_prefix: "Version {{version}}".into(),
+            check_update: "Check for updates".into(),
+            quit: "Quit OpenSpeech".into(),
+        }
+    }
+}
+
+static TRAY_LABELS: Mutex<Option<TrayLabels>> = Mutex::new(None);
+
+fn current_tray_labels() -> TrayLabels {
+    TRAY_LABELS
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn update_tray_labels(app: tauri::AppHandle, labels: TrayLabels) {
+    if let Ok(mut g) = TRAY_LABELS.lock() {
+        *g = Some(labels);
+    }
+    rebuild_tray_menu(&app);
+}
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -192,16 +247,18 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
     let current = read_input_device_from_store(app);
     let version = app.package_info().version.to_string();
 
-    let feedback = MenuItemBuilder::with_id("tray::feedback", "反馈意见").build(app)?;
-    let home = MenuItemBuilder::with_id("tray::open_home", "打开 OpenSpeech 主页").build(app)?;
-    let settings = MenuItemBuilder::with_id("tray::open_settings", "设置...")
+    let labels = current_tray_labels();
+
+    let feedback = MenuItemBuilder::with_id("tray::feedback", &labels.feedback).build(app)?;
+    let home = MenuItemBuilder::with_id("tray::open_home", &labels.open_home).build(app)?;
+    let settings = MenuItemBuilder::with_id("tray::open_settings", &labels.open_settings)
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
 
-    // Auto-detect 项附系统默认设备名做提示（例："Auto-detect (UGREEN CM564 USB Audio)"）。
+    // Auto-detect 项附系统默认设备名做提示，模板 "Auto-detect ({{name}})" 由前端按当前语言提供。
     let auto_label = match devices.iter().find(|d| d.is_default).map(|d| d.name.clone()) {
-        Some(n) => format!("Auto-detect ({})", n),
-        None => "Auto-detect".to_string(),
+        Some(n) => labels.auto_detect_with_name.replace("{{name}}", &n),
+        None => labels.auto_detect.clone(),
     };
     let auto_item = CheckMenuItemBuilder::with_id("tray::mic::__auto__", auto_label)
         .checked(current.is_none())
@@ -217,7 +274,7 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
         mic_items.push(item);
     }
 
-    let mut mic_builder = SubmenuBuilder::new(app, "选择麦克风").item(&auto_item);
+    let mut mic_builder = SubmenuBuilder::new(app, &labels.mic_submenu).item(&auto_item);
     if !mic_items.is_empty() {
         mic_builder = mic_builder.item(&PredefinedMenuItem::separator(app)?);
     }
@@ -226,12 +283,13 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
     }
     let mic_submenu = mic_builder.build()?;
 
-    let dict = MenuItemBuilder::with_id("tray::open_dictionary", "将词汇添加到词典").build(app)?;
-    let version_item = MenuItemBuilder::with_id("tray::version", format!("版本 {version}"))
+    let dict = MenuItemBuilder::with_id("tray::open_dictionary", &labels.open_dictionary).build(app)?;
+    let version_label = labels.version_prefix.replace("{{version}}", &version);
+    let version_item = MenuItemBuilder::with_id("tray::version", version_label)
         .enabled(false)
         .build(app)?;
-    let check_update = MenuItemBuilder::with_id("tray::check_update", "检查更新").build(app)?;
-    let quit = MenuItemBuilder::with_id("tray::quit", "退出 OpenSpeech")
+    let check_update = MenuItemBuilder::with_id("tray::check_update", &labels.check_update).build(app)?;
+    let quit = MenuItemBuilder::with_id("tray::quit", &labels.quit)
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
 
@@ -548,6 +606,7 @@ pub fn run() {
             hide_to_tray,
             show_main_window_cmd,
             tray_refresh,
+            update_tray_labels,
             sync_dock_icon,
             open_network_settings,
             hotkey::apply_hotkey_config,

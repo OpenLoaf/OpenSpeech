@@ -1,0 +1,100 @@
+{
+  "login": {
+    "title": "Sign in to OpenLoaf",
+    "description": "Choose a sign-in method to continue",
+    "subtitle": {
+      "idle": "Choose how you'd like to sign in",
+      "opening": "Opening your browser...",
+      "polling": "Waiting for you to finish in the browser",
+      "success": "Signed in"
+    },
+    "providers": {
+      "wechat": "Continue with WeChat",
+      "google": "Continue with Google"
+    },
+    "or": "OR",
+    "byo_button": "Use your own STT endpoint",
+    "byo_hint": "Don't want to sign in to OpenLoaf? Point OpenSpeech at your own STT REST endpoint and audio stays local — never routed through our cloud.",
+    "retry": "Retry",
+    "close": "Close",
+    "cancel": "Cancel sign-in",
+    "details_show": "Show details",
+    "details_hide": "Hide details"
+  },
+  "account": {
+    "title": "Account",
+    "description": "OpenSpeech account and subscription",
+    "loading": "// loading //",
+    "section": {
+      "identity": "Identity",
+      "subscription": "Subscription",
+      "recharge": "Top up credits",
+      "session": "Session"
+    },
+    "row": {
+      "email": "Email",
+      "subscription": "Plan",
+      "saas_calls": "SaaS calls",
+      "credits_balance": "Credit balance"
+    },
+    "membership": {
+      "free": "FREE",
+      "lite": "LITE",
+      "pro": "PRO",
+      "premium": "PREMIUM"
+    },
+    "unlimited": "Unlimited · no credit charge",
+    "subscribe_button": {
+      "default": "Subscribe / upgrade plan",
+      "upgrade_to_premium": "Upgrade to PREMIUM",
+      "manage": "Manage subscription"
+    },
+    "subscribe_hint": {
+      "default": "After buying Pro or Premium on the OpenLoaf site, OpenSpeech cloud calls become unlimited.",
+      "unlimited": "Your plan is managed on the OpenLoaf website."
+    },
+    "recharge_button": "Top up",
+    "recharge_hint": "1 CNY = 100 credits. You can top up without subscribing to a plan.",
+    "logout_button": "Sign out",
+    "logout_busy": "Signing out...",
+    "logout_hint": "Signing out clears your local sign-in state. Local recordings, history and dictionary are kept."
+  },
+  "close_to_bg": {
+    "title": "Close to background",
+    "description": "OpenSpeech is about to close the main window. The app will keep running in the background.",
+    "body_1_prefix": "OpenSpeech will keep running in the ",
+    "body_1_highlight": "background",
+    "body_1_suffix": ". Global hotkeys remain available.",
+    "body_2": "Reopen the main window from the tray icon, or choose \"Quit\" to fully exit.",
+    "remember": "Don't ask again",
+    "quit": "Quit OpenSpeech",
+    "stay": "Keep running in background"
+  },
+  "no_internet": {
+    "title": "No internet connection",
+    "description": "Your computer is offline. Check your network and try again.",
+    "body": "Your computer isn't connected to the internet. Check your network and try again.",
+    "still_offline": "Still offline",
+    "retry": "Retry"
+  },
+  "hotkey_field": {
+    "press_new": "Press a new hotkey...",
+    "clear_title": "Clear",
+    "clear_aria": "Clear hotkey",
+    "error_prefix": "ERROR",
+    "error_illegal_combo": "Illegal combination",
+    "conflict_with": "Already used by \"{{name}}\"",
+    "replace": "Replace",
+    "cancel": "Cancel"
+  },
+  "hotkey_preview": {
+    "default_title": "Dictation hotkey / PUSH-TO-TALK",
+    "unbound": "Unbound",
+    "default_hint": "Tap to start · tap again to stop"
+  },
+  "loading_screen": {
+    "initializing": "INITIALIZING",
+    "tagline": "Speak less, write more.",
+    "loading": "Loading"
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "login": {
+    "title": "登入 OpenLoaf",
+    "description": "選擇一種登入方式以繼續",
+    "subtitle": {
+      "idle": "選擇登入方式繼續",
+      "opening": "正在開啟瀏覽器...",
+      "polling": "等待在瀏覽器完成授權",
+      "success": "登入成功"
+    },
+    "providers": {
+      "wechat": "使用微信登入",
+      "google": "使用 Google 登入"
+    },
+    "or": "或",
+    "byo_button": "使用自己的 STT 端點",
+    "byo_hint": "不想登入 OpenLoaf？填寫你自己的 STT REST 端點，音訊從本機直發，不經雲端。",
+    "retry": "重試",
+    "close": "關閉",
+    "cancel": "取消登入",
+    "details_show": "檢視詳情",
+    "details_hide": "收起詳情"
+  },
+  "account": {
+    "title": "帳戶",
+    "description": "OpenSpeech 帳戶與訂閱",
+    "loading": "// 載入中 //",
+    "section": {
+      "identity": "身分",
+      "subscription": "訂閱",
+      "recharge": "儲值積分",
+      "session": "工作階段"
+    },
+    "row": {
+      "email": "電子郵件",
+      "subscription": "訂閱",
+      "saas_calls": "SaaS 呼叫",
+      "credits_balance": "剩餘積分"
+    },
+    "membership": {
+      "free": "FREE / 免費",
+      "lite": "LITE / 輕享",
+      "pro": "PRO / 專業",
+      "premium": "PREMIUM / 旗艦"
+    },
+    "unlimited": "無限 · 不扣積分",
+    "subscribe_button": {
+      "default": "訂閱 / 升級方案",
+      "upgrade_to_premium": "升級到 PREMIUM",
+      "manage": "管理訂閱"
+    },
+    "subscribe_hint": {
+      "default": "在 OpenLoaf 網站購買 Pro 或 Premium 方案後，OpenSpeech 雲端呼叫即變為無限。",
+      "unlimited": "目前方案在 OpenLoaf 站點統一管理。"
+    },
+    "recharge_button": "儲值",
+    "recharge_hint": "1 元 = 100 積分。不訂閱方案也可直接儲值。",
+    "logout_button": "登出",
+    "logout_busy": "正在登出...",
+    "logout_hint": "登出後將清除本機登入狀態。本機錄音、歷史與字典將保留。"
+  },
+  "close_to_bg": {
+    "title": "關閉到背景",
+    "description": "OpenSpeech 即將關閉主視窗，應用程式將繼續在背景執行",
+    "body_1_prefix": "OpenSpeech 將繼續在 ",
+    "body_1_highlight": "背景",
+    "body_1_suffix": " 執行，全域快速鍵仍然可用。",
+    "body_2": "可透過系統工具列圖示重新開啟主視窗，或選擇「結束」完全結束處理程序。",
+    "remember": "不再提示",
+    "quit": "結束 OpenSpeech",
+    "stay": "繼續在背景執行"
+  },
+  "no_internet": {
+    "title": "沒有網際網路連線",
+    "description": "您的電腦未連線到網際網路，請檢查網路後重試",
+    "body": "您的電腦未連線到網際網路。請檢查網路連線後重試。",
+    "still_offline": "仍未偵測到網路",
+    "retry": "重試"
+  },
+  "hotkey_field": {
+    "press_new": "按下新快速鍵...",
+    "clear_title": "清除",
+    "clear_aria": "清除快速鍵",
+    "error_prefix": "ERROR",
+    "error_illegal_combo": "非法組合",
+    "conflict_with": "此組合已被「{{name}}」使用",
+    "replace": "取代",
+    "cancel": "取消"
+  },
+  "hotkey_preview": {
+    "default_title": "聽寫快速鍵 / PUSH-TO-TALK",
+    "unbound": "未繫結",
+    "default_hint": "單擊開始 · 再按一次結束"
+  },
+  "loading_screen": {
+    "initializing": "INITIALIZING",
+    "tagline": "Speak less, write more.",
+    "loading": "Loading"
+  }
+}

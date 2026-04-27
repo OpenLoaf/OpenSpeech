@@ -1,0 +1,100 @@
+{
+  "login": {
+    "title": "登录 OpenLoaf",
+    "description": "选择一种登录方式以继续",
+    "subtitle": {
+      "idle": "选择登录方式继续",
+      "opening": "正在打开浏览器...",
+      "polling": "等待在浏览器完成授权",
+      "success": "登录成功"
+    },
+    "providers": {
+      "wechat": "使用微信登录",
+      "google": "使用 Google 登录"
+    },
+    "or": "或",
+    "byo_button": "使用自己的 STT 端点",
+    "byo_hint": "不想登录 OpenLoaf？填写你自己的 STT REST 端点，音频从本机直发，不经云端。",
+    "retry": "重试",
+    "close": "关闭",
+    "cancel": "取消登录",
+    "details_show": "查看详情",
+    "details_hide": "收起详情"
+  },
+  "account": {
+    "title": "账户",
+    "description": "OpenSpeech 账户与订阅",
+    "loading": "// 正在加载 //",
+    "section": {
+      "identity": "身份",
+      "subscription": "订阅",
+      "recharge": "充值积分",
+      "session": "会话"
+    },
+    "row": {
+      "email": "电子邮件",
+      "subscription": "订阅",
+      "saas_calls": "SaaS 调用",
+      "credits_balance": "剩余积分"
+    },
+    "membership": {
+      "free": "FREE / 免费",
+      "lite": "LITE / 轻享",
+      "pro": "PRO / 专业",
+      "premium": "PREMIUM / 旗舰"
+    },
+    "unlimited": "无限 · 不扣积分",
+    "subscribe_button": {
+      "default": "订阅 / 升级套餐",
+      "upgrade_to_premium": "升级到 PREMIUM",
+      "manage": "管理订阅"
+    },
+    "subscribe_hint": {
+      "default": "在 OpenLoaf 网站购买 Pro 或 Premium 套餐后，OpenSpeech 云端调用即变为无限。",
+      "unlimited": "当前套餐在 OpenLoaf 站点统一管理。"
+    },
+    "recharge_button": "充值",
+    "recharge_hint": "1 元 = 100 积分。不订阅套餐也可直接充值。",
+    "logout_button": "退出登录",
+    "logout_busy": "正在退出...",
+    "logout_hint": "退出后将清除本地登录状态。本地录音、历史与词典将保留。"
+  },
+  "close_to_bg": {
+    "title": "关闭到后台",
+    "description": "OpenSpeech 即将关闭主窗口，应用将继续在后台运行",
+    "body_1_prefix": "OpenSpeech 将继续在 ",
+    "body_1_highlight": "后台",
+    "body_1_suffix": " 运行，全局快捷键仍然可用。",
+    "body_2": "可通过系统托盘图标重新打开主窗口，或选择「退出」完全结束进程。",
+    "remember": "不再提醒",
+    "quit": "退出 OpenSpeech",
+    "stay": "继续在后台运行"
+  },
+  "no_internet": {
+    "title": "没有互联网连接",
+    "description": "您的计算机未连接到互联网，请检查网络后重试",
+    "body": "您的计算机未连接到互联网。请检查网络连接后重试。",
+    "still_offline": "仍未检测到网络",
+    "retry": "重试"
+  },
+  "hotkey_field": {
+    "press_new": "按下新快捷键...",
+    "clear_title": "清除",
+    "clear_aria": "清除快捷键",
+    "error_prefix": "ERROR",
+    "error_illegal_combo": "非法组合",
+    "conflict_with": "此组合已被「{{name}}」使用",
+    "replace": "替换",
+    "cancel": "取消"
+  },
+  "hotkey_preview": {
+    "default_title": "听写快捷键 / PUSH-TO-TALK",
+    "unbound": "未绑定",
+    "default_hint": "单击开始 · 再按一次结束"
+  },
+  "loading_screen": {
+    "initializing": "INITIALIZING",
+    "tagline": "Speak less, write more.",
+    "loading": "Loading"
+  }
+}

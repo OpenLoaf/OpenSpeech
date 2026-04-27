@@ -1,10 +1,12 @@
 import { create } from "zustand";
 import { Store } from "@tauri-apps/plugin-store";
+import { syncI18nFromSettings } from "@/lib/i18n-sync";
+import type { LanguagePref } from "@/i18n";
 
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
 export type InjectMethod = "CLIPBOARD + PASTE" | "SIMULATE KEYBOARD";
@@ -22,7 +24,7 @@ export type DictationMode = "REALTIME" | "AI";
 export type AsrSegmentMode = "AUTO" | "MANUAL";
 
 export interface GeneralSettings {
-  interfaceLang: string;
+  interfaceLang: LanguagePref;
   dictationLang: string;
   dictationMode: DictationMode;
   translationTarget: string;
@@ -76,7 +78,7 @@ interface PersistShape {
 }
 
 const DEFAULT_GENERAL: GeneralSettings = {
-  interfaceLang: "跟随系统",
+  interfaceLang: "system",
   dictationLang: "自动检测",
   dictationMode: "AI",
   translationTarget: "EN",
@@ -166,6 +168,16 @@ function migrateV2(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
   return { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: "MANUAL" };
 }
 
+// v3 → v4：interfaceLang 由 UI 文案字符串改为稳定 code（system / zh-CN / zh-TW / en）。
+function migrateV3(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
+  const lang = oldGeneral.interfaceLang;
+  let next: LanguagePref = "system";
+  if (lang === "简体中文" || lang === "zh-CN") next = "zh-CN";
+  else if (lang === "繁體中文" || lang === "繁体中文" || lang === "zh-TW") next = "zh-TW";
+  else if (lang === "English" || lang === "en") next = "en";
+  return { ...(oldGeneral as Partial<GeneralSettings>), interfaceLang: next };
+}
+
 async function readPersisted(): Promise<PersistShape> {
   const s = await store();
   const raw = await s.get<unknown>("root");
@@ -177,15 +189,14 @@ async function readPersisted(): Promise<PersistShape> {
   if (!raw || typeof raw !== "object") return defaults;
   const r = raw as Partial<PersistShape> & { schemaVersion?: number };
 
-  // 迁移：v1 → v2 → v3 链式
+  // 迁移：v1 → v2 → v3 → v4 链式
   if (r.schemaVersion === 1) {
-    const v2General = migrateV1(
-      (r.general ?? {}) as Record<string, unknown>,
-    );
-    const v3General = migrateV2(v2General as Record<string, unknown>);
+    const v2 = migrateV1((r.general ?? {}) as Record<string, unknown>);
+    const v3 = migrateV2(v2 as Record<string, unknown>);
+    const v4 = migrateV3(v3 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v3General },
+      general: { ...DEFAULT_GENERAL, ...v4 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -193,10 +204,22 @@ async function readPersisted(): Promise<PersistShape> {
     };
   }
   if (r.schemaVersion === 2) {
-    const v3General = migrateV2((r.general ?? {}) as Record<string, unknown>);
+    const v3 = migrateV2((r.general ?? {}) as Record<string, unknown>);
+    const v4 = migrateV3(v3 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v3General },
+      general: { ...DEFAULT_GENERAL, ...v4 },
+      personalization: {
+        ...DEFAULT_PERSONALIZATION,
+        ...(r.personalization ?? {}),
+      },
+    };
+  }
+  if (r.schemaVersion === 3) {
+    const v4 = migrateV3((r.general ?? {}) as Record<string, unknown>);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...v4 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -250,6 +273,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       general: next,
       personalization: get().personalization,
     });
+    if (key === "interfaceLang") {
+      void syncI18nFromSettings(next.interfaceLang);
+    }
   },
 
   setPersonalization: async (key, value) => {

@@ -5,7 +5,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
-import { attachConsole } from "@tauri-apps/plugin-log";
+import {
+  attachConsole,
+  info as logInfo,
+  warn as logWarn,
+} from "@tauri-apps/plugin-log";
 import { router } from "./router";
 import { Toaster } from "@/components/ui/sonner";
 import { LoadingScreen } from "@/components/LoadingScreen";
@@ -18,6 +22,8 @@ import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { syncAutostart } from "@/lib/autostart";
+import "./i18n";
+import { syncI18nFromSettings } from "@/lib/i18n-sync";
 import "./App.css";
 
 // 禁用 WebView 的默认右键菜单（"后退 / 刷新"等），桌面应用不需要浏览器级菜单。
@@ -61,6 +67,10 @@ const bootPromise = (async () => {
     ]);
     console.log("[boot] stores ready; bindings =", useHotkeysStore.getState().bindings);
 
+    // 用户偏好语言一旦从 settings 读出来就同步给 i18n + 托盘菜单；之后 settings store
+    // 写 interfaceLang 时也要走同一条函数（见 settings.ts 的 setGeneral）。
+    void syncI18nFromSettings(useSettingsStore.getState().general.interfaceLang);
+
     // 开机自启：以 settings.launchStartup 为期望值同步到 OS（macOS LaunchAgent /
     // Windows HKCU Run / Linux .desktop）。空操作的判断在 syncAutostart 内做，失败
     // 不阻断启动。dev 模式下 enable 会注册到当前 dev 二进制路径——属于已知现象，
@@ -70,7 +80,10 @@ const bootPromise = (async () => {
     // 自动更新：默认开。check() 带 5s 超时；有更新则 downloadAndInstall 触发
     // 原地替换 + relaunch，用户感知 ≈ 启动时多一段"升级中"。失败静默——不打扰
     // 启动流程。未配置 endpoints / pubkey / 网络不通都会落到 catch。
+    // 走 plugin-log 而不是 console.log——生产包打不开 devtools，必须把 updater
+    // 的诊断信号写进 LogDir 文件（~/Library/Logs/com.openspeech.app/OpenSpeech.log）。
     if (useSettingsStore.getState().general.autoUpdate) {
+      void logInfo("[updater] boot check start, autoUpdate=on");
       try {
         const upd = await Promise.race([
           checkForUpdate(),
@@ -79,18 +92,17 @@ const bootPromise = (async () => {
           ),
         ]);
         if (upd) {
-          console.log("[boot] update available:", upd.version, "→ installing");
-          // downloadAndInstall 在 macOS/Linux 会 relaunch（当前进程被替换），
-          // 在 Windows 会调起 NSIS installer 并退出当前进程。这之后的代码可能
-          // 永远不执行——但如果它真的返回了（某些平台快速安装），也不做任何事，
-          // 让 LoadingScreen 继续到结束。
+          void logInfo(`[updater] update available: ${upd.version} → installing`);
           await upd.downloadAndInstall();
+          void logInfo("[updater] downloadAndInstall returned (rare; will relaunch on most platforms)");
         } else {
-          console.log("[boot] no update available");
+          void logInfo("[updater] no update available");
         }
       } catch (e) {
-        console.warn("[boot] auto-update skipped:", e);
+        void logWarn(`[updater] boot check skipped: ${String((e as Error)?.message ?? e)}`);
       }
+    } else {
+      void logInfo("[updater] boot check skipped: autoUpdate=off");
     }
 
     await useRecordingStore.getState().initListeners();

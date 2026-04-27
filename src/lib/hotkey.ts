@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { detectPlatform, type Platform } from "@/lib/platform";
 
 export type HotkeyMod = "ctrl" | "alt" | "shift" | "meta" | "fn";
@@ -75,11 +76,25 @@ export const DEFAULT_BINDINGS: Record<BindingId, HotkeyBinding | null> =
     },
   });
 
-export const BINDING_LABELS: Record<BindingId, string> = {
-  dictate_ptt: "听写",
-  ask_ai: "问 AI",
-  translate: "翻译",
-};
+// 通过 Proxy 在每次访问时从 i18n 取值；切语言后下一次读取即生效。
+export const BINDING_LABELS: Record<BindingId, string> = new Proxy(
+  {} as Record<BindingId, string>,
+  {
+    get(_target, prop: string) {
+      if (!(BINDING_IDS as readonly string[]).includes(prop)) return undefined;
+      return i18n.t(`hotkey:binding.${prop}`);
+    },
+    has(_target, prop: string) {
+      return (BINDING_IDS as readonly string[]).includes(prop);
+    },
+    ownKeys() {
+      return [...BINDING_IDS];
+    },
+    getOwnPropertyDescriptor() {
+      return { enumerable: true, configurable: true };
+    },
+  },
+);
 
 export function normalizeMods(mods: HotkeyMod[]): HotkeyMod[] {
   return [...new Set(mods)].sort(
@@ -132,16 +147,16 @@ export function isLegalMainKey(
   allowSpecialKeys = false,
 ): { ok: boolean; reason?: string } {
   if (isModifierCode(code)) {
-    return { ok: false, reason: "需要配合主键使用" };
+    return { ok: false, reason: i18n.t("hotkey:validation.needs_main_key") };
   }
   if (!allowSpecialKeys && DISALLOWED_BARE.includes(code)) {
-    return { ok: false, reason: "Esc / Tab / Enter 等特殊键需在高级设置开启后使用" };
+    return { ok: false, reason: i18n.t("hotkey:validation.special_keys_locked") };
   }
   const isFnKey = ALWAYS_ALLOWED_BARE_PREFIX.some(
     (p) => code.startsWith(p) && /^F\d+$/.test(code),
   );
   if (mods.length === 0 && !isFnKey) {
-    return { ok: false, reason: "需要配合修饰键使用" };
+    return { ok: false, reason: i18n.t("hotkey:validation.needs_modifier") };
   }
   return { ok: true };
 }
@@ -159,24 +174,24 @@ export function isLegalBinding(
   if (binding.mods.includes("fn") && platform !== "macos") {
     return {
       ok: false,
-      reason: "Fn 键仅在 macOS 可靠可用；请用 Ctrl + Win 或 Right Alt",
+      reason: i18n.t("hotkey:validation.fn_macos_only"),
     };
   }
   if (binding.kind === "modifierOnly") {
     if (binding.code !== "") {
-      return { ok: false, reason: "modifier-only 绑定不能包含主键" };
+      return { ok: false, reason: i18n.t("hotkey:validation.modifier_only_no_main") };
     }
     if (binding.mods.length === 0) {
-      return { ok: false, reason: "至少需要一个修饰键" };
+      return { ok: false, reason: i18n.t("hotkey:validation.modifier_only_min") };
     }
     return { ok: true };
   }
   if (binding.kind === "doubleTap") {
     if (binding.code !== "") {
-      return { ok: false, reason: "双击绑定不能包含主键" };
+      return { ok: false, reason: i18n.t("hotkey:validation.double_tap_no_main") };
     }
     if (binding.mods.length !== 1) {
-      return { ok: false, reason: "双击只支持单个修饰键" };
+      return { ok: false, reason: i18n.t("hotkey:validation.double_tap_single_mod") };
     }
     return { ok: true };
   }
@@ -254,14 +269,16 @@ export function formatBinding(
   binding: HotkeyBinding | null,
   platform: Platform,
 ): string {
-  if (!binding) return "未绑定";
+  if (!binding) return i18n.t("hotkey:format.unbound");
   const sep = platform === "macos" ? " " : " + ";
 
   if (binding.kind === "modifierOnly") {
     return binding.mods.map((m) => formatMod(m, platform)).join(sep);
   }
   if (binding.kind === "doubleTap") {
-    return `2× ${formatMod(binding.mods[0]!, platform)}`;
+    return i18n.t("hotkey:format.double_tap", {
+      mod: formatMod(binding.mods[0]!, platform),
+    });
   }
   const parts = [
     ...binding.mods.map((m) => formatMod(m, platform)),

@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
@@ -271,7 +272,7 @@ export function useKeyPreview(): KeyToken[] {
 export function HotkeyPreview({
   hint,
   index = "01",
-  title = "听写快捷键 / PUSH-TO-TALK",
+  title,
   stack = false,
 }: {
   hint?: string;
@@ -280,6 +281,7 @@ export function HotkeyPreview({
   /** 强制纵向排版（hint 在快捷键下方换行）。默认 false，宽松容器里走横向。 */
   stack?: boolean;
 }) {
+  const { t } = useTranslation();
   const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
   const platform = detectPlatform();
   const tokens = useMemo(
@@ -287,26 +289,23 @@ export function HotkeyPreview({
     [binding, platform],
   );
   const pressed = useKeyPreview();
-  // toggle 语义下，"当前是否处于录音流程"决定高亮：preparing / recording / transcribing
-  // 都视为"已激活"——按一下即进入并保持，再按一下才退出，物理按键松开不影响视觉状态。
   const recState = useRecordingStore((s) => s.state);
   const sessionActive =
     recState === "preparing" ||
     recState === "recording" ||
     recState === "transcribing";
-  // 物理命中（用户按下时立即高亮，覆盖按下到 FSM 切到 preparing 之前的视觉空窗）
-  // OR 会话激活（toggle 模式下整个录音过程保持高亮，颜色不变）。
   const tokenIsHeld = (token: HotkeyToken) =>
     sessionActive || pressed.some((p) => tokenMatches(token, p));
   const anyMatch = tokens.some(tokenIsHeld);
   const showBindingRow = pressed.length === 0 || anyMatch || sessionActive;
-  const modeHint = hint ?? "单击开始 · 再按一次结束";
+  const resolvedTitle = title ?? t("dialogs:hotkey_preview.default_title");
+  const modeHint = hint ?? t("dialogs:hotkey_preview.default_hint");
 
   return (
     <div>
       <div className="flex items-start justify-between">
         <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
-          {title}
+          {resolvedTitle}
         </span>
         <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
           {index}
@@ -321,7 +320,7 @@ export function HotkeyPreview({
       >
         <div className="flex items-center gap-3">
           {tokens.length === 0 ? (
-            <Kbd>未绑定</Kbd>
+            <Kbd>{t("dialogs:hotkey_preview.unbound")}</Kbd>
           ) : showBindingRow ? (
             tokens.map((t, i) => (
               <Fragment key={i}>

@@ -3,8 +3,9 @@ import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
+import i18n from "@/i18n";
 import type { BindingId, HotkeyBinding } from "@/lib/hotkey";
-import { useSettingsStore } from "@/stores/settings";
+import { useSettingsStore, type AsrSegmentMode } from "@/stores/settings";
 import { useHistoryStore } from "@/stores/history";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
@@ -59,6 +60,14 @@ interface RecordingStore {
    * recording → idle 过渡时清空；Final 事件到达时替换为最终文字。
    */
   liveTranscript: string;
+  /**
+   * 临时覆盖 settings.general.asrSegmentMode——只用于"必须用 VAD 才有意义"的
+   * 场景（目前是 Onboarding 第三步 Try-It：默认 MANUAL 没有 partial，
+   * 用户按下快捷键后到松手前看不到任何实时文字，会以为坏了）。组件挂载时
+   * 设为 'AUTO'、卸载时清空，不影响用户在 Settings 里选的值。
+   */
+  segmentModeOverride: AsrSegmentMode | null;
+  setSegmentModeOverride: (mode: AsrSegmentMode | null) => void;
   initListeners: () => Promise<void>;
   syncBindings: (
     bindings: Record<BindingId, HotkeyBinding | null>,
@@ -67,6 +76,10 @@ interface RecordingStore {
   simulateCancel: () => void;
   simulateFinalize: () => void;
 }
+
+const getEffectiveSegmentMode = (): AsrSegmentMode =>
+  useRecordingStore.getState().segmentModeOverride ??
+  useSettingsStore.getState().general.asrSegmentMode;
 
 const PREPARING_MS = 300;
 
@@ -134,11 +147,11 @@ const notifyOverlay = (
 // 归一成一句人话给 toast——用户不需要看 Rust 层层包装的原文。
 const humanizeSttError = (raw: unknown): string => {
   const msg = String(raw ?? "");
-  if (msg.includes("not authenticated")) return "未登录 OpenLoaf";
-  if (msg.includes("HTTP error: 5")) return "SaaS 服务端错误（5xx）";
-  if (msg.includes("HTTP error: 4")) return "SaaS 鉴权失败（4xx）";
-  if (msg.includes("audio stream not running")) return "麦克风未就绪";
-  if (msg.includes("network error")) return "网络不可达";
+  if (msg.includes("not authenticated")) return i18n.t("overlay:error.stt_not_authenticated");
+  if (msg.includes("HTTP error: 5")) return i18n.t("overlay:error.stt_5xx");
+  if (msg.includes("HTTP error: 4")) return i18n.t("overlay:error.stt_4xx");
+  if (msg.includes("audio stream not running")) return i18n.t("overlay:error.stt_mic_not_ready");
+  if (msg.includes("network error")) return i18n.t("overlay:error.stt_network");
   const short = msg.split(":").pop()?.trim() || msg;
   return short.length > 60 ? short.slice(0, 60) + "…" : short;
 };
@@ -182,8 +195,9 @@ const startRecordingSession = (id: string) => {
     // 用 toast 提示"本次仅本地录音"。401 单独处理：会话已失效，继续录音
     // 没意义，直接 cancel + 弹登录框。
     // 分句模式从设置读：AUTO → 服务端 VAD 切句 + 实时 partial；MANUAL → 整段
-    // 一句话，松手才出 Final。
-    const segmentMode = useSettingsStore.getState().general.asrSegmentMode;
+    // 一句话，松手才出 Final。Onboarding TryIt 这类必须看到实时文字的场景
+    // 通过 segmentModeOverride 强制走 AUTO，不动用户的设置。
+    const segmentMode = getEffectiveSegmentMode();
     const sttMode = segmentMode === "MANUAL" ? "manual" : "auto";
     startSttSession({ mode: sttMode }).catch((e) => {
       const raw = String(e ?? "");
@@ -193,19 +207,21 @@ const startRecordingSession = (id: string) => {
       }
       const reason = humanizeSttError(e);
       console.warn("[stt] start failed (fallback to local-only recording):", e);
-      notifyOverlay("error", "实时转写未启动", {
-        description: `${reason} · 本次仅本地录音`,
+      notifyOverlay("error", i18n.t("overlay:toast.stt_start_failed.title"), {
+        description: i18n.t("overlay:toast.stt_start_failed.description", { reason }),
       });
     });
   }).catch((e) => {
     console.error("[recording] start recording failed:", e);
-    notifyOverlay("error", "录音启动失败", { description: String(e) });
+    notifyOverlay("error", i18n.t("overlay:toast.recording_start_failed.title"), {
+      description: String(e),
+    });
   });
 };
 
 // STT 失败 / 超时时 history.text 的占位——保留之前"待转写"语义，区分 success 与 failed
 // 状态：有 Final 文字 → success；空串 → failed（此时 text 用占位，UI 可据 status 分别展示）。
-const TRANSCRIPT_PLACEHOLDER = "（未能获取转写结果）";
+const transcriptPlaceholder = () => i18n.t("overlay:transcript.placeholder");
 
 type FinalizeOutcome = {
   rec: RecordingResult | null;
@@ -233,20 +249,20 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     // 这里不重复骚扰。其他错误才弹。
     const reason = String(sttSettled.reason ?? "");
     if (!reason.includes("no active stt session")) {
-      notifyOverlay("error", "转写失败", {
+      notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
         description: humanizeSttError(sttSettled.reason),
       });
     }
   } else if (sttSettled.status === "fulfilled" && !sttSettled.value) {
     // 已建连但 Final 空串——多半 send_finish 超时（FINALIZE_WAIT_MS = 3s 过了）
     // 或全程静音。此时 history 按 status=failed 落，给用户一个友好提示。
-    notifyOverlay("warning", "未拿到转写结果", {
-      description: "服务端超时或全程静音",
+    notifyOverlay("warning", i18n.t("overlay:toast.no_transcript.title"), {
+      description: i18n.t("overlay:toast.no_transcript.description"),
     });
   }
   if (recSettled.status === "rejected") {
     console.error("[recording] stop failed:", recSettled.reason);
-    notifyOverlay("error", "录音保存失败", {
+    notifyOverlay("error", i18n.t("overlay:toast.recording_save_failed.title"), {
       description: String(recSettled.reason),
     });
   }
@@ -254,7 +270,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   if (rec) {
     await useHistoryStore.getState().add({
       type: "dictation",
-      text: text || TRANSCRIPT_PLACEHOLDER,
+      text: text || transcriptPlaceholder(),
       status: text ? "success" : "failed",
       error: text ? undefined : "no final transcript",
       duration_ms: rec.duration_ms,
@@ -272,7 +288,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     try {
       await injectChain;
     } catch {}
-    const segmentMode = useSettingsStore.getState().general.asrSegmentMode;
+    const segmentMode = getEffectiveSegmentMode();
     const remaining =
       segmentMode === "AUTO" && text.startsWith(lastInjectedText)
         ? text.slice(lastInjectedText.length)
@@ -284,15 +300,17 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         clipboardOk = true;
       } catch (e) {
         console.warn("[clipboard] writeText failed:", e);
-        notifyOverlay("warning", "复制到剪贴板失败", { description: String(e) });
+        notifyOverlay("warning", i18n.t("overlay:toast.clipboard_failed.title"), {
+          description: String(e),
+        });
       }
       if (clipboardOk) {
         try {
           await invoke("inject_paste");
         } catch (e) {
           console.warn("[inject] paste failed:", e);
-          notifyOverlay("warning", "自动粘贴失败", {
-            description: "文字已复制，请手动按 Cmd/Ctrl+V",
+          notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
+            description: i18n.t("overlay:toast.paste_failed.description"),
           });
         }
       }
@@ -404,6 +422,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     audioLevels: emptyLevels(),
     recordingId: null,
     liveTranscript: "",
+    segmentModeOverride: null,
+
+    setSegmentModeOverride: (mode) => set({ segmentModeOverride: mode }),
 
     initListeners: async () => {
       if (get().startedListening) {
@@ -630,9 +651,12 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             if (mainFocused) {
               useUIStore.getState().openLogin();
             } else {
-              notifyOverlay("error", "未登录 OpenSpeech", {
-                description: "请登录后再使用语音输入",
-                action: { label: "登录", key: "open_login" },
+              notifyOverlay("error", i18n.t("overlay:toast.not_logged_in.title"), {
+                description: i18n.t("overlay:toast.not_logged_in.description"),
+                action: {
+                  label: i18n.t("overlay:toast.not_logged_in.action"),
+                  key: "open_login",
+                },
                 durationMs: 0,
               });
             }
@@ -658,8 +682,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             navigator.onLine === false
           ) {
             console.log("[recording] gate blocked: offline (SAAS path)");
-            notifyOverlay("error", "无互联网连接", {
-              description: "请检查网络后重试",
+            notifyOverlay("error", i18n.t("overlay:toast.offline.title"), {
+              description: i18n.t("overlay:toast.offline.description"),
             });
             return;
           }
@@ -681,8 +705,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                     recordingId: null,
                     liveTranscript: "",
                   });
-                  notifyOverlay("error", "无法连接到服务", {
-                    description: "网络不可达或服务端异常，已取消本次录音",
+                  notifyOverlay("error", i18n.t("overlay:toast.service_unreachable.title"), {
+                    description: i18n.t("overlay:toast.service_unreachable.description"),
                   });
                 }
               })
@@ -726,7 +750,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           stopMic();
           set({
             state: "error",
-            errorMessage: `注册失败：${evt.payload.id}（${evt.payload.error}）`,
+            errorMessage: i18n.t("overlay:error.register_failed", {
+              id: evt.payload.id,
+              error: evt.payload.error,
+            }),
             audioLevels: emptyLevels(),
             recordingId: null,
             liveTranscript: "",
@@ -767,7 +794,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         // AUTO（VAD）模式下，每次服务端 Final 立刻把新增段敲到当前焦点输入框，
         // 实现"边说边出字"。MANUAL 只会出一段 Final 且与 finalize 几乎同时到达，
         // 走原 finalize 的整段粘贴更省事，这里跳过。
-        const mode = useSettingsStore.getState().general.asrSegmentMode;
+        const mode = getEffectiveSegmentMode();
         if (mode === "AUTO") {
           injectIncremental(text);
         }
@@ -777,8 +804,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         (evt) => {
           console.warn("[stt] asr-error:", evt.payload);
           const { code, message } = evt.payload ?? { code: "", message: "" };
-          notifyOverlay("error", "转写异常", {
-            description: code ? `${code}: ${message}` : message || "未知错误",
+          notifyOverlay("error", i18n.t("overlay:toast.asr_error.title"), {
+            description: code
+              ? `${code}: ${message}`
+              : message || i18n.t("overlay:toast.asr_error.unknown"),
           });
           // 不直接切 error 态——finalize 结果会被 allSettled 捕获，history 按
           // status=failed 落盘；若用户正在按键中（recording 态），保留继续录音
@@ -792,19 +821,19 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           if (reason === "insufficient_credits") {
             discardRecording();
             stopMic();
-            notifyOverlay("error", "余额不足", {
-              description: "已取消本次转写，请前往账户页充值",
+            notifyOverlay("error", i18n.t("overlay:toast.insufficient_credits.title"), {
+              description: i18n.t("overlay:toast.insufficient_credits.description"),
             });
             set({
               state: "error",
-              errorMessage: "余额不足，已取消本次转写",
+              errorMessage: i18n.t("overlay:toast.insufficient_credits.error_message"),
               audioLevels: emptyLevels(),
               recordingId: null,
               liveTranscript: "",
             });
           } else if (reason === "max_duration") {
-            notifyOverlay("warning", "会话超时", {
-              description: "达到 2 小时服务端上限",
+            notifyOverlay("warning", i18n.t("overlay:toast.session_timeout.title"), {
+              description: i18n.t("overlay:toast.session_timeout.description"),
             });
             console.warn("[stt] session closed by server:", reason);
           } else if (reason === "idle_timeout") {
@@ -847,8 +876,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
           console.log("[recording] Esc armed, awaiting confirm", { state: s });
           escArmedAt = now;
-          notifyOverlay("warning", "再次按 ESC 取消", {
-            description: "1.5 秒内按下生效",
+          notifyOverlay("warning", i18n.t("overlay:toast.esc_arm.title"), {
+            description: i18n.t("overlay:toast.esc_arm.description"),
             durationMs: ESC_CONFIRM_WINDOW_MS,
           });
           window.setTimeout(() => {
@@ -876,7 +905,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         console.error("[recording] syncBindings FAILED:", e);
         set({
           state: "error",
-          errorMessage: `同步快捷键到 Rust 失败：${String(e)}`,
+          errorMessage: i18n.t("overlay:error.sync_hotkey_failed", { error: String(e) }),
         });
       }
     },

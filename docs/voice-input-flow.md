@@ -39,6 +39,19 @@
 
 实现：Rust `overlay::DESIRED_VISIBLE` 跟踪逻辑可见性（`show()` 置 true、`hide()` 置 false），主窗口 `WindowEvent::Focused` 事件由 `overlay::on_main_focus_changed` 在 desired=true 时按焦点切换物理显隐。前端无须感知此策略。
 
+### Home Live 面板：录音结束后保留结果
+
+Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idle 时悬浮条直接消失，但 Home 面板**必须保留最近一次结果**，挂到屏幕上等用户主动处置。
+
+- 触发条件：FSM 经历 `recording/transcribing/injecting → idle` 且本次拿到了非空 transcript（partial 或 final 任一）。
+- 关闭路径仅两条：
+  1. 用户点结果面板右上角 `✕`
+  2. 用户再次按下听写快捷键开启新一轮录音（新一轮的 live 内容会替换掉上一次的 result）
+- 不会自动淡出、不会因焦点切换消失、不会因点击其他位置消失。
+- 视觉差异：Live 阶段使用 accent 色边框 + tag (READY/LISTENING/TRANSCRIBING/INJECTING)；Result 阶段恢复默认灰边框 + tag `// RESULT` + 副文案"已写入输入框 · 按快捷键开始下一次"。
+
+理由：录音结束 → injecting 200ms → idle 太快，用户根本看不清自己刚说了什么；保留结果让用户可以核对、复制（未来扩展），与"按快捷键继续下一句"的连续工作流一致。OS 悬浮条不做同样保留，因为它在主窗失焦时才显示，逻辑场景就是"立刻消失让位给目标应用"。
+
 ## 详细业务规则
 
 ### 触发

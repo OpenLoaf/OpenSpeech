@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { Search, X } from "lucide-react";
 
 type Props = {
@@ -12,11 +13,13 @@ type Props = {
 export function SearchBox({
   value,
   onChange,
-  placeholder = "搜索...",
+  placeholder,
   width = 224,
 }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const finalPlaceholder = placeholder ?? t("pages:search_box.placeholder");
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -53,7 +56,7 @@ export function SearchBox({
               onKeyDown={(e) => {
                 if (e.key === "Escape") collapse();
               }}
-              placeholder={placeholder}
+              placeholder={finalPlaceholder}
               className="h-8 w-full border border-te-gray/40 bg-te-surface pr-7 pl-8 font-mono text-xs tracking-wider text-te-fg uppercase placeholder:text-te-light-gray focus:border-te-accent focus:outline-none"
             />
             {value && (
@@ -61,7 +64,7 @@ export function SearchBox({
                 type="button"
                 onClick={collapse}
                 className="absolute right-1.5 inline-flex size-5 items-center justify-center text-te-light-gray transition-colors hover:text-te-accent"
-                aria-label="清空搜索"
+                aria-label={t("pages:search_box.clear")}
               >
                 <X className="size-3" />
               </button>
@@ -77,8 +80,8 @@ export function SearchBox({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            aria-label="搜索"
-            title="搜索"
+            aria-label={t("pages:search_box.open")}
+            title={t("pages:search_box.open")}
           >
             <Search className="size-3.5" />
           </motion.button>

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, Loader2, RotateCcw, ServerCog } from "lucide-react";
 import {
   Dialog,
@@ -8,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { isKnownBackendErrorCode, translateBackendError } from "@/lib/errors";
 import { useAuthStore, type LoginProvider } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
 
@@ -16,7 +18,6 @@ type Props = {
   onOpenChange: (open: boolean) => void;
 };
 
-/** Google / 微信 SVG —— 独立组件，避免每个按钮内联一大块 path。 */
 function GoogleMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 48 48" className={className} aria-hidden>
@@ -55,34 +56,40 @@ function WechatMark({ className }: { className?: string }) {
   );
 }
 
-const PROVIDERS: Array<{
-  id: LoginProvider;
-  label: string;
-  Icon: (p: { className?: string }) => ReactElement;
-}> = [
-  { id: "wechat", label: "使用微信登录", Icon: WechatMark },
-  { id: "google", label: "使用 Google 登录", Icon: GoogleMark },
-];
+const PROVIDER_ICONS: Record<
+  LoginProvider,
+  (p: { className?: string }) => ReactElement
+> = {
+  wechat: WechatMark,
+  google: GoogleMark,
+};
 
-/** 把后端 / 网络层的 raw 错误清洗成短中文提示，友好且不吓人。
- *  原始消息仍然在"详情"折叠区里展示，方便排查时取证。 */
-function friendlyLoginError(raw: string | null): string {
-  if (!raw) return "登录失败，请重试";
+const PROVIDER_ORDER: LoginProvider[] = ["wechat", "google"];
+
+// 把后端 / 网络层 raw 错误（含 stable code 与历史中文/英文兜底文案）清洗成短提示。
+function friendlyLoginError(
+  raw: string | null,
+  t: (key: string) => string,
+): string {
+  if (!raw) return t("errors:auth.login_failed");
+  if (isKnownBackendErrorCode(raw)) return translateBackendError(raw);
   const m = raw.toLowerCase();
-  if (m.includes("connection reset")) return "登录服务器连接被重置，请稍后重试";
-  if (m.includes("timed out") || m.includes("timeout")) return "登录超时，请重试";
+  if (m.includes("connection reset")) return t("errors:auth.login_connection_reset");
+  if (m.includes("timed out") || m.includes("timeout"))
+    return t("errors:auth.login_timeout");
   if (
     m.includes("connection refused") ||
     m.includes("dns") ||
     m.includes("error sending request") ||
     m.includes("network error")
   )
-    return "无法连接登录服务器，请检查网络后重试";
-  if (m.includes("not authenticated")) return "未登录";
-  return "登录失败，请重试";
+    return t("errors:auth.login_unreachable");
+  if (m.includes("not authenticated")) return t("errors:auth.not_authenticated");
+  return t("errors:auth.login_failed");
 }
 
 export function LoginDialog({ open, onOpenChange }: Props) {
+  const { t } = useTranslation();
   const {
     loginStatus,
     loginError,
@@ -97,19 +104,16 @@ export function LoginDialog({ open, onOpenChange }: Props) {
   const isError = loginStatus === "error";
   const [showDetails, setShowDetails] = useState(false);
 
-  // 关闭弹窗时收起详情，避免下次打开还是展开状态。
   useEffect(() => {
     if (!open) setShowDetails(false);
   }, [open]);
 
-  // 打开时重置错误；关闭时取消进行中的登录。
   useEffect(() => {
     if (!open && isBusy) {
       void cancelLogin();
     }
   }, [open, isBusy, cancelLogin]);
 
-  // 登录成功后自动关闭（isAuthenticated 翻成 true 由 success 事件驱动）。
   useEffect(() => {
     if (open && isAuthenticated) {
       const t = window.setTimeout(() => onOpenChange(false), 800);
@@ -118,11 +122,11 @@ export function LoginDialog({ open, onOpenChange }: Props) {
   }, [open, isAuthenticated, onOpenChange]);
 
   const subtitle = (() => {
-    if (isAuthenticated) return "登录成功";
-    if (loginStatus === "opening") return "正在打开浏览器...";
-    if (loginStatus === "polling") return "等待在浏览器完成授权";
-    if (isError) return friendlyLoginError(loginError);
-    return "选择登录方式继续";
+    if (isAuthenticated) return t("dialogs:login.subtitle.success");
+    if (loginStatus === "opening") return t("dialogs:login.subtitle.opening");
+    if (loginStatus === "polling") return t("dialogs:login.subtitle.polling");
+    if (isError) return friendlyLoginError(loginError, t);
+    return t("dialogs:login.subtitle.idle");
   })();
 
   return (
@@ -130,41 +134,43 @@ export function LoginDialog({ open, onOpenChange }: Props) {
       <DialogContent className="flex w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0">
         <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
-            登录 OpenLoaf
+            {t("dialogs:login.title")}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            选择一种登录方式以继续
+            {t("dialogs:login.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 px-5 py-5">
           {/* Provider buttons */}
           <div className="flex flex-col gap-2">
-            {PROVIDERS.map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                type="button"
-                disabled={isBusy || isAuthenticated}
-                onClick={() => void startLogin(id)}
-                className={cn(
-                  "inline-flex w-full items-center justify-center gap-3 border border-te-gray bg-te-surface px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors",
-                  !isBusy && !isAuthenticated
-                    ? "hover:border-te-accent hover:text-te-accent"
-                    : "cursor-not-allowed opacity-50",
-                )}
-              >
-                <Icon className="size-5" />
-                {label}
-              </button>
-            ))}
+            {PROVIDER_ORDER.map((id) => {
+              const Icon = PROVIDER_ICONS[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={isBusy || isAuthenticated}
+                  onClick={() => void startLogin(id)}
+                  className={cn(
+                    "inline-flex w-full items-center justify-center gap-3 border border-te-gray bg-te-surface px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors",
+                    !isBusy && !isAuthenticated
+                      ? "hover:border-te-accent hover:text-te-accent"
+                      : "cursor-not-allowed opacity-50",
+                  )}
+                >
+                  <Icon className="size-5" />
+                  {t(`dialogs:login.providers.${id}`)}
+                </button>
+              );
+            })}
           </div>
 
-          {/* BYO STT 入口：不想登录 OpenLoaf 的用户可以直接跳到设置 → 大模型 tab
-              填写自己的 STT REST 端点。"或" 分隔线把 SaaS / BYO 两条路径视觉拉平。 */}
+          {/* BYO STT 入口 */}
           <div className="flex items-center gap-2">
             <span className="h-px flex-1 bg-te-gray/40" />
             <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-              或
+              {t("dialogs:login.or")}
             </span>
             <span className="h-px flex-1 bg-te-gray/40" />
           </div>
@@ -184,20 +190,15 @@ export function LoginDialog({ open, onOpenChange }: Props) {
               )}
             >
               <ServerCog className="size-4" />
-              使用自己的 STT 端点
+              {t("dialogs:login.byo_button")}
             </button>
             {!isBusy ? (
               <p className="font-sans text-xs leading-relaxed text-te-light-gray">
-                不想登录 OpenLoaf？填写你自己的 STT REST 端点，音频从本机直发，不经云端。
+                {t("dialogs:login.byo_hint")}
               </p>
             ) : null}
           </div>
 
-          {/* 状态/说明区：空闲时展示说明文字；登录中/出错/成功时替换为状态行。
-              整组（黄点 + 文字 + spinner）作为一个 inline 单元水平居中，
-              方块和 loader 直接贴在文字左右两侧。
-              错误状态下文案改用 `friendlyLoginError` 清洗后的中文短句，
-              raw 信息收进下面的"详情"折叠区，避免大段英文 stack 吓到用户。 */}
           {isBusy || isError || isAuthenticated ? (
             <div className="flex items-center justify-center gap-2 pt-1">
               <span
@@ -224,8 +225,6 @@ export function LoginDialog({ open, onOpenChange }: Props) {
             </div>
           ) : null}
 
-          {/* 错误恢复区：突出"重试"按钮（沿用上次 provider）+ 关闭 + 折叠详情。
-              没有 lastProvider（理论上 error 状态下一定有，只是兜底）时不渲染重试。 */}
           {isError ? (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-center gap-2">
@@ -236,7 +235,7 @@ export function LoginDialog({ open, onOpenChange }: Props) {
                     className="inline-flex items-center gap-2 border border-te-accent bg-te-accent/10 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-te-accent transition-colors hover:bg-te-accent hover:text-te-bg"
                   >
                     <RotateCcw className="size-3.5" />
-                    重试
+                    {t("dialogs:login.retry")}
                   </button>
                 ) : null}
                 <button
@@ -244,7 +243,7 @@ export function LoginDialog({ open, onOpenChange }: Props) {
                   onClick={() => onOpenChange(false)}
                   className="inline-flex items-center gap-2 border border-te-gray px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-fg hover:text-te-fg"
                 >
-                  关闭
+                  {t("dialogs:login.close")}
                 </button>
               </div>
               {loginError ? (
@@ -260,7 +259,9 @@ export function LoginDialog({ open, onOpenChange }: Props) {
                         showDetails ? "rotate-180" : "rotate-0",
                       )}
                     />
-                    {showDetails ? "收起详情" : "查看详情"}
+                    {showDetails
+                      ? t("dialogs:login.details_hide")
+                      : t("dialogs:login.details_show")}
                   </button>
                   {showDetails ? (
                     <pre className="max-h-32 w-full overflow-auto whitespace-pre-wrap break-all border border-te-gray/40 bg-te-surface/40 px-3 py-2 font-mono text-[10px] leading-relaxed text-te-light-gray">
@@ -278,7 +279,7 @@ export function LoginDialog({ open, onOpenChange }: Props) {
               onClick={() => void cancelLogin()}
               className="self-center font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
             >
-              取消登录
+              {t("dialogs:login.cancel")}
             </button>
           ) : null}
         </div>

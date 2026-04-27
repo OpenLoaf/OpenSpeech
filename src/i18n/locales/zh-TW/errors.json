@@ -1,0 +1,46 @@
+{
+  "auth": {
+    "login_timeout": "登入逾時，請重試",
+    "login_failed": "登入失敗，請重試",
+    "login_connection_reset": "登入伺服器連線被重設，請稍後重試",
+    "login_unreachable": "無法連線到登入伺服器，請檢查網路後重試",
+    "internal": "內部錯誤，請稍後再試",
+    "not_authenticated": "尚未登入",
+    "not_authenticated_openloaf": "尚未登入 OpenLoaf",
+    "not_authenticated_openspeech": "尚未登入 OpenSpeech",
+    "session_expired": "工作階段已過期，請重新登入"
+  },
+  "network": {
+    "offline": "沒有網際網路連線",
+    "unreachable": "網路無法連線",
+    "service_unreachable": "無法連線到服務",
+    "service_unreachable_desc": "網路無法連線或服務端異常，已取消本次錄音",
+    "check_and_retry": "請檢查網路後重試"
+  },
+  "recording": {
+    "start_failed": "錄音啟動失敗",
+    "save_failed": "錄音儲存失敗",
+    "mic_not_ready": "麥克風尚未就緒",
+    "realtime_not_started": "即時轉寫尚未啟動",
+    "register_failed": "註冊失敗：{{id}}（{{error}}）",
+    "hotkey_sync_failed": "同步快速鍵到 Rust 失敗：{{error}}"
+  },
+  "stt": {
+    "transcribe_failed": "轉寫失敗",
+    "transcribe_empty": "未取得轉寫結果",
+    "transcribe_empty_desc": "伺服器逾時或全程靜音",
+    "transcribe_placeholder": "（未能取得轉寫結果）",
+    "session_timeout": "工作階段逾時",
+    "saas_5xx": "SaaS 伺服器錯誤（5xx）",
+    "saas_4xx": "SaaS 驗證失敗（4xx）",
+    "unknown": "未知錯誤"
+  },
+  "clipboard": {
+    "copy_failed": "複製到剪貼簿失敗",
+    "paste_failed": "自動貼上失敗"
+  },
+  "update": {
+    "check_failed": "檢查更新失敗",
+    "available": "發現新版本 {{version}}"
+  }
+}

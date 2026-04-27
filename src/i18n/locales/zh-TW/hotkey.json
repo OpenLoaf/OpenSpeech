@@ -1,0 +1,21 @@
+{
+  "binding": {
+    "dictate_ptt": "聽寫",
+    "ask_ai": "問 AI",
+    "translate": "翻譯"
+  },
+  "format": {
+    "unbound": "未綁定",
+    "double_tap": "2× {{mod}}"
+  },
+  "validation": {
+    "needs_main_key": "需要搭配主鍵使用",
+    "special_keys_locked": "Esc / Tab / Enter 等特殊鍵需在進階設定開啟後使用",
+    "needs_modifier": "需要搭配修飾鍵使用",
+    "fn_macos_only": "Fn 鍵僅在 macOS 可靠可用；請改用 Ctrl + Win 或 Right Alt",
+    "modifier_only_no_main": "modifier-only 綁定不能包含主鍵",
+    "modifier_only_min": "至少需要一個修飾鍵",
+    "double_tap_no_main": "雙擊綁定不能包含主鍵",
+    "double_tap_single_mod": "雙擊只支援單一修飾鍵"
+  }
+}

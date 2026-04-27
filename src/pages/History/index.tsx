@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   Check,
   ChevronDown,
@@ -38,33 +40,19 @@ import { usePlaybackStore } from "@/stores/playback";
 // Constants
 // ─────────────────────────────────────────────────────────────
 
-const RETENTION_OPTIONS = [
-  { value: "forever", label: "永远" },
-  { value: "90d", label: "90 天" },
-  { value: "30d", label: "30 天" },
-  { value: "7d", label: "7 天" },
-  { value: "off", label: "不保存" },
-] as const;
+const RETENTION_VALUES = ["forever", "90d", "30d", "7d", "off"] as const;
+type RetentionValue = (typeof RETENTION_VALUES)[number];
 
-type RetentionValue = (typeof RETENTION_OPTIONS)[number]["value"];
+const FILTER_VALUES = ["all", "dictation", "ask", "translate"] as const;
+type FilterValue = (typeof FILTER_VALUES)[number];
 
-const FILTER_TABS = [
-  { value: "all", label: "全部" },
-  { value: "dictation", label: "听写" },
-  { value: "ask", label: "随便问" },
-  { value: "translate", label: "翻译" },
-] as const;
-
-type FilterValue = (typeof FILTER_TABS)[number]["value"];
-
-// 相对今天（2026-04-24）的分组
 type Bucket = "TODAY" | "YESTERDAY" | "THIS WEEK" | "EARLIER";
 const BUCKET_ORDER: Bucket[] = ["TODAY", "YESTERDAY", "THIS WEEK", "EARLIER"];
-const BUCKET_LABEL: Record<Bucket, string> = {
-  TODAY: "今天",
-  YESTERDAY: "昨天",
-  "THIS WEEK": "本周",
-  EARLIER: "更早",
+const BUCKET_I18N_KEY: Record<Bucket, string> = {
+  TODAY: "today",
+  YESTERDAY: "yesterday",
+  "THIS WEEK": "this_week",
+  EARLIER: "earlier",
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -96,8 +84,8 @@ function formatTime(ts: number): string {
   return `${hh}:${mm}`;
 }
 
-function typeLabel(t: HistoryType): string {
-  return t === "dictation" ? "听写" : t === "ask" ? "随便问" : "翻译";
+function typeLabel(t: TFunction, type: HistoryType): string {
+  return t(`pages:history.filters.${type}`);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -111,8 +99,8 @@ function RetentionBar({
   value: RetentionValue;
   onChange: (v: RetentionValue) => void;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const current = RETENTION_OPTIONS.find((o) => o.value === value)!;
 
   return (
     <motion.div
@@ -124,10 +112,10 @@ function RetentionBar({
     >
       <div>
         <div className="font-mono text-xs uppercase tracking-[0.2em] text-te-accent">
-          RETENTION POLICY
+          {t("pages:history.retention.title")}
         </div>
         <div className="mt-2 text-sm text-te-light-gray">
-          历史保留时长 — 控制本机数据库中的记录留存时间。
+          {t("pages:history.retention.description")}
         </div>
       </div>
 
@@ -137,7 +125,7 @@ function RetentionBar({
           onClick={() => setOpen((v) => !v)}
           className="group inline-flex items-center gap-2 border border-te-gray/60 bg-te-bg px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
         >
-          <span>{current.label}</span>
+          <span>{t(`pages:history.retention.options.${value}`)}</span>
           <motion.span
             animate={{ rotate: open ? 180 : 0 }}
             transition={{ duration: 0.2 }}
@@ -156,14 +144,14 @@ function RetentionBar({
               transition={{ duration: 0.15 }}
               className="absolute right-0 z-10 mt-2 min-w-[14rem] border border-te-gray/60 bg-te-bg py-1 shadow-none"
             >
-              {RETENTION_OPTIONS.map((opt) => {
-                const active = opt.value === value;
+              {RETENTION_VALUES.map((opt) => {
+                const active = opt === value;
                 return (
-                  <li key={opt.value}>
+                  <li key={opt}>
                     <button
                       type="button"
                       onClick={() => {
-                        onChange(opt.value);
+                        onChange(opt);
                         setOpen(false);
                       }}
                       className={`flex w-full items-center justify-between px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] transition-colors ${
@@ -172,7 +160,7 @@ function RetentionBar({
                           : "text-te-fg hover:bg-te-surface-hover hover:text-te-accent"
                       }`}
                     >
-                      <span>{opt.label}</span>
+                      <span>{t(`pages:history.retention.options.${opt}`)}</span>
                       {active && <Check className="size-3.5" />}
                     </button>
                   </li>
@@ -193,22 +181,23 @@ function FilterTabs({
   value: FilterValue;
   onChange: (v: FilterValue) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-1">
-      {FILTER_TABS.map((tab) => {
-        const active = tab.value === value;
+      {FILTER_VALUES.map((tab) => {
+        const active = tab === value;
         return (
           <button
-            key={tab.value}
+            key={tab}
             type="button"
-            onClick={() => onChange(tab.value)}
+            onClick={() => onChange(tab)}
             className={`relative px-4 py-3 font-mono text-xs uppercase tracking-wider transition-colors ${
               active
                 ? "bg-te-surface-hover text-te-accent"
                 : "text-te-light-gray hover:text-te-fg"
             }`}
           >
-            {tab.label}
+            {t(`pages:history.filters.${tab}`)}
             {active && (
               <motion.span
                 layoutId="history-tab-underline"
@@ -224,11 +213,12 @@ function FilterTabs({
 }
 
 function StatusBadge({ status }: { status: HistoryStatus }) {
+  const { t } = useTranslation();
   if (status === "success") {
     return (
       <span
         className="inline-flex size-5 items-center justify-center font-mono text-xs text-te-accent"
-        title="成功"
+        title={t("pages:history.status.success")}
       >
         <Check className="size-3.5" strokeWidth={2.5} />
       </span>
@@ -238,7 +228,7 @@ function StatusBadge({ status }: { status: HistoryStatus }) {
     return (
       <span
         className="inline-flex size-5 items-center justify-center font-mono text-xs text-[#ff4d4d]"
-        title="失败"
+        title={t("pages:history.status.failed")}
       >
         <X className="size-3.5" strokeWidth={2.5} />
       </span>
@@ -247,7 +237,7 @@ function StatusBadge({ status }: { status: HistoryStatus }) {
   return (
     <span
       className="inline-flex size-5 items-center justify-center font-mono text-xs text-te-light-gray"
-      title="已取消"
+      title={t("pages:history.status.cancelled")}
     >
       <Minus className="size-3.5" strokeWidth={2.5} />
     </span>
@@ -257,6 +247,7 @@ function StatusBadge({ status }: { status: HistoryStatus }) {
 // 有录音文件的成功 / 取消记录展示此按钮：点击 = 播放原始 WAV；再次点击 = 暂停。
 // 切到别的行时，此行自动从 Pause 图标回落到 Play。
 function PlayButton({ id, audioPath }: { id: string; audioPath: string }) {
+  const { t } = useTranslation();
   const playingId = usePlaybackStore((s) => s.playingId);
   const toggle = usePlaybackStore((s) => s.toggle);
   const isPlaying = playingId === id;
@@ -272,7 +263,7 @@ function PlayButton({ id, audioPath }: { id: string; audioPath: string }) {
           ? "border-te-accent bg-te-accent text-te-bg"
           : "border-te-gray/40 text-te-accent hover:border-te-accent hover:bg-te-accent hover:text-te-bg"
       }`}
-      title={isPlaying ? "暂停" : "播放原始录音"}
+      title={isPlaying ? t("pages:history.row.pause") : t("pages:history.row.play")}
     >
       {isPlaying ? (
         <Pause className="size-3.5" strokeWidth={2.5} />
@@ -284,9 +275,10 @@ function PlayButton({ id, audioPath }: { id: string; audioPath: string }) {
 }
 
 function TypeChip({ type }: { type: HistoryType }) {
+  const { t } = useTranslation();
   return (
     <span className="inline-flex items-center border border-te-gray/40 px-1.5 py-px font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-      {typeLabel(type)}
+      {typeLabel(t, type)}
     </span>
   );
 }
@@ -308,6 +300,7 @@ function RowActions({
   onRetry: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const isFailed = status === "failed";
   const baseBtn =
@@ -320,11 +313,11 @@ function RowActions({
     try {
       await writeText(text);
       setCopied(true);
-      toast.success("已复制到剪贴板");
+      toast.success(t("pages:history.toast.copy_success"));
       setTimeout(() => setCopied(false), 1200);
     } catch (e) {
       console.error("[history] copy failed:", e);
-      toast.error("复制失败");
+      toast.error(t("pages:history.toast.copy_failed"));
     }
   };
 
@@ -333,12 +326,12 @@ function RowActions({
   const tooLong = durationMs > 5 * 60 * 1000;
   const canRetry = !!audioPath && !tooLong && !retrying;
   const retryTitle = !audioPath
-    ? "无可用音频，无法重试"
+    ? t("pages:history.row.retry_no_audio")
     : tooLong
-      ? "暂不支持超过 5 分钟的录音重试"
+      ? t("pages:history.row.retry_too_long")
       : retrying
-        ? "重试中…"
-        : "重试转录";
+        ? t("pages:history.row.retry_in_progress")
+        : t("pages:history.row.retry_tooltip");
 
   // 失败态：只有「(hover) 删除 + 重试常显」，由外层 HistoryRow 在更右侧再放一个播放按钮。
   if (isFailed) {
@@ -348,7 +341,7 @@ function RowActions({
           <button
             type="button"
             className={dangerBtn}
-            title="删除"
+            title={t("pages:history.row.delete")}
             onClick={onDelete}
           >
             <Trash2 className="size-3.5" />
@@ -366,7 +359,11 @@ function RowActions({
           ) : (
             <RotateCcw className="size-3" strokeWidth={2} />
           )}
-          <span>{retrying ? "重试中" : "重试"}</span>
+          <span>
+            {retrying
+              ? t("pages:history.row.retrying_label")
+              : t("pages:history.row.retry")}
+          </span>
         </button>
       </div>
     );
@@ -377,7 +374,11 @@ function RowActions({
       <button
         type="button"
         className={baseBtn}
-        title={copied ? "已复制" : "复制到剪贴板"}
+        title={
+          copied
+            ? t("pages:history.row.copied")
+            : t("pages:history.row.copy")
+        }
         onClick={handleCopy}
       >
         {copied ? (
@@ -386,13 +387,17 @@ function RowActions({
           <Copy className="size-3.5" />
         )}
       </button>
-      <button type="button" className={baseBtn} title="重新注入">
+      <button
+        type="button"
+        className={baseBtn}
+        title={t("pages:history.row.reinject")}
+      >
         <RotateCcw className="size-3.5" />
       </button>
       <button
         type="button"
         className={dangerBtn}
-        title="删除"
+        title={t("pages:history.row.delete")}
         onClick={onDelete}
       >
         <Trash2 className="size-3.5" />
@@ -402,24 +407,25 @@ function RowActions({
 }
 
 function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
+  const { t } = useTranslation();
   const isFailed = item.status === "failed";
   const retry = useHistoryStore((s) => s.retry);
   const remove = useHistoryStore((s) => s.remove);
   const retrying = useHistoryStore((s) => s.retryingIds.has(item.id));
   const displayText = isFailed
-    ? "您的转录被中断。但 OpenSpeech 仍可以为您重试。"
+    ? t("pages:history.row.failed_placeholder")
     : item.text;
 
   const handleRetry = async () => {
     try {
       await retry(item.id);
-      toast.success("重试成功");
+      toast.success(t("pages:history.toast.retry_success"));
     } catch (e) {
       // 未登录拦截已经弹了登录框，不再叠 toast 干扰。
       if (e instanceof NotAuthenticatedError) return;
       console.error("[history] retry failed:", e);
       const msg = e instanceof Error ? e.message : String(e);
-      toast.error("重试失败", { description: msg });
+      toast.error(t("pages:history.toast.retry_failed"), { description: msg });
     }
   };
 
@@ -428,7 +434,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
       await remove(item.id);
     } catch (e) {
       console.error("[history] delete failed:", e);
-      toast.error("删除失败");
+      toast.error(t("pages:history.toast.delete_failed"));
     }
   };
 
@@ -518,6 +524,7 @@ function GroupHeader({ label }: { label: string }) {
 }
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <motion.div
       className="flex flex-col items-center justify-center py-24"
@@ -526,7 +533,7 @@ function EmptyState() {
       transition={{ duration: 0.4 }}
     >
       <span className="font-mono text-sm uppercase tracking-widest text-te-light-gray">
-        // 暂无记录 //
+        {t("pages:history.empty")}
       </span>
     </motion.div>
   );
@@ -537,6 +544,7 @@ function EmptyState() {
 // ─────────────────────────────────────────────────────────────
 
 export default function HistoryPage() {
+  const { t } = useTranslation();
   const items = useHistoryStore((s) => s.items);
   const clearAllInDb = useHistoryStore((s) => s.clearAll);
   const [filter, setFilter] = useState<FilterValue>("all");
@@ -610,10 +618,10 @@ export default function HistoryPage() {
           >
             <div data-tauri-drag-region>
               <h1 className="font-mono text-3xl font-bold tracking-tighter text-te-fg">
-                历史记录
+                {t("pages:history.title")}
               </h1>
               <p className="mt-2 text-xs leading-relaxed text-te-light-gray">
-                历史记录保存在本设备。
+                {t("pages:history.subtitle")}
               </p>
             </div>
             <MoreMenu
@@ -635,7 +643,7 @@ export default function HistoryPage() {
             <SearchBox
               value={query}
               onChange={setQuery}
-              placeholder="搜索历史..."
+              placeholder={t("pages:history.search_placeholder")}
             />
           </div>
         </div>
@@ -653,7 +661,9 @@ export default function HistoryPage() {
                 if (rows.length === 0) return null;
                 return (
                   <div key={bucket}>
-                    <GroupHeader label={BUCKET_LABEL[bucket]} />
+                    <GroupHeader
+                      label={t(`pages:history.buckets.${BUCKET_I18N_KEY[bucket]}`)}
+                    />
                     <div>
                       {rows.map((item, i) => (
                         <HistoryRow key={item.id} item={item} index={i} />
@@ -690,6 +700,7 @@ function MoreMenu({
   onExport: () => void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -717,7 +728,7 @@ function MoreMenu({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="inline-flex size-9 items-center justify-center border border-te-gray/40 text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
-        title="更多"
+        title={t("pages:history.more")}
         aria-haspopup="menu"
         aria-expanded={open}
       >
@@ -746,7 +757,7 @@ function MoreMenu({
                 className="flex w-full items-center gap-2 px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-te-fg transition-colors hover:bg-te-surface-hover hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-te-fg"
               >
                 <Download className="size-3.5" />
-                <span>导出</span>
+                <span>{t("pages:history.export")}</span>
               </button>
             </li>
             <li>
@@ -761,7 +772,7 @@ function MoreMenu({
                 className="flex w-full items-center gap-2 px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-[#ff4d4d] transition-colors hover:bg-[#ff4d4d]/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
               >
                 <Trash2 className="size-3.5" />
-                <span>删除全部历史</span>
+                <span>{t("pages:history.delete_all")}</span>
               </button>
             </li>
           </motion.ul>
@@ -786,24 +797,29 @@ function ConfirmClearDialog({
   count: number;
   onConfirm: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="!gap-0 rounded-none border border-te-gray bg-te-bg p-0 sm:max-w-md">
         <DialogHeader className="border-b border-te-gray/40 bg-te-surface-hover px-4 py-3">
           <DialogTitle className="font-mono text-sm font-bold tracking-tighter text-te-fg uppercase">
-            删除全部历史
+            {t("pages:history.confirm_clear.title")}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            清空本机历史记录
+            {t("pages:history.confirm_clear.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="px-4 py-5 text-sm leading-relaxed text-te-fg">
-          将删除本机的{" "}
-          <span className="font-mono text-te-accent">{count}</span>{" "}
-          条历史记录，操作不可撤销。
+          <Trans
+            i18nKey="pages:history.confirm_clear.body"
+            values={{ count }}
+            components={{
+              count: <span className="font-mono text-te-accent" />,
+            }}
+          />
           <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-            // 建议先导出备份
+            {t("pages:history.confirm_clear.tip")}
           </p>
         </div>
 
@@ -813,14 +829,14 @@ function ConfirmClearDialog({
             onClick={() => onOpenChange(false)}
             className="border border-te-gray/60 px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
           >
-            取消
+            {t("actions.cancel")}
           </button>
           <button
             type="button"
             onClick={onConfirm}
             className="bg-[#ff4d4d] px-4 py-1.5 font-mono text-xs uppercase tracking-wider text-white transition-[filter] hover:brightness-110"
           >
-            确认删除
+            {t("pages:history.confirm_clear.confirm")}
           </button>
         </DialogFooter>
       </DialogContent>

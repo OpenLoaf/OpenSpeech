@@ -1,0 +1,33 @@
+{
+  "actions": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "close": "Close",
+    "retry": "Retry",
+    "clear": "Clear",
+    "remove": "Remove",
+    "add": "Add",
+    "back": "Back",
+    "next": "Next",
+    "done": "Done",
+    "skip": "Skip",
+    "copy": "Copy",
+    "edit": "Edit",
+    "search": "Search",
+    "loading": "Loading…"
+  },
+  "lang": {
+    "system": "System",
+    "zh-CN": "简体中文",
+    "zh-TW": "繁體中文",
+    "en": "English"
+  },
+  "value": {
+    "system_default": "System default",
+    "system_default_with_current": "System default ({{name}})",
+    "auto_detect": "Auto-detect",
+    "none": "None"
+  }
+}

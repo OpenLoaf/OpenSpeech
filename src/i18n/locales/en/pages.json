@@ -1,0 +1,142 @@
+{
+  "home": {
+    "hero": {
+      "title_line1": "Just speak.",
+      "title_line2": "It becomes text.",
+      "description": "Press the hotkey, talk, press again to finish — your words appear in any app, instantly. No editor lock-in, audio stays on-device, zero telemetry.",
+      "feature_push_to_talk": "// PUSH-TO-TALK DICTATION",
+      "feature_byo": "// PICK YOUR MODEL · SAAS · BYO",
+      "feature_cross_platform": "// CROSS-PLATFORM WIN · MAC · LINUX"
+    },
+    "hotkey_hint": "Press the hotkey to start recording, press again to stop and inject the text into the focused field. Press <esc>Esc</esc> to cancel; an editable field must be focused.",
+    "stats": {
+      "section_title": "Today / This session",
+      "live_metrics": "// LIVE METRICS",
+      "duration_label": "Spoken time",
+      "duration_unit": "HH:MM",
+      "words_label": "Spoken words",
+      "words_unit": "Total",
+      "wpm_label": "Average speed",
+      "wpm_unit": "WPM",
+      "saved_label": "Time saved",
+      "saved_unit": "HH:MM"
+    }
+  },
+  "history": {
+    "title": "History",
+    "subtitle": "History stays on this device.",
+    "search_placeholder": "Search history...",
+    "more": "More",
+    "export": "Export",
+    "delete_all": "Delete all history",
+    "retention": {
+      "title": "RETENTION POLICY",
+      "description": "Retention period — controls how long records live in the local database.",
+      "options": {
+        "forever": "Forever",
+        "90d": "90 days",
+        "30d": "30 days",
+        "7d": "7 days",
+        "off": "Don't keep"
+      }
+    },
+    "filters": {
+      "all": "All",
+      "dictation": "Dictation",
+      "ask": "Ask anything",
+      "translate": "Translate"
+    },
+    "buckets": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "this_week": "This week",
+      "earlier": "Earlier"
+    },
+    "empty": "// No records //",
+    "status": {
+      "success": "Success",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "row": {
+      "play": "Play original recording",
+      "pause": "Pause",
+      "copy": "Copy to clipboard",
+      "copied": "Copied",
+      "reinject": "Re-inject",
+      "delete": "Delete",
+      "retry": "Retry",
+      "retrying_label": "Retrying",
+      "retry_no_audio": "No audio available, can't retry",
+      "retry_too_long": "Retry isn't supported for recordings over 5 minutes",
+      "retry_in_progress": "Retrying…",
+      "retry_tooltip": "Retry transcription",
+      "failed_placeholder": "Your transcription was interrupted. OpenSpeech can still retry it for you."
+    },
+    "toast": {
+      "copy_success": "Copied to clipboard",
+      "copy_failed": "Copy failed",
+      "retry_success": "Retry succeeded",
+      "retry_failed": "Retry failed",
+      "delete_failed": "Delete failed"
+    },
+    "confirm_clear": {
+      "title": "Delete all history",
+      "description": "Clear local history records",
+      "body": "This will delete <count>{{count}}</count> records on this device. The action can't be undone.",
+      "tip": "// Consider exporting a backup first",
+      "confirm": "Confirm delete"
+    }
+  },
+  "dictionary": {
+    "title": "Dictionary",
+    "subtitle": "Custom vocabulary · up to 2,000 entries",
+    "new_word": "+ New word",
+    "search_placeholder": "Search entries...",
+    "filters": {
+      "all": "All",
+      "auto": "Auto-added",
+      "manual": "Manually added"
+    },
+    "empty": "// No entries //",
+    "count_total": "// {{count}} total //",
+    "card": {
+      "auto_tooltip": "Auto-added",
+      "manual_tooltip": "Manually added",
+      "edit": "Edit",
+      "delete": "Delete"
+    },
+    "new_dialog": {
+      "title": "New word",
+      "description": "Add a custom dictionary entry",
+      "term_label": "term",
+      "term_placeholder": "e.g. OpenSpeech",
+      "error_empty": "Term can't be empty",
+      "error_duplicate": "This entry already exists",
+      "submitting": "Adding…",
+      "submit": "Add"
+    }
+  },
+  "layout": {
+    "nav": {
+      "home": "Home",
+      "history": "History",
+      "dictionary": "Dictionary"
+    },
+    "account_fallback": "Account",
+    "login": "Login",
+    "credits": "Credits",
+    "credits_unlimited": "UNLIMITED",
+    "settings": "Settings",
+    "tray": {
+      "update_found_title": "Update available",
+      "update_none": "You're on the latest version",
+      "update_check_failed": "Update check failed"
+    }
+  },
+  "search_box": {
+    "placeholder": "Search...",
+    "clear": "Clear search",
+    "open": "Search"
+  }
+}

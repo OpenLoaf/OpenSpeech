@@ -1,0 +1,135 @@
+{
+  "header": {
+    "subtitle": "// first run setup"
+  },
+  "welcome": {
+    "tag": "// welcome to",
+    "headline_part1": "說出來。",
+    "headline_part2": "就成文。",
+    "subhead": "按一下快速鍵開始說話，再按一下結束——文字立即出現在你正在使用的任何 App 裡。"
+  },
+  "permissions": {
+    "section_tag": "// step 01 / permissions · {{platform}}",
+    "title_macos": "授權 麥克風 與 輔助使用",
+    "title_windows": "授權 麥克風",
+    "title_linux": "選擇麥克風與注入工具",
+    "recheck_all": "重新偵測",
+    "recheck_all_title": "重新偵測全部權限",
+    "recheck_one_title": "重新偵測",
+    "summary_macos": "macOS 需要三項系統權限：「麥克風」（錄音）、「輔助使用」（把轉寫的文字寫到目前 App）、「輸入監控」（監聽全域快速鍵）。系統的權限快取與行程繫結——若已在系統設定勾選但仍顯示未授權，點擊右上角「重新啟動 OpenSpeech」讓新權限生效。",
+    "summary_windows": "Windows 需要授權「麥克風」（用於錄音）。若你常用的目標程式以系統管理員身分執行，OpenSpeech 也需相同權限才能注入文字。",
+    "summary_linux": "Linux 不需要授權彈窗：選擇一個 PipeWire / PulseAudio 輸入裝置，並確保安裝了 ydotool / wtype（Wayland）或 xdotool（X11）即可。",
+    "badge_required": "必需",
+    "badge_recommended": "推薦",
+    "status_checking": "偵測中",
+    "status_granted": "已授權",
+    "primary_acknowledged": "我已知曉",
+    "primary_open_settings": "前往系統設定",
+    "primary_request": "請求授權",
+    "primary_grant": "授權",
+    "tcc_hint": "已勾選但仍提示未授權？在系統設定該權限清單裡移除 OpenSpeech 後重新加入，再點「重新啟動 OpenSpeech」。",
+    "footer_next": "下一步",
+    "footer_relaunch": "重新啟動 OpenSpeech",
+    "footer_hint_ok": "接下來 2 步：登入 → 試用",
+    "footer_hint_relaunch": "授權後請重新啟動 · 重啟後將自動進入下一步",
+    "mic": {
+      "title": "麥克風",
+      "title_linux": "麥克風裝置",
+      "rationale": "用於錄製你的語音並送到辨識引擎。",
+      "rationale_linux": "Linux 不需要授權彈窗；從 PipeWire / PulseAudio 選一個輸入裝置即可。",
+      "hint_macos": "授權位置：系統設定 → 隱私權與安全性 → 麥克風",
+      "hint_windows": "授權位置：Windows 設定 → 隱私 → 麥克風"
+    },
+    "accessibility": {
+      "title": "輔助使用",
+      "rationale": "用於把辨識出的文字模擬鍵盤輸入到目前焦點的輸入框。",
+      "hint_macos": "授權位置：系統設定 → 隱私權與安全性 → 輔助使用"
+    },
+    "input_monitoring": {
+      "title": "輸入監控",
+      "rationale": "用於在你正在使用其它 App 時，監聽全域快速鍵（如 Fn / Ctrl+Win）觸發錄音。",
+      "hint_macos": "授權位置：系統設定 → 隱私權與安全性 → 輸入監控"
+    },
+    "inject_tools": {
+      "title_windows": "目標程式權限提示",
+      "rationale_windows": "若你常用的程式以系統管理員身分執行（如 cmd），OpenSpeech 也需要相同權限才能注入文字。",
+      "title_linux": "偵測注入工具",
+      "rationale_linux": "Wayland 下需要 ydotool / wtype，X11 下需要 xdotool。OpenSpeech 會自動偵測。"
+    }
+  },
+  "login": {
+    "section_tag": "// step 02 / account",
+    "title": "登入 OpenLoaf 帳號",
+    "bonus_main": "新使用者立即到帳 200 點數",
+    "bonus_minutes_prefix": "· 約",
+    "bonus_minutes_value": "30 分鐘",
+    "bonus_minutes_suffix": "語音",
+    "method_wechat_label": "微信登入",
+    "method_wechat_sub": "掃碼即可登入",
+    "method_google_label": "Google 登入",
+    "method_google_sub": "瀏覽器跳轉登入",
+    "status_success": "登入成功，正在進入下一步…",
+    "status_opening": "正在開啟瀏覽器…",
+    "status_polling": "等待在瀏覽器完成授權…",
+    "cancel": "取消",
+    "advanced_collapse": "↑ 收起",
+    "advanced_expand": "↓ 我有自己的 STT 端點",
+    "advanced_desc": "設定自訂 REST STT 端點（OpenAI / Groq / Deepgram / 自架）。此選項僅推薦給開發者；一般使用者請用上方帳號登入。",
+    "advanced_cta": "略過登入，去設定自訂端點",
+    "error_default": "登入失敗，請重試",
+    "error_reset": "登入伺服器連線被重設，請重試",
+    "error_timeout": "登入逾時，請重試",
+    "error_network": "無法連線到登入伺服器，請檢查網路後重試"
+  },
+  "try_it": {
+    "section_tag": "// step 03 / try it",
+    "title": "試一次。",
+    "subhead": "按一下下方快速鍵開始 · 說一句話 · 再按一下結束",
+    "checklist_tag": "// CHECKLIST",
+    "checklist": {
+      "step1": "按一下聽寫快速鍵開始",
+      "step2": "對著麥克風說一句話",
+      "step3": "再按一下結束",
+      "step4": "看到文字寫入下方"
+    },
+    "mock_slices": [
+      "今",
+      "今天",
+      "今天天氣",
+      "今天天氣真好",
+      "今天天氣真好，",
+      "今天天氣真好，我打開",
+      "今天天氣真好，我打開了 OpenSpeech",
+      "今天天氣真好，我打開了 OpenSpeech 試試看。"
+    ],
+    "hotkey_title": "你的聽寫快速鍵",
+    "hotkey_hint": "單擊開始 · 再按一次結束",
+    "samples_label": "AUDIO · {{count}} SAMPLES",
+    "live_transcript_tag": "// LIVE TRANSCRIPT",
+    "transcript_chars": "{{count}} CHARS",
+    "transcript_placeholder": "即時轉寫文字將出現在這裡…",
+    "completed_title": "設定完成，可以開始使用了",
+    "completed_desc": "正式使用時游標在哪個 App，文字就寫到哪個 App。",
+    "reset": "重設",
+    "mock_running": "示範中…",
+    "mock_run": "▶ 模擬一次",
+    "finish": "完成引導",
+    "skip_finish": "略過並完成",
+    "status": {
+      "ready_tag": "// READY",
+      "ready_primary": "開始說話…",
+      "ready_secondary": "Esc 取消",
+      "listening_tag": "// LISTENING",
+      "listening_primary": "再按一次快速鍵 結束並轉寫",
+      "listening_secondary": "Esc 取消本次錄音",
+      "transcribing_tag": "// TRANSCRIBING",
+      "transcribing_primary": "正在轉寫…",
+      "transcribing_secondary": "Esc 放棄這次結果",
+      "injecting_tag": "// INJECTING",
+      "injecting_primary": "正在寫入輸入框…",
+      "error_tag": "// ERROR",
+      "error_primary": "出錯了，檢查紀錄或重試",
+      "idle_tag": "// IDLE"
+    }
+  }
+}

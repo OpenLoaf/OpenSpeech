@@ -1,0 +1,135 @@
+{
+  "header": {
+    "subtitle": "// first run setup"
+  },
+  "welcome": {
+    "tag": "// welcome to",
+    "headline_part1": "Speak it.",
+    "headline_part2": "Type it.",
+    "subhead": "Press the hotkey to start talking, press it again to stop — text appears instantly in whatever app you are using."
+  },
+  "permissions": {
+    "section_tag": "// step 01 / permissions · {{platform}}",
+    "title_macos": "Grant microphone and accessibility access",
+    "title_windows": "Grant microphone access",
+    "title_linux": "Pick a microphone and an injection tool",
+    "recheck_all": "Recheck",
+    "recheck_all_title": "Recheck all permissions",
+    "recheck_one_title": "Recheck",
+    "summary_macos": "macOS needs three permissions: Microphone (recording), Accessibility (writing transcribed text into the focused app), and Input Monitoring (listening for global hotkeys). Permission caches are bound to the running process — if you ticked the toggle in System Settings but it still shows as not granted, click Restart OpenSpeech in the top right so the new grants take effect.",
+    "summary_windows": "Windows needs Microphone access for recording. If your target app runs as Administrator, OpenSpeech must run with the same privileges to inject text into it.",
+    "summary_linux": "Linux has no permission prompt: pick a PipeWire / PulseAudio input device, and make sure ydotool / wtype (Wayland) or xdotool (X11) is installed.",
+    "badge_required": "Required",
+    "badge_recommended": "Recommended",
+    "status_checking": "Checking",
+    "status_granted": "Granted",
+    "primary_acknowledged": "Got it",
+    "primary_open_settings": "Open System Settings",
+    "primary_request": "Request access",
+    "primary_grant": "Grant",
+    "tcc_hint": "Toggle on but still says not granted? Remove OpenSpeech from this permission list in System Settings, add it back, then click Restart OpenSpeech.",
+    "footer_next": "Next",
+    "footer_relaunch": "Restart OpenSpeech",
+    "footer_hint_ok": "2 steps left: sign in → try it",
+    "footer_hint_relaunch": "Restart after granting · the next step opens automatically",
+    "mic": {
+      "title": "Microphone",
+      "title_linux": "Microphone device",
+      "rationale": "Records your voice and sends it to the recognition engine.",
+      "rationale_linux": "Linux has no permission prompt; just pick a PipeWire / PulseAudio input device.",
+      "hint_macos": "Grant in: System Settings → Privacy & Security → Microphone",
+      "hint_windows": "Grant in: Windows Settings → Privacy → Microphone"
+    },
+    "accessibility": {
+      "title": "Accessibility",
+      "rationale": "Simulates keyboard input to write recognized text into the focused field.",
+      "hint_macos": "Grant in: System Settings → Privacy & Security → Accessibility"
+    },
+    "input_monitoring": {
+      "title": "Input Monitoring",
+      "rationale": "Listens for global hotkeys (e.g. Fn / Ctrl+Win) to start recording while you are using other apps.",
+      "hint_macos": "Grant in: System Settings → Privacy & Security → Input Monitoring"
+    },
+    "inject_tools": {
+      "title_windows": "Target app privilege note",
+      "rationale_windows": "If the app you write into runs as Administrator (e.g. cmd), OpenSpeech needs the same privileges to inject text.",
+      "title_linux": "Detect injection tools",
+      "rationale_linux": "Wayland needs ydotool / wtype, X11 needs xdotool. OpenSpeech detects this automatically."
+    }
+  },
+  "login": {
+    "section_tag": "// step 02 / account",
+    "title": "Sign in to OpenLoaf",
+    "bonus_main": "200 credits granted to new accounts",
+    "bonus_minutes_prefix": "· about",
+    "bonus_minutes_value": "30 minutes",
+    "bonus_minutes_suffix": "of speech",
+    "method_wechat_label": "Sign in with WeChat",
+    "method_wechat_sub": "Scan a QR code to sign in",
+    "method_google_label": "Sign in with Google",
+    "method_google_sub": "Continue in your browser",
+    "status_success": "Signed in. Continuing…",
+    "status_opening": "Opening your browser…",
+    "status_polling": "Waiting for you to finish in the browser…",
+    "cancel": "Cancel",
+    "advanced_collapse": "↑ Hide",
+    "advanced_expand": "↓ I have my own STT endpoint",
+    "advanced_desc": "Configure a custom REST STT endpoint (OpenAI / Groq / Deepgram / self-hosted). Recommended for developers only — most users should sign in above.",
+    "advanced_cta": "Skip sign-in and configure a custom endpoint",
+    "error_default": "Sign-in failed. Please try again.",
+    "error_reset": "Connection to the sign-in server was reset. Please try again.",
+    "error_timeout": "Sign-in timed out. Please try again.",
+    "error_network": "Cannot reach the sign-in server. Check your network and try again."
+  },
+  "try_it": {
+    "section_tag": "// step 03 / try it",
+    "title": "Try it once.",
+    "subhead": "Press the hotkey below · say a sentence · press it again to stop",
+    "checklist_tag": "// CHECKLIST",
+    "checklist": {
+      "step1": "Press the dictation hotkey to start",
+      "step2": "Say something into the microphone",
+      "step3": "Press the hotkey again to stop",
+      "step4": "Watch the text appear below"
+    },
+    "mock_slices": [
+      "Today",
+      "Today the",
+      "Today the weather",
+      "Today the weather is",
+      "Today the weather is great",
+      "Today the weather is great, so",
+      "Today the weather is great, so I opened OpenSpeech",
+      "Today the weather is great, so I opened OpenSpeech to try it out."
+    ],
+    "hotkey_title": "Your dictation hotkey",
+    "hotkey_hint": "Press to start · press again to stop",
+    "samples_label": "AUDIO · {{count}} SAMPLES",
+    "live_transcript_tag": "// LIVE TRANSCRIPT",
+    "transcript_chars": "{{count}} CHARS",
+    "transcript_placeholder": "Live transcript will appear here…",
+    "completed_title": "Setup complete — you are ready to go",
+    "completed_desc": "In real use, text is written into whichever app has focus.",
+    "reset": "Reset",
+    "mock_running": "Demoing…",
+    "mock_run": "▶ Run a demo",
+    "finish": "Finish setup",
+    "skip_finish": "Skip and finish",
+    "status": {
+      "ready_tag": "// READY",
+      "ready_primary": "Start speaking…",
+      "ready_secondary": "Esc to cancel",
+      "listening_tag": "// LISTENING",
+      "listening_primary": "Press the hotkey again to stop and transcribe",
+      "listening_secondary": "Esc to cancel this recording",
+      "transcribing_tag": "// TRANSCRIBING",
+      "transcribing_primary": "Transcribing…",
+      "transcribing_secondary": "Esc to discard this result",
+      "injecting_tag": "// INJECTING",
+      "injecting_primary": "Writing into the input…",
+      "error_tag": "// ERROR",
+      "error_primary": "Something went wrong — check the log or retry",
+      "idle_tag": "// IDLE"
+    }
+  }
+}

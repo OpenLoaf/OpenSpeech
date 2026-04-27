@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +16,7 @@ type Props = {
 };
 
 export function CloseToBackgroundDialog({ open, onOpenChange, onConfirm }: Props) {
+  const { t } = useTranslation();
   const [remember, setRemember] = useState<boolean>(false);
 
   return (
@@ -31,19 +33,23 @@ export function CloseToBackgroundDialog({ open, onOpenChange, onConfirm }: Props
       >
         <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-6 py-4">
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
-            关闭到后台
+            {t("dialogs:close_to_bg.title")}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            OpenSpeech 即将关闭主窗口，应用将继续在后台运行
+            {t("dialogs:close_to_bg.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 px-6 py-5 font-sans text-sm text-te-fg">
           <p>
-            OpenSpeech 将继续在 <span className="text-te-accent">后台</span> 运行，全局快捷键仍然可用。
+            {t("dialogs:close_to_bg.body_1_prefix")}
+            <span className="text-te-accent">
+              {t("dialogs:close_to_bg.body_1_highlight")}
+            </span>
+            {t("dialogs:close_to_bg.body_1_suffix")}
           </p>
           <p className="text-te-light-gray">
-            可通过系统托盘图标重新打开主窗口，或选择"退出"完全结束进程。
+            {t("dialogs:close_to_bg.body_2")}
           </p>
 
           <label className="mt-4 flex cursor-pointer items-center gap-3 pt-2 select-none">
@@ -66,7 +72,7 @@ export function CloseToBackgroundDialog({ open, onOpenChange, onConfirm }: Props
               className="sr-only"
             />
             <span className="font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-              不再提醒
+              {t("dialogs:close_to_bg.remember")}
             </span>
           </label>
         </div>
@@ -77,14 +83,14 @@ export function CloseToBackgroundDialog({ open, onOpenChange, onConfirm }: Props
             onClick={() => onConfirm({ remember, action: "quit" })}
             className="flex-1 border-r border-te-dialog-border px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:bg-te-surface-hover hover:text-te-fg"
           >
-            退出 OpenSpeech
+            {t("dialogs:close_to_bg.quit")}
           </button>
           <button
             type="button"
             onClick={() => onConfirm({ remember, action: "hide" })}
             className="flex-1 bg-te-accent px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
           >
-            继续在后台运行
+            {t("dialogs:close_to_bg.stay")}
           </button>
         </div>
       </DialogContent>

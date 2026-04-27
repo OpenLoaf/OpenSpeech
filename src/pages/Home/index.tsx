@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Trans, useTranslation } from "react-i18next";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { HotkeyPreview } from "@/components/HotkeyPreview";
 import { LiveDictationPanel } from "@/components/LiveDictationPanel";
 import { cn } from "@/lib/utils";
-import { useRecordingStore } from "@/stores/recording";
+import { useRecordingStore, type RecordingState } from "@/stores/recording";
 import { useHistoryStore } from "@/stores/history";
 
 // 假设打字基线速度：用于"节省时间"估算。40 WPM 是普通用户中位打字速度。
@@ -80,10 +81,41 @@ function StatCard({ index, label, value, unit }: StatProps) {
 /* ──────────────────────────────────────────────────────────────── */
 
 export default function HomePage() {
+  const { t } = useTranslation();
   const recState = useRecordingStore((s) => s.state);
   const audioLevels = useRecordingStore((s) => s.audioLevels);
   const liveTranscript = useRecordingStore((s) => s.liveTranscript);
   const isLive = recState !== "idle";
+
+  // 录音结束后保留最近一次结果——FSM 走完 injecting 会把 liveTranscript 清空，
+  // 直接拿就拿到空串。这里在 active 阶段把最新非空 transcript 缓到 ref，
+  // 检测到 active → idle 过渡时落到 resultText 让面板继续显示，等用户点 ✕
+  // 或再次按快捷键开始新一轮。
+  const [resultText, setResultText] = useState<string | null>(null);
+  const lastTranscriptRef = useRef("");
+  const prevStateRef = useRef<RecordingState>("idle");
+
+  useEffect(() => {
+    if (liveTranscript) lastTranscriptRef.current = liveTranscript;
+  }, [liveTranscript]);
+
+  useEffect(() => {
+    const prev = prevStateRef.current;
+    prevStateRef.current = recState;
+    if (prev === "idle" && recState !== "idle") {
+      setResultText(null);
+      lastTranscriptRef.current = "";
+      return;
+    }
+    if (prev !== "idle" && recState === "idle") {
+      const captured = lastTranscriptRef.current.trim();
+      setResultText(captured ? lastTranscriptRef.current : null);
+    }
+  }, [recState]);
+
+  const showResult = !isLive && resultText !== null;
+  const showPanel = isLive || showResult;
+  const panelTranscript = isLive ? liveTranscript : (resultText ?? "");
 
   const historyItems = useHistoryStore((s) => s.items);
   const stats = useMemo(() => {
@@ -142,13 +174,15 @@ export default function HomePage() {
             className="flex min-h-0 flex-[4_1_0%] flex-col justify-between"
           >
             <h1 className="font-mono text-[clamp(1.75rem,5.5vw,4.5rem)] font-bold leading-[0.95] tracking-tighter text-te-fg">
-              说出来。
+              {t("pages:home.hero.title_line1")}
               <br />
-              <span className="text-te-accent">就成文。</span>
+              <span className="text-te-accent">
+                {t("pages:home.hero.title_line2")}
+              </span>
             </h1>
 
             <p className="max-w-xl font-sans text-sm leading-relaxed text-te-light-gray md:text-base">
-              按一下快捷键，开口说话，再按一下结束——文字即刻出现在任意应用中。不绑定编辑器，录音只留本机，无任何遥测。
+              {t("pages:home.hero.description")}
             </p>
 
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
@@ -159,9 +193,9 @@ export default function HomePage() {
                 draggable={false}
                 className="size-5 shrink-0 select-none"
               />
-              <span>// PUSH-TO-TALK 按键听写</span>
-              <span>// 模型自选 SAAS · BYO</span>
-              <span>// 跨平台 WIN · MAC · LINUX</span>
+              <span>{t("pages:home.hero.feature_push_to_talk")}</span>
+              <span>{t("pages:home.hero.feature_byo")}</span>
+              <span>{t("pages:home.hero.feature_cross_platform")}</span>
             </div>
           </motion.div>
 
@@ -178,7 +212,7 @@ export default function HomePage() {
               )}
             >
               <AnimatePresence mode="wait" initial={false}>
-                {isLive ? (
+                {showPanel ? (
                   <motion.div
                     key="live"
                     initial={{ opacity: 0, y: 4 }}
@@ -189,7 +223,8 @@ export default function HomePage() {
                     <LiveDictationPanel
                       state={recState}
                       audioLevels={audioLevels}
-                      liveTranscript={liveTranscript}
+                      liveTranscript={panelTranscript}
+                      onClose={showResult ? () => setResultText(null) : undefined}
                     />
                   </motion.div>
                 ) : (
@@ -202,9 +237,12 @@ export default function HomePage() {
                   >
                     <HotkeyPreview />
                     <p className="mt-3 max-w-2xl font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
-                      按一下快捷键开始录音，再按一下结束并把文字写入当前输入框。按
-                      <span className="mx-1 font-mono text-te-fg">Esc</span>
-                      取消；焦点必须在可编辑区域。
+                      <Trans
+                        i18nKey="pages:home.hotkey_hint"
+                        components={{
+                          esc: <span className="mx-1 font-mono text-te-fg" />,
+                        }}
+                      />
                     </p>
                   </motion.div>
                 )}
@@ -216,18 +254,38 @@ export default function HomePage() {
           <div className="flex min-h-0 flex-[3_1_0%] flex-col">
             <div className="mb-2 flex shrink-0 items-end justify-between md:mb-3">
               <h2 className="font-mono text-base font-bold uppercase tracking-tighter text-te-fg md:text-lg">
-                今日 / 本次会话
+                {t("pages:home.stats.section_title")}
               </h2>
               <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-                // LIVE METRICS
+                {t("pages:home.stats.live_metrics")}
               </span>
             </div>
 
             <div className="grid min-h-0 flex-1 grid-cols-4 gap-px bg-te-gray/40">
-              <StatCard index="01" label="口述时长" value={stats.duration} unit="HH:MM" />
-              <StatCard index="02" label="口述字数" value={stats.words} unit="总计" />
-              <StatCard index="03" label="平均速度" value={stats.wpm} unit="WPM" />
-              <StatCard index="04" label="节省时间" value={stats.saved} unit="HH:MM" />
+              <StatCard
+                index="01"
+                label={t("pages:home.stats.duration_label")}
+                value={stats.duration}
+                unit={t("pages:home.stats.duration_unit")}
+              />
+              <StatCard
+                index="02"
+                label={t("pages:home.stats.words_label")}
+                value={stats.words}
+                unit={t("pages:home.stats.words_unit")}
+              />
+              <StatCard
+                index="03"
+                label={t("pages:home.stats.wpm_label")}
+                value={stats.wpm}
+                unit={t("pages:home.stats.wpm_unit")}
+              />
+              <StatCard
+                index="04"
+                label={t("pages:home.stats.saved_label")}
+                value={stats.saved}
+                unit={t("pages:home.stats.saved_unit")}
+              />
             </div>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   AlertCircle,
@@ -59,35 +60,36 @@ type PermissionCard = {
   required: boolean;
 };
 
-function cardsForPlatform(platform: Platform): PermissionCard[] {
+type TFn = (key: string) => string;
+
+function cardsForPlatform(platform: Platform, t: TFn): PermissionCard[] {
   if (platform === "macos") {
     return [
       {
         id: "microphone",
         permission: "microphone",
         icon: Mic,
-        title: "麦克风",
-        rationale: "用于录制你的语音并送到识别引擎。",
-        systemTermHint: "授权位置：系统设置 → 隐私与安全性 → 麦克风",
+        title: t("onboarding:permissions.mic.title"),
+        rationale: t("onboarding:permissions.mic.rationale"),
+        systemTermHint: t("onboarding:permissions.mic.hint_macos"),
         required: true,
       },
       {
         id: "accessibility",
         permission: "accessibility",
         icon: Keyboard,
-        title: "辅助功能",
-        rationale: "用于把识别出的文字模拟键盘输入到当前焦点的输入框。",
-        systemTermHint: "授权位置：系统设置 → 隐私与安全性 → 辅助功能",
+        title: t("onboarding:permissions.accessibility.title"),
+        rationale: t("onboarding:permissions.accessibility.rationale"),
+        systemTermHint: t("onboarding:permissions.accessibility.hint_macos"),
         required: true,
       },
       {
         id: "input-monitoring",
         permission: "input-monitoring",
         icon: KeyRound,
-        title: "输入监控",
-        rationale:
-          "用于在你正在使用其它 App 时，监听全局快捷键（如 Fn / Ctrl+Win）触发录音。",
-        systemTermHint: "授权位置：系统设置 → 隐私与安全性 → 输入监控",
+        title: t("onboarding:permissions.input_monitoring.title"),
+        rationale: t("onboarding:permissions.input_monitoring.rationale"),
+        systemTermHint: t("onboarding:permissions.input_monitoring.hint_macos"),
         required: true,
       },
     ];
@@ -98,18 +100,17 @@ function cardsForPlatform(platform: Platform): PermissionCard[] {
         id: "microphone",
         permission: "microphone",
         icon: Mic,
-        title: "麦克风",
-        rationale: "用于录制你的语音并送到识别引擎。",
-        systemTermHint: "授权位置：Windows 设置 → 隐私 → 麦克风",
+        title: t("onboarding:permissions.mic.title"),
+        rationale: t("onboarding:permissions.mic.rationale"),
+        systemTermHint: t("onboarding:permissions.mic.hint_windows"),
         required: true,
       },
       {
         id: "inject-tools",
         permission: null,
         icon: Wrench,
-        title: "目标程序权限提示",
-        rationale:
-          "若你常用的程序以管理员身份运行（如 cmd），OpenSpeech 也需要相同权限才能注入文字。",
+        title: t("onboarding:permissions.inject_tools.title_windows"),
+        rationale: t("onboarding:permissions.inject_tools.rationale_windows"),
         required: false,
       },
     ];
@@ -119,30 +120,25 @@ function cardsForPlatform(platform: Platform): PermissionCard[] {
       id: "microphone",
       permission: "microphone",
       icon: Mic,
-      title: "麦克风设备",
-      rationale: "Linux 不需要授权弹窗；从 PipeWire / PulseAudio 选一个输入设备即可。",
+      title: t("onboarding:permissions.mic.title_linux"),
+      rationale: t("onboarding:permissions.mic.rationale_linux"),
       required: true,
     },
     {
       id: "inject-tools",
       permission: null,
       icon: Wrench,
-      title: "检测注入工具",
-      rationale: "Wayland 下需要 ydotool / wtype，X11 下需要 xdotool。OpenSpeech 会自动检测。",
+      title: t("onboarding:permissions.inject_tools.title_linux"),
+      rationale: t("onboarding:permissions.inject_tools.rationale_linux"),
       required: true,
     },
   ];
 }
 
-// 头部副标题：把当前平台需要的权限名直接列出来，避免"权限到底是什么"的疑问。
-function headerSummary(platform: Platform): string {
-  if (platform === "macos") {
-    return "macOS 需要三项系统权限：「麦克风」（录音）、「辅助功能」（把转写的文字写到当前 App）、「输入监控」（监听全局快捷键）。系统的权限缓存与进程绑定——若已在系统设置勾选但仍显示未授权，点击右上角「重启 OpenSpeech」让新权限生效。";
-  }
-  if (platform === "windows") {
-    return "Windows 需要授权「麦克风」（用于录音）。若你常用的目标程序以管理员身份运行，OpenSpeech 也需相同权限才能注入文字。";
-  }
-  return "Linux 不需要授权弹窗：选择一个 PipeWire / PulseAudio 输入设备，并确保安装了 ydotool / wtype（Wayland）或 xdotool（X11）即可。";
+function headerSummary(platform: Platform, t: TFn): string {
+  if (platform === "macos") return t("onboarding:permissions.summary_macos");
+  if (platform === "windows") return t("onboarding:permissions.summary_windows");
+  return t("onboarding:permissions.summary_linux");
 }
 
 function PermissionRow({
@@ -160,6 +156,7 @@ function PermissionRow({
   onPrimary: () => void;
   onRecheck: () => void;
 }) {
+  const { t } = useTranslation();
   const granted = status === "granted";
   const denied =
     status === "denied" || status === "restricted" || status === "unknown";
@@ -168,14 +165,15 @@ function PermissionRow({
   const isInfoOnly = card.permission === null;
 
   const primaryLabel = (() => {
-    if (isInfoOnly) return "我已知晓";
-    if (denied) return "去系统设置";
+    if (isInfoOnly) return t("onboarding:permissions.primary_acknowledged");
+    if (denied) return t("onboarding:permissions.primary_open_settings");
     if (notDetermined) {
       // 麦克风 / 输入监控可触发系统弹窗；辅助功能必须打开系统设置手动勾选。
-      if (card.permission === "accessibility") return "去系统设置";
-      return "请求授权";
+      if (card.permission === "accessibility")
+        return t("onboarding:permissions.primary_open_settings");
+      return t("onboarding:permissions.primary_request");
     }
-    return "授权";
+    return t("onboarding:permissions.primary_grant");
   })();
 
   return (
@@ -215,11 +213,11 @@ function PermissionRow({
           </span>
           {card.required ? (
             <span className="shrink-0 border border-te-accent/60 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-accent">
-              必需
+              {t("onboarding:permissions.badge_required")}
             </span>
           ) : (
             <span className="shrink-0 border border-te-gray/60 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-              推荐
+              {t("onboarding:permissions.badge_recommended")}
             </span>
           )}
         </div>
@@ -235,9 +233,7 @@ function PermissionRow({
           card.permission === "input-monitoring") ? (
           <p className="mt-0.5 inline-flex items-start gap-1.5 font-sans text-[11px] leading-snug text-te-light-gray/80">
             <AlertCircle className="mt-0.5 size-3 shrink-0 text-te-accent" />
-            <span>
-              已勾选但仍提示未授权？在系统设置该权限列表里移除 OpenSpeech 后重新加入，再点「重启 OpenSpeech」。
-            </span>
+            <span>{t("onboarding:permissions.tcc_hint")}</span>
           </p>
         ) : null}
       </div>
@@ -245,11 +241,13 @@ function PermissionRow({
       <div className="flex shrink-0 items-center gap-2">
         {checking ? (
           <span className="inline-flex items-center gap-2 border border-te-gray/60 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray">
-            <Loader2 className="size-3.5 animate-spin" /> 检测中
+            <Loader2 className="size-3.5 animate-spin" />{" "}
+            {t("onboarding:permissions.status_checking")}
           </span>
         ) : granted ? (
           <span className="inline-flex items-center gap-2 border border-te-accent px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-accent">
-            <Check className="size-3.5" /> 已授权
+            <Check className="size-3.5" />{" "}
+            {t("onboarding:permissions.status_granted")}
           </span>
         ) : (
           <>
@@ -275,7 +273,7 @@ function PermissionRow({
                 onClick={onRecheck}
                 disabled={busy}
                 className="inline-flex items-center gap-1 border border-te-gray px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-fg hover:text-te-fg disabled:cursor-wait disabled:opacity-50"
-                title="重新检测"
+                title={t("onboarding:permissions.recheck_one_title")}
               >
                 <RefreshCw className="size-3" />
               </button>
@@ -288,8 +286,9 @@ function PermissionRow({
 }
 
 export function StepPermissions({ onNext }: { onNext: () => void }) {
+  const { t } = useTranslation();
   const platform = detectPlatform();
-  const cards = useMemo(() => cardsForPlatform(platform), [platform]);
+  const cards = useMemo(() => cardsForPlatform(platform, t), [platform, t]);
 
   // 信息卡（无 permission）默认 granted，让 allRequiredOk 不会卡住推荐项 / inject-tools；
   // 真权限卡初始 idle，挂载后立即触发首次检测。
@@ -526,7 +525,9 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
         {/* Hero：从原 StepWelcome 搬过来——开门见山亮出产品定位，再过渡到权限授权。 */}
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.3em]">
-            <span className="text-te-light-gray">// welcome to</span>
+            <span className="text-te-light-gray">
+              {t("onboarding:welcome.tag")}
+            </span>
             <img
               src="/logo-write.png"
               alt=""
@@ -540,39 +541,43 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
             </span>
           </div>
           <h1 className="font-mono text-[clamp(1.75rem,4.5vw,3rem)] font-bold leading-[0.95] tracking-tighter text-te-fg">
-            说出来。<span className="text-te-accent">就成文。</span>
+            {t("onboarding:welcome.headline_part1")}
+            <span className="text-te-accent">
+              {t("onboarding:welcome.headline_part2")}
+            </span>
           </h1>
           <p className="max-w-xl font-sans text-xs leading-relaxed text-te-light-gray">
-            按一下快捷键开始说话，再按一下结束——文字立即出现在你正在使用的任何 App 里。
+            {t("onboarding:welcome.subhead")}
           </p>
         </div>
 
         {/* 权限分区头部：标号 + 标题 + 副文。与 hero 之间留较大间距，让 hero 单独成块。 */}
         <div className="mt-10 flex flex-col gap-1">
           <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-accent">
-            // step 01 / permissions · {platformLabel}
+            {t("onboarding:permissions.section_tag", { platform: platformLabel })}
           </span>
           <div className="flex flex-wrap items-end justify-between gap-3">
             <h2 className="font-mono text-lg font-bold tracking-tighter text-te-fg md:text-xl">
               {platform === "macos"
-                ? "授权 麦克风 与 辅助功能"
+                ? t("onboarding:permissions.title_macos")
                 : platform === "windows"
-                  ? "授权 麦克风"
-                  : "选择麦克风与注入工具"}
+                  ? t("onboarding:permissions.title_windows")
+                  : t("onboarding:permissions.title_linux")}
             </h2>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => void recheckAll()}
                 className="inline-flex items-center gap-2 border border-te-gray/60 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
-                title="重新检测全部权限"
+                title={t("onboarding:permissions.recheck_all_title")}
               >
-                <RefreshCw className="size-3" /> 重新检测
+                <RefreshCw className="size-3" />{" "}
+                {t("onboarding:permissions.recheck_all")}
               </button>
             </div>
           </div>
           <p className="font-sans text-xs leading-snug text-te-light-gray">
-            {headerSummary(platform)}
+            {headerSummary(platform, t)}
           </p>
         </div>
 
@@ -602,7 +607,11 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
             }
             className="group inline-flex items-center gap-3 border border-te-accent bg-te-accent px-6 py-2.5 font-mono text-sm font-bold uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
           >
-            <span>{allRequiredOk ? "下一步" : "重启 OpenSpeech"}</span>
+            <span>
+              {allRequiredOk
+                ? t("onboarding:permissions.footer_next")
+                : t("onboarding:permissions.footer_relaunch")}
+            </span>
             {allRequiredOk ? (
               <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
             ) : (
@@ -611,8 +620,8 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
           </button>
           <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
             {allRequiredOk
-              ? "接下来 2 步：登录 → 试用"
-              : "授权后请重启 · 重启后将自动进入下一步"}
+              ? t("onboarding:permissions.footer_hint_ok")
+              : t("onboarding:permissions.footer_hint_relaunch")}
           </span>
         </div>
       </motion.div>

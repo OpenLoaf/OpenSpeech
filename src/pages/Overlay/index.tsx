@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, Check, Loader2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useRecordingStore } from "@/stores/recording";
 
@@ -76,6 +77,7 @@ const Waveform = memo(function Waveform() {
 });
 
 export default function OverlayPage() {
+  const { t } = useTranslation();
   const state = useRecordingStore((s) => s.state);
   const errorMessage = useRecordingStore((s) => s.errorMessage);
 
@@ -284,7 +286,7 @@ export default function OverlayPage() {
                   ? "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent"
                   : "border-te-gray/40 text-te-light-gray/40",
               )}
-              aria-label="取消"
+              aria-label={t("overlay:aria.cancel")}
             >
               <X className="size-3" />
             </button>
@@ -325,7 +327,7 @@ export default function OverlayPage() {
                   ? "border-te-accent text-te-accent hover:bg-te-accent hover:text-te-accent-fg"
                   : "border-te-gray/40 text-te-light-gray/40",
               )}
-              aria-label="确定"
+              aria-label={t("overlay:aria.confirm")}
             >
               <Check className="size-3" />
             </button>

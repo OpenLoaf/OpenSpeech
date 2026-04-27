@@ -1,0 +1,108 @@
+{
+  "aria": {
+    "cancel": "取消",
+    "confirm": "确定",
+    "close_result": "关闭结果"
+  },
+  "status": {
+    "error_fallback": "错误"
+  },
+  "panel": {
+    "tag": {
+      "ready": "// READY",
+      "listening": "// LISTENING",
+      "transcribing": "// TRANSCRIBING",
+      "injecting": "// INJECTING",
+      "error": "// ERROR",
+      "idle": "// IDLE"
+    },
+    "primary": {
+      "ready": "开始说话…",
+      "listening": "再按一次快捷键 结束并转写",
+      "transcribing": "正在转写…",
+      "injecting": "正在写入输入框…",
+      "error": "出错了，检查日志或重试",
+      "result": "已写入输入框 · 按快捷键开始下一次"
+    },
+    "secondary": {
+      "ready": "Esc 取消",
+      "listening": "Esc 取消本次录音",
+      "transcribing": "Esc 放弃这次结果",
+      "result": "或点击 ✕ 关闭"
+    },
+    "placeholder": "实时转写文字将出现在这里…",
+    "meter": {
+      "live": "LIVE",
+      "chars": "{{count}} CHARS",
+      "samples": "AUDIO · {{count}} SAMPLES"
+    }
+  },
+  "toast": {
+    "stt_start_failed": {
+      "title": "实时转写未启动",
+      "description": "{{reason}} · 本次仅本地录音"
+    },
+    "recording_start_failed": {
+      "title": "录音启动失败"
+    },
+    "transcribe_failed": {
+      "title": "转写失败"
+    },
+    "no_transcript": {
+      "title": "未拿到转写结果",
+      "description": "服务端超时或全程静音"
+    },
+    "recording_save_failed": {
+      "title": "录音保存失败"
+    },
+    "clipboard_failed": {
+      "title": "复制到剪贴板失败"
+    },
+    "paste_failed": {
+      "title": "自动粘贴失败",
+      "description": "文字已复制，请手动按 Cmd/Ctrl+V"
+    },
+    "not_logged_in": {
+      "title": "未登录 OpenSpeech",
+      "description": "请登录后再使用语音输入",
+      "action": "登录"
+    },
+    "offline": {
+      "title": "无互联网连接",
+      "description": "请检查网络后重试"
+    },
+    "service_unreachable": {
+      "title": "无法连接到服务",
+      "description": "网络不可达或服务端异常，已取消本次录音"
+    },
+    "asr_error": {
+      "title": "转写异常",
+      "unknown": "未知错误"
+    },
+    "insufficient_credits": {
+      "title": "余额不足",
+      "description": "已取消本次转写，请前往账户页充值",
+      "error_message": "余额不足，已取消本次转写"
+    },
+    "session_timeout": {
+      "title": "会话超时",
+      "description": "达到 2 小时服务端上限"
+    },
+    "esc_arm": {
+      "title": "再次按 ESC 取消",
+      "description": "1.5 秒内按下生效"
+    }
+  },
+  "transcript": {
+    "placeholder": "（未能获取转写结果）"
+  },
+  "error": {
+    "stt_not_authenticated": "未登录 OpenLoaf",
+    "stt_5xx": "SaaS 服务端错误（5xx）",
+    "stt_4xx": "SaaS 鉴权失败（4xx）",
+    "stt_mic_not_ready": "麦克风未就绪",
+    "stt_network": "网络不可达",
+    "register_failed": "注册失败：{{id}}（{{error}}）",
+    "sync_hotkey_failed": "同步快捷键到 Rust 失败：{{error}}"
+  }
+}

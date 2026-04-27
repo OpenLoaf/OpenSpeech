@@ -1,0 +1,135 @@
+{
+  "header": {
+    "subtitle": "// first run setup"
+  },
+  "welcome": {
+    "tag": "// welcome to",
+    "headline_part1": "说出来。",
+    "headline_part2": "就成文。",
+    "subhead": "按一下快捷键开始说话，再按一下结束——文字立即出现在你正在使用的任何 App 里。"
+  },
+  "permissions": {
+    "section_tag": "// step 01 / permissions · {{platform}}",
+    "title_macos": "授权 麦克风 与 辅助功能",
+    "title_windows": "授权 麦克风",
+    "title_linux": "选择麦克风与注入工具",
+    "recheck_all": "重新检测",
+    "recheck_all_title": "重新检测全部权限",
+    "recheck_one_title": "重新检测",
+    "summary_macos": "macOS 需要三项系统权限：「麦克风」（录音）、「辅助功能」（把转写的文字写到当前 App）、「输入监控」（监听全局快捷键）。系统的权限缓存与进程绑定——若已在系统设置勾选但仍显示未授权，点击右上角「重启 OpenSpeech」让新权限生效。",
+    "summary_windows": "Windows 需要授权「麦克风」（用于录音）。若你常用的目标程序以管理员身份运行，OpenSpeech 也需相同权限才能注入文字。",
+    "summary_linux": "Linux 不需要授权弹窗：选择一个 PipeWire / PulseAudio 输入设备，并确保安装了 ydotool / wtype（Wayland）或 xdotool（X11）即可。",
+    "badge_required": "必需",
+    "badge_recommended": "推荐",
+    "status_checking": "检测中",
+    "status_granted": "已授权",
+    "primary_acknowledged": "我已知晓",
+    "primary_open_settings": "去系统设置",
+    "primary_request": "请求授权",
+    "primary_grant": "授权",
+    "tcc_hint": "已勾选但仍提示未授权？在系统设置该权限列表里移除 OpenSpeech 后重新加入，再点「重启 OpenSpeech」。",
+    "footer_next": "下一步",
+    "footer_relaunch": "重启 OpenSpeech",
+    "footer_hint_ok": "接下来 2 步：登录 → 试用",
+    "footer_hint_relaunch": "授权后请重启 · 重启后将自动进入下一步",
+    "mic": {
+      "title": "麦克风",
+      "title_linux": "麦克风设备",
+      "rationale": "用于录制你的语音并送到识别引擎。",
+      "rationale_linux": "Linux 不需要授权弹窗；从 PipeWire / PulseAudio 选一个输入设备即可。",
+      "hint_macos": "授权位置：系统设置 → 隐私与安全性 → 麦克风",
+      "hint_windows": "授权位置：Windows 设置 → 隐私 → 麦克风"
+    },
+    "accessibility": {
+      "title": "辅助功能",
+      "rationale": "用于把识别出的文字模拟键盘输入到当前焦点的输入框。",
+      "hint_macos": "授权位置：系统设置 → 隐私与安全性 → 辅助功能"
+    },
+    "input_monitoring": {
+      "title": "输入监控",
+      "rationale": "用于在你正在使用其它 App 时，监听全局快捷键（如 Fn / Ctrl+Win）触发录音。",
+      "hint_macos": "授权位置：系统设置 → 隐私与安全性 → 输入监控"
+    },
+    "inject_tools": {
+      "title_windows": "目标程序权限提示",
+      "rationale_windows": "若你常用的程序以管理员身份运行（如 cmd），OpenSpeech 也需要相同权限才能注入文字。",
+      "title_linux": "检测注入工具",
+      "rationale_linux": "Wayland 下需要 ydotool / wtype，X11 下需要 xdotool。OpenSpeech 会自动检测。"
+    }
+  },
+  "login": {
+    "section_tag": "// step 02 / account",
+    "title": "登录 OpenLoaf 账号",
+    "bonus_main": "新用户立即到账 200 积分",
+    "bonus_minutes_prefix": "· 约",
+    "bonus_minutes_value": "30 分钟",
+    "bonus_minutes_suffix": "语音",
+    "method_wechat_label": "微信登录",
+    "method_wechat_sub": "扫码即可登录",
+    "method_google_label": "Google 登录",
+    "method_google_sub": "浏览器跳转登录",
+    "status_success": "登录成功，正在进入下一步…",
+    "status_opening": "正在打开浏览器…",
+    "status_polling": "等待在浏览器完成授权…",
+    "cancel": "取消",
+    "advanced_collapse": "↑ 收起",
+    "advanced_expand": "↓ 我有自己的 STT 端点",
+    "advanced_desc": "配置自定义 REST STT 端点（OpenAI / Groq / Deepgram / 自部署）。此选项仅推荐给开发者；普通用户请用上方账号登录。",
+    "advanced_cta": "跳过登录，去配置自定义端点",
+    "error_default": "登录失败，请重试",
+    "error_reset": "登录服务器连接被重置，请重试",
+    "error_timeout": "登录超时，请重试",
+    "error_network": "无法连接登录服务器，请检查网络后重试"
+  },
+  "try_it": {
+    "section_tag": "// step 03 / try it",
+    "title": "试一次。",
+    "subhead": "按一下下方快捷键开始 · 说一句话 · 再按一下结束",
+    "checklist_tag": "// CHECKLIST",
+    "checklist": {
+      "step1": "按一下听写快捷键开始",
+      "step2": "对着麦克风说一句话",
+      "step3": "再按一下结束",
+      "step4": "看到文字写入下方"
+    },
+    "mock_slices": [
+      "今",
+      "今天",
+      "今天天气",
+      "今天天气真好",
+      "今天天气真好，",
+      "今天天气真好，我打开",
+      "今天天气真好，我打开了 OpenSpeech",
+      "今天天气真好，我打开了 OpenSpeech 试试看。"
+    ],
+    "hotkey_title": "你的听写快捷键",
+    "hotkey_hint": "单击开始 · 再按一次结束",
+    "samples_label": "AUDIO · {{count}} SAMPLES",
+    "live_transcript_tag": "// LIVE TRANSCRIPT",
+    "transcript_chars": "{{count}} CHARS",
+    "transcript_placeholder": "实时转写文字将出现在这里…",
+    "completed_title": "配置完成，可以开始使用了",
+    "completed_desc": "正式使用时光标在哪个 App，文字就写到哪个 App。",
+    "reset": "重置",
+    "mock_running": "演示中…",
+    "mock_run": "▶ 模拟一次",
+    "finish": "完成引导",
+    "skip_finish": "跳过并完成",
+    "status": {
+      "ready_tag": "// READY",
+      "ready_primary": "开始说话…",
+      "ready_secondary": "Esc 取消",
+      "listening_tag": "// LISTENING",
+      "listening_primary": "再按一次快捷键 结束并转写",
+      "listening_secondary": "Esc 取消本次录音",
+      "transcribing_tag": "// TRANSCRIBING",
+      "transcribing_primary": "正在转写…",
+      "transcribing_secondary": "Esc 放弃这次结果",
+      "injecting_tag": "// INJECTING",
+      "injecting_primary": "正在写入输入框…",
+      "error_tag": "// ERROR",
+      "error_primary": "出错了，检查日志或重试",
+      "idle_tag": "// IDLE"
+    }
+  }
+}

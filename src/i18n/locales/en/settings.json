@@ -1,0 +1,118 @@
+{
+  "page": {
+    "section_index": "[04] System",
+    "title": "Settings",
+    "subtitle": "Configure dictation, model endpoints and app behavior. Changes apply instantly — no save needed.",
+    "dialog_title": "Settings",
+    "dialog_sr": "OpenSpeech settings"
+  },
+  "tabs": {
+    "account": "Account",
+    "general": "General",
+    "model": "Model",
+    "personalization": "Personalization",
+    "about": "About"
+  },
+  "hotkeys": {
+    "how_it_works": "// HOW IT WORKS",
+    "how_it_works_body": "Press the hotkey once to start speaking, press again to stop and insert the text into the focused field. A second press within 300 ms is treated as an accidental double-tap and the recording is discarded."
+  },
+  "section": {
+    "shortcuts": "Keyboard shortcuts",
+    "language": "Language",
+    "audio": "Audio",
+    "asr_segment": "Segmentation",
+    "text_injection": "Text injection",
+    "behavior": "Behavior",
+    "model_rest": "Large model (REST)",
+    "ai_enhance": "AI enhancement",
+    "dictionary_learning": "Dictionary learning",
+    "identity": "Identity",
+    "session": "Session",
+    "build": "Build",
+    "third_party": "Third-party dependencies"
+  },
+  "general": {
+    "interface_lang": "Interface language",
+    "dictation_lang": "Dictation language",
+    "translation_target": "Translation target",
+    "lang_variant": "Language variant",
+    "input_device": "Input device",
+    "input_level": "Input level",
+    "input_level_hint_listening": "Live level · listening on: {{name}}",
+    "input_level_hint": "Live microphone level",
+    "cue_sound": "Start / stop cue sound",
+    "restore_clipboard": "Restore clipboard after paste",
+    "restore_clipboard_hint": "Recommended to keep on",
+    "launch_startup": "Launch at login",
+    "show_dock": "Show app in Dock",
+    "show_dock_hint": "Show the OpenSpeech icon in the macOS Dock for quick access. When off, the app runs as a menu-bar-only app (you can still open the main window from the tray).",
+    "overlay_always_visible": "Always show floating recorder",
+    "overlay_always_visible_hint": "Keep the recorder bar floating on screen even when idle so you can always see status.",
+    "close_to_tray": "Minimize to tray on close",
+    "close_to_tray_hint": "When on, closing the main window hides it to the tray; otherwise a confirm dialog appears each time.",
+    "auto_update": "Auto update",
+    "auto_update_hint": "Silently check and install new versions on launch. When off, you can only check manually from the tray.",
+    "loading": "// loading settings…"
+  },
+  "device": {
+    "system_default": "System default",
+    "system_default_with_current": "System default (currently: {{name}})",
+    "is_default_suffix": "{{name}} · system default",
+    "disconnected_with_fallback": "{{name}} · disconnected, using system default ({{fallback}})",
+    "disconnected": "{{name}} · disconnected"
+  },
+  "asr_segment": {
+    "manual_label": "Manual segmentation (recommended)",
+    "manual_hint": "Treat the whole recording as a single utterance and return the transcript only after you release the key. The model gets full context — more accurate and won't be split by pauses.",
+    "auto_label": "Auto segmentation",
+    "auto_hint": "Server splits at pauses and streams partials in real time. Best for long meeting captions, live transcription and other unattended scenarios."
+  },
+  "inject": {
+    "clipboard_label": "Clipboard + paste",
+    "clipboard_hint": "Default method, fast and reliable.",
+    "keyboard_label": "Simulate keyboard",
+    "keyboard_hint": "Type one character at a time."
+  },
+  "model": {
+    "byo_unavailable_tag": "// BYO-MODEL · not yet available",
+    "byo_unavailable_body": "Custom STT REST endpoints (endpoint URL / API Key / model name / test connection) aren't wired up yet. All dictation currently goes through OpenLoaf SaaS. This surface is under active development and will be enabled in the next release.",
+    "endpoint": "Endpoint URL",
+    "api_key": "API Key",
+    "api_key_hint": "Stored in the system keychain; saved automatically on blur.",
+    "model_name": "Model name",
+    "timeout_seconds": "Request timeout (seconds)",
+    "audio_format": "Audio format",
+    "test_connection_disabled": "Test connection (not yet available)",
+    "show_key": "Show API Key",
+    "hide_key": "Hide API Key",
+    "key_saved_toast": "API Key saved to system keychain",
+    "key_save_failed_toast": "Failed to save API Key: {{error}}"
+  },
+  "personalization": {
+    "auto_polish": "AI auto-polish",
+    "auto_polish_hint": "Remove filler words and slips",
+    "context_style": "Context style",
+    "context_style_hint": "Pass the foreground app name to the model to adapt tone",
+    "sensitivity": "Learning sensitivity",
+    "sensitivity_hint": "How aggressively new vocabulary is auto-collected",
+    "low": "Low",
+    "normal": "Normal",
+    "high": "High"
+  },
+  "account": {
+    "email": "Email",
+    "subscription": "Subscription",
+    "subscription_hint": "Using your own model key",
+    "free_byo_badge": "Free / BYO model",
+    "sign_out": "Sign out",
+    "sign_out_hint": "Signing out clears the local login state. Local recordings, history and dictionary stay intact."
+  },
+  "about": {
+    "version": "Version",
+    "license": "License",
+    "source": "Source code",
+    "check_update": "Check for updates",
+    "rerun_onboarding": "Re-run first-launch onboarding"
+  }
+}

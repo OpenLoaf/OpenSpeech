@@ -1,11 +1,9 @@
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { PulsarGrid } from "@/components/PulsarGrid";
 
-/**
- * 应用启动时的全屏 loading 界面。
- * TE 工业风：黑底 + 黄点缀 + Space Mono + 脉冲网格动画。
- */
 export function LoadingScreen() {
+  const { t } = useTranslation();
   return (
     <section className="relative h-svh w-full overflow-hidden bg-te-bg">
       {/* 顶部窗口拖拽条 */}
@@ -68,7 +66,7 @@ export function LoadingScreen() {
               animate={{ opacity: [1, 0.3, 1] }}
               transition={{ duration: 2, repeat: Infinity }}
             />
-            INITIALIZING
+            {t("dialogs:loading_screen.initializing")}
           </span>
         </motion.div>
 
@@ -90,7 +88,7 @@ export function LoadingScreen() {
           transition={{ duration: 0.6, delay: 0.7 }}
           className="mb-10 text-center font-mono text-sm tracking-[0.2em] text-te-light-gray uppercase md:text-base"
         >
-          Speak less, write more.
+          {t("dialogs:loading_screen.tagline")}
         </motion.p>
 
         {/* 加载进度指示器 */}
@@ -117,7 +115,7 @@ export function LoadingScreen() {
             animate={{ opacity: [0.4, 1, 0.4] }}
             transition={{ duration: 2, repeat: Infinity }}
           >
-            Loading
+            {t("dialogs:loading_screen.loading")}
           </motion.span>
         </motion.div>
       </div>

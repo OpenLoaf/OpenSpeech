@@ -1,0 +1,12 @@
+{
+  "feedback": "反馈意见",
+  "open_home": "打开 OpenSpeech 主页",
+  "open_settings": "设置…",
+  "mic_submenu": "选择麦克风",
+  "auto_detect": "Auto-detect",
+  "auto_detect_with_name": "Auto-detect ({{name}})",
+  "open_dictionary": "将词汇添加到词典",
+  "version_prefix": "版本 {{version}}",
+  "check_update": "检查更新",
+  "quit": "退出 OpenSpeech"
+}

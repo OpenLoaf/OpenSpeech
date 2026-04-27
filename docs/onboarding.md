@@ -73,6 +73,13 @@
 
 ### Step 4/4 · Try It（试一次）
 
+**强制 AUTO 分句模式**：进入本步必须将 ASR 分句模式临时覆盖为 `AUTO`（服务端 VAD），离开本步立即恢复用户原值。
+
+- 用户全局默认是 `MANUAL`（push-to-talk 场景下更准更便宜，见 `docs/settings.md` / settings.ts 注释）。
+- 但 `MANUAL` 不发 partial 事件——按下快捷键到松手前 `liveTranscript` 一直为空字符串，本步面板的"实时转写"区会一直是 placeholder，用户会以为实时输出功能坏了 / 被 mute 了 / 没在录音。
+- 解法：StepTryIt 挂载时调 `useRecordingStore.setSegmentModeOverride("AUTO")`，卸载时回 `null`。`getEffectiveSegmentMode()` 优先读 override，故只影响 onboarding，不污染用户的 `settings.general.asrSegmentMode`。
+- 不要换成"直接修改用户 settings 然后再改回去"——任何中途崩溃 / 路由跳转 / 父组件强卸载都会留下错配。
+
 内容：在向导窗口内嵌一个带 placeholder "Click here and try..." 的大号 `<textarea>` + 倒计时指示。
 
 **关键：焦点循环的 override 机制**

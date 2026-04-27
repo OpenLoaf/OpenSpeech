@@ -1,7 +1,9 @@
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import SettingsContent from "@/components/SettingsContent";
 
 export default function SettingsPage() {
+  const { t } = useTranslation("settings");
   return (
     <section className="h-full overflow-y-auto bg-te-bg px-[4vw] py-[clamp(4rem,10vw,8rem)]">
       <div className="mx-auto max-w-6xl">
@@ -13,13 +15,13 @@ export default function SettingsPage() {
           transition={{ duration: 0.6 }}
         >
           <div className="mb-3 font-mono text-xs uppercase tracking-[0.25em] text-te-light-gray">
-            [04] 系统
+            {t("page.section_index")}
           </div>
           <h1 className="font-mono text-3xl font-bold tracking-tighter text-te-fg md:text-4xl">
-            设置
+            {t("page.title")}
           </h1>
           <p className="mt-3 max-w-xl font-sans text-sm text-te-light-gray">
-            配置听写、模型端点与应用行为。改动即时生效，无需保存。
+            {t("page.subtitle")}
           </p>
         </motion.div>
 
