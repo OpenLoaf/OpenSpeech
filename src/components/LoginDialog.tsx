@@ -60,8 +60,8 @@ const PROVIDERS: Array<{
   label: string;
   Icon: (p: { className?: string }) => ReactElement;
 }> = [
-  { id: "google", label: "使用 Google 登录", Icon: GoogleMark },
   { id: "wechat", label: "使用微信登录", Icon: WechatMark },
+  { id: "google", label: "使用 Google 登录", Icon: GoogleMark },
 ];
 
 /** 把后端 / 网络层的 raw 错误清洗成短中文提示，友好且不吓人。

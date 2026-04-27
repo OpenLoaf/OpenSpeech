@@ -122,12 +122,17 @@ export default function OverlayPage() {
     };
   }, []);
 
+  // 仅在窗口已经"应该可见"时同步高度——浮窗在 idle 期处于 fade-out / 已隐藏，
+  // 此时改高度会让下一次 show 看到错位的尺寸。idle 收尾另外在 onExitComplete 里
+  // 重置回 PILL_HEIGHT。
+  const visible = state !== "idle" || toast !== null;
   useEffect(() => {
+    if (!visible) return;
     const h = toast ? EXPANDED_HEIGHT : PILL_HEIGHT;
     invoke("overlay_set_height", { height: h }).catch((e) =>
       console.warn("[overlay] set_height failed", e),
     );
-  }, [toast]);
+  }, [toast, visible]);
 
   // ESC 关闭悬浮条上的 toast：所有窗口都会收到 `openspeech://key-preview`，
   // overlay 自己负责"有 toast 就关 toast"。录音激活态下的双击确认逻辑由主窗
@@ -172,16 +177,18 @@ export default function OverlayPage() {
     dismissToast();
   };
 
-  // FSM 回到 idle 且没有错误条挂着，整个悬浮条就没有展示理由——把高度先缩回
-  // PILL_HEIGHT 再 hide，避免下一次 show 时仍带着上一次错误条的撑高。
-  useEffect(() => {
-    if (state === "idle" && toast === null) {
-      invoke("overlay_set_height", { height: PILL_HEIGHT }).catch(() => {});
-      invoke("overlay_hide").catch((e) =>
-        console.warn("[overlay] hide failed", e),
-      );
-    }
-  }, [state, toast]);
+  // overlay_hide 不在 state→idle 当下立即调用——交给 motion 出场动画结束后由
+  // onExitComplete 触发，避免窗口在 fade-out 中途就被砍掉。height 复位也跟着
+  // 推后；放在 visibleRef 守卫的 onExitComplete 里，可在过渡期被新的 show 抢回。
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const handleExitComplete = () => {
+    if (visibleRef.current) return;
+    invoke("overlay_set_height", { height: PILL_HEIGHT }).catch(() => {});
+    invoke("overlay_hide").catch((e) =>
+      console.warn("[overlay] hide failed", e),
+    );
+  };
 
   const isRecording = state === "recording";
   const isPreparing = state === "preparing";
@@ -196,100 +203,135 @@ export default function OverlayPage() {
       ? "border-te-light-gray text-te-fg"
       : "border-te-accent text-te-accent";
 
+  // 胶囊中央在不同 FSM 阶段切换的内容用同一个 key 空间——AnimatePresence 才能
+  // 识别"换内容"并跑出 / 入场动画；同 key 只视作 prop 变化，不会触发过渡。
+  const centerKey = isTranscribing
+    ? "transcribing"
+    : isInjecting
+      ? "injecting"
+      : isError
+        ? "error"
+        : "wave";
+
   return (
-    <div className="flex h-screen w-screen flex-col">
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            key={toast.id}
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.15 }}
-            className={cn(
-              "flex items-start gap-1.5 border bg-te-bg px-2 py-1",
-              toastAccent,
-            )}
-            style={{ height: TOAST_HEIGHT, marginBottom: TOAST_GAP }}
-          >
-            <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-mono text-[10px] uppercase tracking-[0.15em]">
-                {toast.title}
-              </div>
-              {toast.description && (
-                <div className="truncate font-mono text-[9px] leading-[1.25] text-te-light-gray">
-                  {toast.description}
-                </div>
-              )}
-            </div>
-            {toast.action && (
-              <button
-                type="button"
-                onClick={() => runToastAction(toast.action!.key)}
+    <AnimatePresence onExitComplete={handleExitComplete}>
+      {visible && (
+        <motion.div
+          key="overlay-shell"
+          initial={{ opacity: 0, scale: 0.94, y: 4 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.94, y: 4 }}
+          transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+          className="flex h-screen w-screen flex-col bg-te-bg"
+          style={{ transformOrigin: "50% 100%" }}
+        >
+          <AnimatePresence>
+            {toast && (
+              <motion.div
+                key={toast.id}
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.15 }}
                 className={cn(
-                  "shrink-0 self-center border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em]",
-                  "hover:bg-te-accent hover:text-te-accent-fg",
+                  "flex items-start gap-1.5 border bg-te-bg px-2 py-1",
                   toastAccent,
                 )}
+                style={{ height: TOAST_HEIGHT, marginBottom: TOAST_GAP }}
               >
-                {toast.action.label}
-              </button>
+                <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-[10px] uppercase tracking-[0.15em]">
+                    {toast.title}
+                  </div>
+                  {toast.description && (
+                    <div className="truncate font-mono text-[9px] leading-[1.25] text-te-light-gray">
+                      {toast.description}
+                    </div>
+                  )}
+                </div>
+                {toast.action && (
+                  <button
+                    type="button"
+                    onClick={() => runToastAction(toast.action!.key)}
+                    className={cn(
+                      "shrink-0 self-center border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em]",
+                      "hover:bg-te-accent hover:text-te-accent-fg",
+                      toastAccent,
+                    )}
+                  >
+                    {toast.action.label}
+                  </button>
+                )}
+              </motion.div>
             )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </AnimatePresence>
 
-      <div
-        className={cn(
-          "flex w-full items-center gap-2 border px-1.5",
-          isError ? "border-te-accent bg-te-bg" : "border-te-gray bg-te-bg",
-        )}
-        style={{ height: PILL_HEIGHT }}
-      >
-        <button
-          type="button"
-          onClick={cancel}
-          disabled={!canCancel}
-          className={cn(
-            "flex size-6 shrink-0 items-center justify-center border transition-colors",
-            canCancel
-              ? "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent"
-              : "border-te-gray/40 text-te-light-gray/40",
-          )}
-          aria-label="取消"
-        >
-          <X className="size-3" />
-        </button>
+          <div
+            className={cn(
+              "flex w-full items-center gap-2 border px-1.5 transition-colors",
+              isError ? "border-te-accent bg-te-bg" : "border-te-gray bg-te-bg",
+            )}
+            style={{ height: PILL_HEIGHT }}
+          >
+            <button
+              type="button"
+              onClick={cancel}
+              disabled={!canCancel}
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center border transition-colors",
+                canCancel
+                  ? "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent"
+                  : "border-te-gray/40 text-te-light-gray/40",
+              )}
+              aria-label="取消"
+            >
+              <X className="size-3" />
+            </button>
 
-        <div className="flex min-w-0 flex-1 items-center justify-center">
-          {isTranscribing && (
-            <Loader2 className="size-3.5 text-te-accent animate-spin" />
-          )}
-          {isInjecting && <Check className="size-3.5 text-te-accent" />}
-          {isError && (
-            <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
-              {errorMessage ?? "ERROR"}
-            </span>
-          )}
-          {(isRecording || isPreparing) && <Waveform />}
-        </div>
+            <div className="flex min-w-0 flex-1 items-center justify-center">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={centerKey}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex h-full w-full items-center justify-center"
+                >
+                  {centerKey === "transcribing" && (
+                    <Loader2 className="size-3.5 text-te-accent animate-spin" />
+                  )}
+                  {centerKey === "injecting" && (
+                    <Check className="size-3.5 text-te-accent" />
+                  )}
+                  {centerKey === "error" && (
+                    <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
+                      {errorMessage ?? "ERROR"}
+                    </span>
+                  )}
+                  {centerKey === "wave" && <Waveform />}
+                </motion.div>
+              </AnimatePresence>
+            </div>
 
-        <button
-          type="button"
-          onClick={finalize}
-          disabled={!canFinalize}
-          className={cn(
-            "flex size-6 shrink-0 items-center justify-center border transition-colors",
-            canFinalize
-              ? "border-te-accent text-te-accent hover:bg-te-accent hover:text-te-accent-fg"
-              : "border-te-gray/40 text-te-light-gray/40",
-          )}
-          aria-label="确定"
-        >
-          <Check className="size-3" />
-        </button>
-      </div>
-    </div>
+            <button
+              type="button"
+              onClick={finalize}
+              disabled={!canFinalize}
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center border transition-colors",
+                canFinalize
+                  ? "border-te-accent text-te-accent hover:bg-te-accent hover:text-te-accent-fg"
+                  : "border-te-gray/40 text-te-light-gray/40",
+              )}
+              aria-label="确定"
+            >
+              <Check className="size-3" />
+            </button>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

@@ -42,7 +42,10 @@
 // 坑位：
 // - idle 60s 服务端主动关：持续发帧即可续活，hold-to-speak 天然满足。
 // - 余额不足：先 `credits{warning:"low_balance"}` 再 `closed{reason:"insufficient_credits"}`。
-// - 401：realtime 不会自动 refresh；假设 REST 链路已保持 token 新鲜，未登录直接拒。
+// - 401：realtime 自身的 WebSocket 握手不接 401 重试；改成 stt_start 进 blocking 前
+//   先调 OpenLoafState::ensure_access_token_fresh —— JWT exp ≤ 30s 才主动用
+//   refresh_token 续期，握手时一定拿到的是新鲜 access_token。续期失败 → 走
+//   handle_session_expired 等价 REST 的 refresh-fail 清场路径。
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -168,6 +171,17 @@ pub async fn stt_start<R: Runtime>(
     lang: Option<String>,
     mode: Option<String>,
 ) -> Result<(), String> {
+    // realtime 不走 call_authed，握手 401 服务端就会直接断。这里先按 JWT exp
+    // 做新鲜度检查，临近过期（≤30s）就立刻用 refresh_token 续期；续期失败等价
+    // REST 链路里 refresh-fail 的清场（handle_session_expired），让前端弹登录框。
+    {
+        let ol = app.state::<SharedOpenLoaf>();
+        if !ol.ensure_access_token_fresh().await {
+            handle_session_expired(&app, &ol);
+            return Err(ERR_NOT_AUTHENTICATED.to_string());
+        }
+    }
+
     tauri::async_runtime::spawn_blocking(move || stt_start_impl(app, lang, mode))
         .await
         .map_err(|e| format!("stt_start join: {e}"))?

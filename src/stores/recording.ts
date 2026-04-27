@@ -70,6 +70,11 @@ interface RecordingStore {
 
 const PREPARING_MS = 300;
 
+// error 态最长停留时长——超过后自动回 idle，避免悬浮条因用户没注意到错误而
+// 永久挂在屏幕上。Toast (2s) 提示先消失，再多给约 2s 让用户读 pill 上的错误
+// 文字。需要更久阅读时间的错误应改用 toast 的 durationMs 控制。
+const ERROR_AUTO_DISMISS_MS = 4000;
+
 const emptyLevels = () => Array(LEVEL_BUFFER_LEN).fill(0) as number[];
 
 // Mic 的生命周期归主窗口管：Rust 事件会广播到所有 webview，overlay 的 store 也
@@ -260,33 +265,81 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // 结束阶段：把最终文字写到系统剪贴板，再通过 enigo 模拟 Cmd/Ctrl+V 粘贴
   // 到松开 PTT 时焦点所在的输入框。剪贴板写失败 / 注入失败都不致命——文字
   // 仍可在历史里查到，用户也可手动粘贴。空串跳过整段。
+  //
+  // AUTO（VAD）模式下，asr-final 已经把若干段增量贴下去了——这里要等增量链
+  // 清空，再只补 lastInjectedText 之后的尾巴；否则会把整段又贴一次造成重复。
   if (text) {
-    let clipboardOk = false;
     try {
-      await writeClipboard(text);
-      clipboardOk = true;
-    } catch (e) {
-      console.warn("[clipboard] writeText failed:", e);
-      notifyOverlay("warning", "复制到剪贴板失败", { description: String(e) });
-    }
-    if (clipboardOk) {
+      await injectChain;
+    } catch {}
+    const segmentMode = useSettingsStore.getState().general.asrSegmentMode;
+    const remaining =
+      segmentMode === "AUTO" && text.startsWith(lastInjectedText)
+        ? text.slice(lastInjectedText.length)
+        : text;
+    if (remaining) {
+      let clipboardOk = false;
       try {
-        await invoke("inject_paste");
+        await writeClipboard(remaining);
+        clipboardOk = true;
       } catch (e) {
-        console.warn("[inject] paste failed:", e);
-        notifyOverlay("warning", "自动粘贴失败", {
-          description: "文字已复制，请手动按 Cmd/Ctrl+V",
-        });
+        console.warn("[clipboard] writeText failed:", e);
+        notifyOverlay("warning", "复制到剪贴板失败", { description: String(e) });
+      }
+      if (clipboardOk) {
+        try {
+          await invoke("inject_paste");
+        } catch (e) {
+          console.warn("[inject] paste failed:", e);
+          notifyOverlay("warning", "自动粘贴失败", {
+            description: "文字已复制，请手动按 Cmd/Ctrl+V",
+          });
+        }
       }
     }
+    resetIncrementalInject();
   }
   return { rec, text };
+};
+
+// AUTO（VAD）模式下的增量注入状态：每次服务端 Final 到达，asr-final payload 是
+// 当前为止「所有已 Final 段拼起来的整段」。我们把超出 lastInjectedText 的差量
+// 写剪贴板 + 模拟 Cmd/Ctrl+V，让用户边说边看到字落到焦点输入框里。
+//
+// injectChain 串行化：enigo 的 Cmd+V 不会被打断，但 writeClipboard 是异步，
+// 多次 final 几乎同时到达时会撞剪贴板（后写覆盖前写、前一段没贴完就被改）。
+// 用一个 Promise 串行链兜住。
+let lastInjectedText = "";
+let injectChain: Promise<void> = Promise.resolve();
+
+const resetIncrementalInject = () => {
+  lastInjectedText = "";
+};
+
+const injectIncremental = (fullText: string) => {
+  if (!IS_MAIN_WINDOW) return;
+  // 服务端纠错把已注入的前缀改写时（极少），无法回退已敲下去的字符；
+  // 跳过本轮增量，等 finalize 走原路径把"剩余的"再贴一次（用户视觉上会出现重复，
+  // 但比反复抖动更可控）。
+  if (!fullText.startsWith(lastInjectedText)) return;
+  const delta = fullText.slice(lastInjectedText.length);
+  if (!delta) return;
+  lastInjectedText = fullText;
+  injectChain = injectChain.then(async () => {
+    try {
+      await writeClipboard(delta);
+      await invoke("inject_paste");
+    } catch (e) {
+      console.warn("[stt] incremental inject failed:", e);
+    }
+  });
 };
 
 const discardRecording = () => {
   if (!IS_MAIN_WINDOW) return;
   void cancelRecording();
   void cancelSttSession();
+  resetIncrementalInject();
 };
 
 // 听写开始 / 结束的提示音——Web Audio 即时合成，零素材依赖。
@@ -413,15 +466,41 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       // 避免双倍 IPC 流量。
       let prevSnapshot = "";
       let prevState: RecordingState = get().state;
+      let errorDismissTimer: number | null = null;
       useRecordingStore.subscribe((s) => {
-        // 提示音：进入 recording = 开始 cue；recording → transcribing = 结束 cue。
-        // 误触取消 (preparing/recording → idle 不经 transcribing) 静默，避免噪声。
-        if (prevState !== "recording" && s.state === "recording") {
+        // 提示音三条 FSM 边触发——startCue 放在进入 preparing 时（按下即响），
+        // 不等 PREPARING_MS 后才到 recording，否则用户感觉"按了 300ms 才有反馈"。
+        // cancelCue 覆盖 ESC 双击、overlay × 按钮、快速双击误触三条收尾路径。
+        if (
+          (prevState === "idle" || prevState === "error") &&
+          s.state === "preparing"
+        ) {
           playStartCue();
         } else if (prevState === "recording" && s.state === "transcribing") {
           playStopCue();
+        } else if (
+          (prevState === "preparing" || prevState === "recording") &&
+          s.state === "idle"
+        ) {
+          playCancelCue();
         }
         prevState = s.state;
+
+        // error 自愈：每次状态变化先清旧定时器；若进入 error 则重新计时。
+        // 同样的 error 重复 set（errorMessage 变了）也会重置——给"最近一次错误"
+        // 完整的 ERROR_AUTO_DISMISS_MS 阅读窗口。
+        if (errorDismissTimer !== null) {
+          window.clearTimeout(errorDismissTimer);
+          errorDismissTimer = null;
+        }
+        if (s.state === "error") {
+          errorDismissTimer = window.setTimeout(() => {
+            errorDismissTimer = null;
+            if (useRecordingStore.getState().state === "error") {
+              useRecordingStore.getState().dismissError();
+            }
+          }, ERROR_AUTO_DISMISS_MS);
+        }
 
         const snap = JSON.stringify({
           state: s.state,
@@ -614,6 +693,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
 
           const recordingId = newId();
+          resetIncrementalInject();
           set({
             state: "preparing",
             activeId: id,
@@ -682,7 +762,15 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         set({ liveTranscript: String(evt.payload ?? "") });
       });
       const u5 = await listen<string>("openspeech://asr-final", (evt) => {
-        set({ liveTranscript: String(evt.payload ?? "") });
+        const text = String(evt.payload ?? "");
+        set({ liveTranscript: text });
+        // AUTO（VAD）模式下，每次服务端 Final 立刻把新增段敲到当前焦点输入框，
+        // 实现"边说边出字"。MANUAL 只会出一段 Final 且与 finalize 几乎同时到达，
+        // 走原 finalize 的整段粘贴更省事，这里跳过。
+        const mode = useSettingsStore.getState().general.asrSegmentMode;
+        if (mode === "AUTO") {
+          injectIncremental(text);
+        }
       });
       const u6 = await listen<{ code: string; message: string }>(
         "openspeech://asr-error",
@@ -746,7 +834,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           if (escArmedAt > 0 && now - escArmedAt <= ESC_CONFIRM_WINDOW_MS) {
             console.log("[recording] Esc confirmed, cancelling", { state: s });
             escArmedAt = 0;
-            playCancelCue();
             discardRecording();
             stopMic();
             set({
@@ -806,7 +893,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     },
 
     simulateCancel: () => {
-      playCancelCue();
       discardRecording();
       stopMic();
       set({

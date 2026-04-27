@@ -181,6 +181,19 @@ impl OpenLoafState {
         self.pending.lock().ok().and_then(|mut m| m.remove(state))
     }
 
+    /// 给不走 `call_authed` 的链路（realtime WebSocket 等）连接前用：
+    /// 解 access_token 的 JWT exp，已过期 / 距离过期 ≤ 30s 才走 ensure_fresh_token。
+    /// 没 token 直接 false，调用方自己决定清场策略。
+    pub async fn ensure_access_token_fresh(&self) -> bool {
+        let Some(token) = self.client.access_token() else {
+            return false;
+        };
+        if access_token_still_fresh(&token, 30) {
+            return true;
+        }
+        self.ensure_fresh_token().await
+    }
+
     /// 在 Mutex 内尝试刷新 access token。
     /// - 进入 Mutex 前先记下当前 token，入 Mutex 后再读一次：如果已变化，说明别的任务
     ///   刚刚已经 refresh 成功了，本次直接 true 返回，避免重复请求；
@@ -305,6 +318,36 @@ fn summarize_jwt_claims(token: &str) -> String {
         pick("exp"),
         pick("iat"),
     )
+}
+
+/// 解 JWT 的 `exp` 判 access_token 是否还在有效期内。带 `skew_secs` 余量避免临界点
+/// 起飞时正好踩 401。无法解析的 token（base64/json/exp 缺失）一律视作"不新鲜"，
+/// 让调用方走 refresh 路径兜底。
+fn access_token_still_fresh(token: &str, skew_secs: i64) -> bool {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    use base64::Engine;
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(parts[1]));
+    let payload = match payload {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let claims: serde_json::Value = match serde_json::from_slice(&payload) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let Some(exp) = claims.get("exp").and_then(|v| v.as_i64()) else {
+        return false;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    exp > now + skew_secs
 }
 
 /// 把会话清干净。SDK 的 `auth.logout` / `auth.family_revoke` 已经会自动清 storage；
