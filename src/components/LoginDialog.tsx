@@ -130,7 +130,17 @@ export function LoginDialog({ open, onOpenChange }: Props) {
   })();
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen, details) => {
+        if (!nextOpen && isBusy && details?.reason === "escape-key") {
+          details.cancel();
+          void cancelLogin();
+          return;
+        }
+        onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent className="flex w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0">
         <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
