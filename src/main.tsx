@@ -4,7 +4,7 @@ import { RouterProvider } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import { checkForUpdateForChannel } from "@/lib/updaterInstall";
 import {
   attachConsole,
   info as logInfo,
@@ -49,8 +49,14 @@ attachConsole().catch((e) => {
 // top-level IIFE：仅执行一次（StrictMode 下 useEffect 会跑两次，因此启动逻辑必须放在模块作用域）。
 const bootPromise = (async () => {
   if (IS_OVERLAY) {
-    // overlay 只需要监听 hotkey 事件以驱动自身 FSM；不管理 bindings / settings / auth。
-    console.log("[boot overlay] attaching listeners only");
+    // overlay 是独立 JS runtime —— i18n 初始语言走 navigator.language，常常跟用户
+    // 在主窗设置里选的 interfaceLang 不一致（导致悬浮窗显示英文 / 主窗显示中文）。
+    // 拉一次 settings 把语言对齐主窗，但不 init 其他重的 store。
+    console.log("[boot overlay] attaching listeners + syncing i18n");
+    await useSettingsStore.getState().init();
+    void syncI18nFromSettings(
+      useSettingsStore.getState().general.interfaceLang,
+    );
     await useRecordingStore.getState().initListeners();
     console.log("[boot overlay] ready");
     return;
@@ -91,7 +97,7 @@ const bootPromise = (async () => {
           // 30s 而非 5s——走代理 / 跨境 CDN 时 GitHub releases 一次 TLS 握手 +
           // /latest/download/ 重定向常见 6~12s。5s 几乎必超时。
           const upd = await Promise.race([
-            checkForUpdate(),
+            checkForUpdateForChannel(),
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error("updater check timeout")), 30_000),
             ),

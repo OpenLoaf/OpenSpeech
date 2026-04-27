@@ -49,10 +49,6 @@
     "transcribe_failed": {
       "title": "Transcription failed"
     },
-    "no_transcript": {
-      "title": "No transcript received",
-      "description": "Server timeout or silence throughout"
-    },
     "recording_save_failed": {
       "title": "Failed to save recording"
     },
@@ -68,14 +64,6 @@
       "description": "Sign in to use voice input",
       "action": "Sign in"
     },
-    "offline": {
-      "title": "No internet connection",
-      "description": "Check your network and try again"
-    },
-    "service_unreachable": {
-      "title": "Can't reach the service",
-      "description": "Network unreachable or server error — recording cancelled"
-    },
     "asr_error": {
       "title": "Transcription error",
       "unknown": "Unknown error"
@@ -90,8 +78,7 @@
       "description": "Reached the 2-hour server limit"
     },
     "esc_arm": {
-      "title": "Press ESC again to cancel",
-      "description": "Within 1.5 seconds"
+      "title": "Press ESC again to cancel"
     }
   },
   "transcript": {

@@ -28,6 +28,10 @@ interface UIStore {
    */
   noInternetOpen: boolean;
   /**
+   * 反馈意见弹窗。Settings 侧边 menu / 托盘菜单 / 后续位置都通过 openFeedback 进入。
+   */
+  feedbackOpen: boolean;
+  /**
    * 启动 / 托盘 / 关于页 check 到的待安装更新。在用户点击 toast 上的"立即安装"
    * 之前，更新对象只保存在 store 里，不阻塞 boot 流程；安装由用户主动触发以
    * 避免下载途中 LoadingScreen 一直转。一次只保留一个最新发现的版本。
@@ -36,6 +40,7 @@ interface UIStore {
   setLoginOpen: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
   setNoInternetOpen: (v: boolean) => void;
+  setFeedbackOpen: (v: boolean) => void;
   setPendingUpdate: (v: { version: string; update: Update } | null) => void;
   /** 拉回主窗口 + 打开登录弹窗。供 recording gate / sidebar account 按钮调用。 */
   openLogin: () => void;
@@ -43,6 +48,8 @@ interface UIStore {
   openSettings: (tab?: SettingsTabId) => void;
   /** 拉回主窗口 + 打开"无互联网连接"提示弹窗（recording gate 调用）。 */
   openNoInternet: () => void;
+  /** 拉回主窗口 + 打开反馈弹窗。供托盘 / 设置左侧 menu / 其它入口调用。 */
+  openFeedback: () => void;
 }
 
 const ensureMainWindowVisible = () => {
@@ -57,11 +64,13 @@ export const useUIStore = create<UIStore>((set) => ({
   settingsOpen: false,
   settingsInitialTab: "GENERAL",
   noInternetOpen: false,
+  feedbackOpen: false,
   pendingUpdate: null,
 
   setLoginOpen: (v) => set({ loginOpen: v }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
   setNoInternetOpen: (v) => set({ noInternetOpen: v }),
+  setFeedbackOpen: (v) => set({ feedbackOpen: v }),
   setPendingUpdate: (v) => set({ pendingUpdate: v }),
 
   openLogin: () => {
@@ -77,5 +86,10 @@ export const useUIStore = create<UIStore>((set) => ({
   openNoInternet: () => {
     ensureMainWindowVisible();
     set({ noInternetOpen: true });
+  },
+
+  openFeedback: () => {
+    ensureMainWindowVisible();
+    set({ feedbackOpen: true });
   },
 }));

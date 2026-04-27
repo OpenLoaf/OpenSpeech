@@ -1,0 +1,34 @@
+{
+  "menu_label": "反馈建议",
+  "dialog_title": "反馈建议",
+  "dialog_description": "把使用过程中的问题或想法告诉我们。我们会读每一条反馈。",
+  "type_label": "反馈类型",
+  "type": {
+    "bug": "Bug 问题",
+    "feature": "功能建议",
+    "ui": "界面/交互",
+    "performance": "性能/卡顿",
+    "chat": "AI 对话",
+    "other": "其他"
+  },
+  "content_label": "内容",
+  "content_placeholder": "描述一下你遇到的情况、复现步骤或者想要的功能…",
+  "email_label": "联系邮箱（可选）",
+  "email_placeholder": "you@example.com",
+  "email_hint": "留下邮箱方便我们在解决后回复你；不留也能匿名提交。",
+  "submit": "提交反馈",
+  "submit_loading": "提交中…",
+  "cancel": "取消",
+  "validation": {
+    "content_required": "请填写反馈内容（至少一句话）",
+    "content_too_short": "反馈内容太短啦，描述清楚一点更容易被处理",
+    "email_invalid": "邮箱格式看起来不对"
+  },
+  "toast": {
+    "success": "反馈已提交，谢谢你的反馈！",
+    "auth_lost": "登录状态已失效，请重新登录后再提交",
+    "network": "网络异常，请稍后再试",
+    "timeout": "请求超时，请检查网络后重试",
+    "generic": "提交失败：{{message}}"
+  }
+}

@@ -49,10 +49,6 @@
     "transcribe_failed": {
       "title": "转写失败"
     },
-    "no_transcript": {
-      "title": "未拿到转写结果",
-      "description": "服务端超时或全程静音"
-    },
     "recording_save_failed": {
       "title": "录音保存失败"
     },
@@ -68,14 +64,6 @@
       "description": "请登录后再使用语音输入",
       "action": "登录"
     },
-    "offline": {
-      "title": "无互联网连接",
-      "description": "请检查网络后重试"
-    },
-    "service_unreachable": {
-      "title": "无法连接到服务",
-      "description": "网络不可达或服务端异常，已取消本次录音"
-    },
     "asr_error": {
       "title": "转写异常",
       "unknown": "未知错误"
@@ -90,8 +78,7 @@
       "description": "达到 2 小时服务端上限"
     },
     "esc_arm": {
-      "title": "再次按 ESC 取消",
-      "description": "1.5 秒内按下生效"
+      "title": "再次按 ESC 取消"
     }
   },
   "transcript": {

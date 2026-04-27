@@ -6,7 +6,6 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import {
   info as logInfo,
   error as logError,
@@ -32,9 +31,14 @@ import {
   Info,
   Cloud,
   Rocket,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { syncAutostart } from "@/lib/autostart";
+import {
+  checkForUpdateForChannel,
+  installUpdateWithProgress,
+} from "@/lib/updaterInstall";
 import { HotkeyField } from "@/components/HotkeyField";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import {
@@ -56,6 +60,13 @@ type TabDef = {
   id: TabId;
   label: string;
   icon: typeof User2;
+};
+
+type SubNavAction = {
+  id: string;
+  label: string;
+  icon: typeof User2;
+  onClick: () => void;
 };
 
 function useTabs(): TabDef[] {
@@ -918,10 +929,30 @@ function AboutTab() {
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const [appVersion, setAppVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  // updateChannel 真源在 Rust 侧的 update-channel 文件，前端只缓存当前值用于 UI。
+  // 不进 settings.ts schema 避免双源同步问题（settings.json 与 channel 文件不一致时
+  // 决定 endpoints 的是 channel 文件）。
+  const [updateChannel, setUpdateChannel] = useState<"stable" | "beta">("stable");
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
+    invoke<string>("get_update_channel")
+      .then((c) => setUpdateChannel(c === "beta" ? "beta" : "stable"))
+      .catch(() => {});
   }, []);
+
+  const handleChannelChange = async (next: "stable" | "beta") => {
+    if (next === updateChannel) return;
+    setUpdateChannel(next);
+    try {
+      await invoke("set_update_channel", { channel: next });
+      void logInfo(`[updater] channel switched to ${next}`);
+    } catch (e) {
+      void logError(
+        `[updater] channel switch failed: ${String((e as Error)?.message ?? e)}`,
+      );
+    }
+  };
 
   const rerunOnboarding = async () => {
     // 把 onboardingCompleted 翻回 false 并跳到 /onboarding。SettingsDialog 与
@@ -936,7 +967,7 @@ function AboutTab() {
     setCheckingUpdate(true);
     void logInfo("[updater] about-page check start");
     try {
-      const upd = await checkForUpdate();
+      const upd = await checkForUpdateForChannel();
       if (upd) {
         void logInfo(`[updater] about-page check found: ${upd.version}`);
         // 找到新版后用 toast.action 给用户「立即安装」按钮——之前只 toast.message
@@ -948,28 +979,9 @@ function AboutTab() {
           action: {
             label: i18next.t("settings:about.install_now"),
             onClick: () => {
-              void (async () => {
-                void logInfo(
-                  `[updater] about-page install start → ${upd.version}`,
-                );
-                toast.message(
-                  i18next.t("settings:about.install_in_progress"),
-                  { description: upd.version },
-                );
-                try {
-                  await upd.downloadAndInstall();
-                  void logInfo(
-                    "[updater] about-page downloadAndInstall returned",
-                  );
-                } catch (e) {
-                  void logError(
-                    `[updater] about-page install failed: ${String((e as Error)?.message ?? e)}`,
-                  );
-                  toast.error(i18next.t("settings:about.install_failed"), {
-                    description: String((e as Error)?.message ?? e),
-                  });
-                }
-              })();
+              void installUpdateWithProgress(upd, "about-page").catch(() => {
+                // helper 已处理错误 toast / log
+              });
             },
           },
         });
@@ -1021,6 +1033,32 @@ function AboutTab() {
         </a>
       </Row>
 
+      <Row label={t("about.update_channel")}>
+        <div className="flex items-center gap-px border border-te-gray/60">
+          {(["stable", "beta"] as const).map((c) => {
+            const isActive = updateChannel === c;
+            return (
+              <button
+                key={c}
+                type="button"
+                onClick={() => void handleChannelChange(c)}
+                className={cn(
+                  "px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] transition-colors",
+                  isActive
+                    ? "bg-te-accent text-te-bg"
+                    : "bg-te-bg text-te-light-gray hover:text-te-fg",
+                )}
+              >
+                {t(`about.update_channel_${c}`)}
+              </button>
+            );
+          })}
+        </div>
+      </Row>
+      <div className="-mt-2 px-1 pb-2 font-mono text-[11px] leading-relaxed text-te-light-gray">
+        {t("about.update_channel_hint")}
+      </div>
+
       <div className="flex flex-wrap items-center gap-3 py-4">
         <button
           type="button"
@@ -1067,10 +1105,12 @@ function SubNav({
   tabs,
   active,
   onChange,
+  actions,
 }: {
   tabs: TabDef[];
   active: TabId;
   onChange: (id: TabId) => void;
+  actions?: SubNavAction[];
 }) {
   return (
     <nav className="flex flex-col gap-px border border-te-gray/30 bg-te-surface">
@@ -1100,6 +1140,21 @@ function SubNav({
           </button>
         );
       })}
+      {actions?.map((a) => {
+        const Icon = a.icon;
+        return (
+          <button
+            key={a.id}
+            type="button"
+            onClick={a.onClick}
+            className="group relative flex items-center gap-3 py-3 pr-4 pl-5 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
+          >
+            <span className="absolute top-0 left-0 h-full w-[2px] bg-transparent" />
+            <Icon className="size-4 shrink-0" />
+            <span>{a.label}</span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
@@ -1113,6 +1168,25 @@ export default function SettingsContent({
 }: { initialTab?: TabId } = {}) {
   const [tab, setTab] = useState<TabId>(initialTab);
   const tabs = useTabs();
+  const { t: tFeedback } = useTranslation("feedback");
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const openFeedback = useUIStore((s) => s.openFeedback);
+
+  const subNavActions = useMemo<SubNavAction[]>(
+    () => [
+      {
+        id: "FEEDBACK",
+        label: tFeedback("menu_label"),
+        icon: MessageSquare,
+        onClick: () => {
+          // 反馈弹窗与设置 Dialog 不并存——关掉设置再开反馈，避免两层 modal 叠在一起。
+          setSettingsOpen(false);
+          openFeedback();
+        },
+      },
+    ],
+    [tFeedback, setSettingsOpen, openFeedback],
+  );
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col md:flex-row">
@@ -1123,7 +1197,7 @@ export default function SettingsContent({
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <SubNav tabs={tabs} active={tab} onChange={setTab} />
+        <SubNav tabs={tabs} active={tab} onChange={setTab} actions={subNavActions} />
       </motion.aside>
 
       {/* Right: tab content — 独立滚动；不再额外嵌套框，避免 Dialog 内 surface 半透明叠加造成的视觉模糊 */}

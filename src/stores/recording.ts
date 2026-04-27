@@ -619,22 +619,20 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               });
               return;
             }
-            // 正常结束：停录音 → 写 history → 占位 transcribing → injecting → idle
+            // 正常结束：停录音 → 写 history → transcribing 占位 800ms → idle。
+            // injecting 中间态原本是给 ✓ 反馈用的 200ms padding，✓ 已移除，
+            // 多一帧空白 state 没意义，直接跳过。
             stopMic();
             set({ state: "transcribing", audioLevels: emptyLevels() });
             void finalizeAndWriteHistory().finally(() => {
               window.setTimeout(() => {
                 if (get().state !== "transcribing") return;
-                set({ state: "injecting" });
-                window.setTimeout(() => {
-                  if (get().state !== "injecting") return;
-                  set({
-                    state: "idle",
-                    activeId: null,
-                    recordingId: null,
-                    liveTranscript: "",
-                  });
-                }, 200);
+                set({
+                  state: "idle",
+                  activeId: null,
+                  recordingId: null,
+                  liveTranscript: "",
+                });
               }, 800);
             });
             return;
@@ -714,10 +712,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             typeof navigator !== "undefined" &&
             navigator.onLine === false
           ) {
-            console.log("[recording] gate blocked: offline (SAAS path)");
-            notifyOverlay("error", i18n.t("overlay:toast.offline.title"), {
-              description: i18n.t("overlay:toast.offline.description"),
-            });
+            console.warn("[recording] gate blocked: offline (SAAS path) — silent");
             return;
           }
           // 异步健康探针——只在主窗执行（IS_MAIN_WINDOW）以避免重复 invoke。
@@ -728,7 +723,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                 // 录音仍在进行才取消；用户可能已经主动结束，这时不要打断 transcribing。
                 const s = get();
                 if (s.state === "preparing" || s.state === "recording") {
-                  console.log("[recording] health check failed → cancelling");
+                  console.warn("[recording] health check failed → cancelling silently");
                   discardRecording();
                   stopMic();
                   set({
@@ -737,9 +732,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                     audioLevels: emptyLevels(),
                     recordingId: null,
                     liveTranscript: "",
-                  });
-                  notifyOverlay("error", i18n.t("overlay:toast.service_unreachable.title"), {
-                    description: i18n.t("overlay:toast.service_unreachable.description"),
                   });
                 }
               })
@@ -892,8 +884,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       // idle / injecting 一律忽略——injecting 几十毫秒来不及撤回，ignore。
       //
       // 双击确认：单次 ESC 不直接取消（避免在别的 app 里按 Esc 误触把录音作废）。
-      // 第一次 ESC：在悬浮条弹"再次按 ESC 取消"提示，进入 ARM 窗口；
-      // 第二次 ESC（窗口期内）：真正取消。窗口期由 ESC_CONFIRM_WINDOW_MS 控制。
+      // 第一次 ESC 进入 ARM 窗口（仅记录时间戳，无视觉提示），第二次 ESC 在窗口期
+      // 内真正取消；窗口期由 ESC_CONFIRM_WINDOW_MS 控制，超时自动清 ARM。
       const ESC_CONFIRM_WINDOW_MS = 1500;
       let escArmedAt = 0;
       const u8 = await listen<{ code: string; phase: "pressed" | "released" }>(
@@ -907,6 +899,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           if (escArmedAt > 0 && now - escArmedAt <= ESC_CONFIRM_WINDOW_MS) {
             console.log("[recording] Esc confirmed, cancelling", { state: s });
             escArmedAt = 0;
+            void emitTo("overlay", "openspeech://esc-disarmed", null);
             discardRecording();
             stopMic();
             set({
@@ -920,9 +913,14 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
           console.log("[recording] Esc armed, awaiting confirm", { state: s });
           escArmedAt = now;
+          notifyOverlay("warning", i18n.t("overlay:toast.esc_arm.title"), {
+            durationMs: ESC_CONFIRM_WINDOW_MS,
+          });
+          void emitTo("overlay", "openspeech://esc-armed", null);
           window.setTimeout(() => {
             if (performance.now() - escArmedAt >= ESC_CONFIRM_WINDOW_MS) {
               escArmedAt = 0;
+              void emitTo("overlay", "openspeech://esc-disarmed", null);
             }
           }, ESC_CONFIRM_WINDOW_MS + 50);
         },
@@ -981,16 +979,12 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       void finalizeAndWriteHistory().finally(() => {
         window.setTimeout(() => {
           if (get().state !== "transcribing") return;
-          set({ state: "injecting" });
-          window.setTimeout(() => {
-            if (get().state !== "injecting") return;
-            set({
-              state: "idle",
-              activeId: null,
-                recordingId: null,
-              liveTranscript: "",
-            });
-          }, 200);
+          set({
+            state: "idle",
+            activeId: null,
+            recordingId: null,
+            liveTranscript: "",
+          });
         }, 800);
       });
     },

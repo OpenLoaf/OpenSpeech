@@ -14,7 +14,6 @@ use tauri::{
     },
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
-use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_store::StoreExt;
 
 #[cfg(target_os = "macos")]
@@ -30,6 +29,7 @@ mod permissions;
 mod secrets;
 mod stt;
 mod transcribe;
+mod update_channel;
 
 // 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
 // close-requested: 关闭当前窗口的请求（红叉 / Cmd+W）。Onboarding 阶段会忽略，
@@ -42,10 +42,9 @@ const QUIT_REQUESTED_EVENT: &str = "openspeech://quit-requested";
 const TRAY_OPEN_HOME_EVENT: &str = "openspeech://tray-open-home";
 const TRAY_OPEN_SETTINGS_EVENT: &str = "openspeech://tray-open-settings";
 const TRAY_OPEN_DICTIONARY_EVENT: &str = "openspeech://tray-open-dictionary";
+const TRAY_OPEN_FEEDBACK_EVENT: &str = "openspeech://tray-open-feedback";
 const TRAY_CHECK_UPDATE_EVENT: &str = "openspeech://tray-check-update";
 const TRAY_SELECT_MIC_EVENT: &str = "openspeech://tray-select-mic";
-// 反馈入口 MVP 走邮件，未来迁到网站可改常量。
-const FEEDBACK_URL: &str = "mailto:feedback@openspeech.app";
 
 // 托盘菜单文案：Rust 不嵌 i18n，文案完全由前端按当前语言推过来。bootPromise 完成后
 // 前端 syncI18nFromSettings 会调用 update_tray_labels 一次；之后切语言再推。空槽位
@@ -553,7 +552,8 @@ pub fn run() {
                     }
                     match id {
                         "tray::feedback" => {
-                            let _ = app.opener().open_url(FEEDBACK_URL, None::<&str>);
+                            show_main_window(app);
+                            let _ = app.emit(TRAY_OPEN_FEEDBACK_EVENT, ());
                         }
                         "tray::open_home" => {
                             show_main_window(app);
@@ -649,6 +649,7 @@ pub fn run() {
             openloaf::openloaf_fetch_profile,
             openloaf::openloaf_web_url,
             openloaf::openloaf_health_check,
+            openloaf::feedback::openloaf_submit_feedback,
             audio::audio_level_start,
             audio::audio_level_stop,
             audio::audio_list_input_devices,
@@ -670,6 +671,9 @@ pub fn run() {
             permissions::permission_open_settings,
             permissions::permission_reset_tcc,
             permissions::permission_reset_tcc_one,
+            update_channel::get_update_channel,
+            update_channel::set_update_channel,
+            update_channel::check_for_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

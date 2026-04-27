@@ -14,6 +14,11 @@ edition = "2024"
 name = "openspeech_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+# dev 时让 OpenLoaf base/web URL 指向线上 openloaf.hexems.com，便于联调线上后端。
+staging = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

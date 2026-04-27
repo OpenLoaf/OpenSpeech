@@ -49,10 +49,6 @@
     "transcribe_failed": {
       "title": "轉寫失敗"
     },
-    "no_transcript": {
-      "title": "未取得轉寫結果",
-      "description": "伺服器逾時或全程靜音"
-    },
     "recording_save_failed": {
       "title": "錄音儲存失敗"
     },
@@ -68,14 +64,6 @@
       "description": "請登入後再使用語音輸入",
       "action": "登入"
     },
-    "offline": {
-      "title": "沒有網際網路連線",
-      "description": "請檢查網路後重試"
-    },
-    "service_unreachable": {
-      "title": "無法連線至服務",
-      "description": "網路不可達或伺服器異常，已取消本次錄音"
-    },
     "asr_error": {
       "title": "轉寫異常",
       "unknown": "未知錯誤"
@@ -90,8 +78,7 @@
       "description": "達到 2 小時伺服器上限"
     },
     "esc_arm": {
-      "title": "再次按 ESC 取消",
-      "description": "1.5 秒內按下生效"
+      "title": "再次按 ESC 取消"
     }
   },
   "transcript": {

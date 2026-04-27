@@ -116,6 +116,13 @@
     "rerun_onboarding": "Re-run first-launch onboarding",
     "install_now": "Install now",
     "install_in_progress": "Downloading and installing update…",
-    "install_failed": "Update install failed"
+    "install_progress": "{{version}} · {{percent}}% · {{downloaded}} / {{total}}",
+    "install_starting": "{{version}} · {{downloaded}} downloaded",
+    "install_finalizing": "Download complete, installing…",
+    "install_failed": "Update install failed",
+    "update_channel": "Update channel",
+    "update_channel_stable": "Stable",
+    "update_channel_beta": "Beta (early access)",
+    "update_channel_hint": "Beta gets new features sooner but may be unstable. Switching back to Stable only delivers updates whose version is higher than the current beta."
   }
 }

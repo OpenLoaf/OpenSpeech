@@ -6,18 +6,22 @@ import { BookOpen, History, Home, Settings, UserCircle } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import {
   info as logInfo,
   error as logError,
 } from "@tauri-apps/plugin-log";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import {
+  checkForUpdateForChannel,
+  installUpdateWithProgress,
+} from "@/lib/updaterInstall";
 import { AccountDialog } from "@/components/AccountDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { CloseToBackgroundDialog } from "@/components/CloseToBackgroundDialog";
 import { LoginDialog } from "@/components/LoginDialog";
 import { NoInternetDialog } from "@/components/NoInternetDialog";
+import { FeedbackDialog } from "@/components/FeedbackDialog";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
@@ -90,6 +94,9 @@ export default function Layout() {
   const settingsInitialTab = useUIStore((s) => s.settingsInitialTab);
   const noInternetOpen = useUIStore((s) => s.noInternetOpen);
   const setNoInternetOpen = useUIStore((s) => s.setNoInternetOpen);
+  const feedbackOpen = useUIStore((s) => s.feedbackOpen);
+  const setFeedbackOpen = useUIStore((s) => s.setFeedbackOpen);
+  const openFeedback = useUIStore((s) => s.openFeedback);
   const openLogin = useUIStore((s) => s.openLogin);
   const openSettings = useUIStore((s) => s.openSettings);
   const pendingUpdate = useUIStore((s) => s.pendingUpdate);
@@ -108,23 +115,11 @@ export default function Layout() {
         label: i18next.t("settings:about.install_now"),
         onClick: () => {
           void (async () => {
-            void logInfo(
-              `[updater] boot-prompt install start → ${pendingUpdate.version}`,
-            );
             toast.dismiss(id);
-            toast.message(i18next.t("settings:about.install_in_progress"), {
-              description: pendingUpdate.version,
-            });
             try {
-              await upd.downloadAndInstall();
-              void logInfo("[updater] boot-prompt downloadAndInstall returned");
-            } catch (e) {
-              void logError(
-                `[updater] boot-prompt install failed: ${String((e as Error)?.message ?? e)}`,
-              );
-              toast.error(i18next.t("settings:about.install_failed"), {
-                description: String((e as Error)?.message ?? e),
-              });
+              await installUpdateWithProgress(upd, "boot-prompt");
+            } catch {
+              // helper 已 toast + log，这里只负责把 pendingUpdate 清掉
             } finally {
               setPendingUpdate(null);
             }
@@ -247,6 +242,9 @@ export default function Layout() {
       await addSub<unknown>("openspeech://tray-open-dictionary", () => {
         navigate("/dictionary");
       });
+      await addSub<unknown>("openspeech://tray-open-feedback", () => {
+        openFeedback();
+      });
       await addSub<string | null>(
         "openspeech://tray-select-mic",
         async (device) => {
@@ -260,7 +258,7 @@ export default function Layout() {
       await addSub<unknown>("openspeech://tray-check-update", async () => {
         void logInfo("[updater] tray check start");
         try {
-          const upd = await checkForUpdate();
+          const upd = await checkForUpdateForChannel();
           if (upd) {
             void logInfo(`[updater] tray check found: ${upd.version}`);
             toast.message(i18next.t("pages:layout.tray.update_found_title"), {
@@ -269,29 +267,9 @@ export default function Layout() {
               action: {
                 label: i18next.t("settings:about.install_now"),
                 onClick: () => {
-                  void (async () => {
-                    void logInfo(
-                      `[updater] tray install start → ${upd.version}`,
-                    );
-                    toast.message(
-                      i18next.t("settings:about.install_in_progress"),
-                      { description: upd.version },
-                    );
-                    try {
-                      await upd.downloadAndInstall();
-                      void logInfo(
-                        "[updater] tray downloadAndInstall returned",
-                      );
-                    } catch (e) {
-                      void logError(
-                        `[updater] tray install failed: ${String((e as Error)?.message ?? e)}`,
-                      );
-                      toast.error(
-                        i18next.t("settings:about.install_failed"),
-                        { description: String((e as Error)?.message ?? e) },
-                      );
-                    }
-                  })();
+                  void installUpdateWithProgress(upd, "tray").catch(() => {
+                    // helper 已处理错误 toast / log
+                  });
                 },
               },
             });
@@ -314,7 +292,7 @@ export default function Layout() {
       cancelled = true;
       unsubs.forEach((u) => u());
     };
-  }, [navigate, openSettings]);
+  }, [navigate, openSettings, openFeedback]);
 
   // 全局快捷键：Cmd+, (macOS) / Ctrl+, (Windows/Linux) 打开设置。
   // 设置已打开时跳过，避免覆盖当前 tab；HotkeyField 录制冲突也由此规避。
@@ -541,6 +519,7 @@ export default function Layout() {
         onConfirm={handleCloseConfirm}
       />
       <NoInternetDialog open={noInternetOpen} onOpenChange={setNoInternetOpen} />
+      <FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
     </div>
   );
 }

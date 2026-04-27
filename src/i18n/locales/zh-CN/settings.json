@@ -116,6 +116,13 @@
     "rerun_onboarding": "重新运行首次引导",
     "install_now": "立即安装",
     "install_in_progress": "正在下载并安装更新…",
-    "install_failed": "更新安装失败"
+    "install_progress": "{{version}} · {{percent}}% · {{downloaded}} / {{total}}",
+    "install_starting": "{{version}} · 已下载 {{downloaded}}",
+    "install_finalizing": "下载完成，正在安装…",
+    "install_failed": "更新安装失败",
+    "update_channel": "更新通道",
+    "update_channel_stable": "正式版",
+    "update_channel_beta": "Beta（抢先体验）",
+    "update_channel_hint": "Beta 通道更早收到新功能，但可能不稳定。关闭 Beta 后只会接收到版本号高于当前 Beta 的正式版。"
   }
 }

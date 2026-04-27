@@ -17,10 +17,8 @@ import { useRecordingStore } from "@/stores/recording";
 
 const BAR_MIN_H = 3;
 const BAR_MAX_H = 26;
-// Rust 端已经做了 noise gate + PEAK_GAIN 的归一化，这里只负责"形状映射"，
-// 用 sqrt 把低音区拉高让 bar 不至于贴底，但不再叠加放大倍率（叠加会让底噪
-// 漏掉时直接拉满，这是开车场景看到波形常驻的根因）。
-const VISUAL_GAIN = 1.0;
+// Rust 端做完 gate + gain 后输出已经是 [0,1]；这里只用 sqrt 拉高低音区可见度，
+// 不叠加放大倍率（叠加会让底噪漏掉时直接拉满）。
 
 const PILL_HEIGHT = 36;
 const TOAST_HEIGHT = 42;
@@ -59,7 +57,7 @@ const Waveform = memo(function Waveform() {
   return (
     <div className="flex h-full w-full items-center justify-between">
       {levels.map((lvl, i) => {
-        const boosted = Math.min(1, Math.sqrt(Math.max(0, lvl)) * VISUAL_GAIN);
+        const boosted = Math.min(1, Math.sqrt(Math.max(0, lvl)));
         const ratio =
           (BAR_MIN_H + boosted * (BAR_MAX_H - BAR_MIN_H)) / BAR_MAX_H;
         return (
@@ -87,6 +85,7 @@ export default function OverlayPage() {
   const [toast, setToast] = useState<OverlayToastState | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const nextToastIdRef = useRef(1);
+  const [escArmed, setEscArmed] = useState(false);
 
   const dismissToast = () => {
     if (toastTimerRef.current !== null) {
@@ -127,9 +126,8 @@ export default function OverlayPage() {
     };
   }, []);
 
-  // 仅在窗口已经"应该可见"时同步高度——浮窗在 idle 期处于 fade-out / 已隐藏，
-  // 此时改高度会让下一次 show 看到错位的尺寸。idle 收尾另外在 onExitComplete 里
-  // 重置回 PILL_HEIGHT。
+  // 仅在"应该可见"时同步高度。idle 复位由下面 visible→false 那条 effect 处理，
+  // Rust show_now 也会强制把 inner_size 复位到 HEIGHT 兜底。
   const visible = state !== "idle" || toast !== null;
   useEffect(() => {
     if (!visible) return;
@@ -139,12 +137,9 @@ export default function OverlayPage() {
     );
   }, [toast, visible]);
 
-  // ESC 关闭悬浮条上的 toast：所有窗口都会收到 `openspeech://key-preview`，
-  // overlay 自己负责"有 toast 就关 toast"。录音激活态下的双击确认逻辑由主窗
-  // 处理（见 recording.ts 的 ESC listener），两端互不干扰：
-  //   · 非激活态 + toast 在 → ESC 关 toast（这里）；主窗端早期 return
-  //   · 激活态首次 ESC → 主窗发"再次按 ESC 取消" toast；这里此刻还没 toast，no-op
-  //   · 激活态二次 ESC → 主窗取消录音；这里同时把"再次按 ESC 取消" dismiss
+  // ESC 关闭悬浮条上的 toast：所有窗口都收 `openspeech://key-preview`，overlay
+  // 这里只管"有 toast 就关 toast"。录音激活态下的双击 ESC 取消逻辑在主窗
+  // recording.ts 的 listener 里（escArmedAt + 1.5s 窗口），两端互不干扰。
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     void (async () => {
@@ -169,6 +164,23 @@ export default function OverlayPage() {
     };
   }, []);
 
+  // recording.ts 的 ESC handler 进入 ARM 时广播一次 → X 按钮黄色闪烁；超时 / 二次
+  // ESC 取消生效后再广播 disarmed 复位描边。
+  useEffect(() => {
+    let offArmed: UnlistenFn | null = null;
+    let offDisarmed: UnlistenFn | null = null;
+    void (async () => {
+      offArmed = await listen("openspeech://esc-armed", () => setEscArmed(true));
+      offDisarmed = await listen("openspeech://esc-disarmed", () =>
+        setEscArmed(false),
+      );
+    })();
+    return () => {
+      offArmed?.();
+      offDisarmed?.();
+    };
+  }, []);
+
   // overlay 是镜像窗口：按钮交互只能通过 emitTo 发回主窗，主窗 listener 调
   // 真实的 simulateCancel / simulateFinalize（那里才有 Rust 录音 / STT 副作用）。
   const cancel = () => {
@@ -182,10 +194,10 @@ export default function OverlayPage() {
     dismissToast();
   };
 
-  // visible 由 true → false 时立刻物理 hide。原本走 motion onExitComplete 的
-  // 退场动画导致：① 关闭延迟（要先跑完 React fade）② 由于 Tauri overlay 窗口
-  // 是不透明黑底，opacity → 0 之后到 hide 之间会出现一个"全黑长条"。直接 hide
-  // 让窗口在 state 切走的同一帧消失，避免这两个问题。下次 show 再恢复高度。
+  // visible 由 true → false 时立刻物理 hide。Tauri overlay 窗口是不透明黑底，
+  // 走 React fade 退场会出现"opacity 已 0 但窗口还在"的全黑长条；直接 hide 让
+  // 窗口和状态切走在同一帧。set_height 复位是为了 hide 之前先把窗口尺寸归位
+  // （IPC 顺序不保证，hide 先到则窗口会带着上次 EXPANDED_HEIGHT 进入下次 show）。
   useEffect(() => {
     if (visible) return;
     invoke("overlay_set_height", { height: PILL_HEIGHT }).catch(() => {});
@@ -282,9 +294,11 @@ export default function OverlayPage() {
               disabled={!canCancel}
               className={cn(
                 "flex size-6 shrink-0 items-center justify-center border transition-colors",
-                canCancel
-                  ? "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent"
-                  : "border-te-gray/40 text-te-light-gray/40",
+                escArmed
+                  ? "animate-pulse border-te-accent text-te-accent"
+                  : canCancel
+                    ? "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent"
+                    : "border-te-gray/40 text-te-light-gray/40",
               )}
               aria-label={t("overlay:aria.cancel")}
             >
@@ -306,9 +320,9 @@ export default function OverlayPage() {
                       {t("overlay:status.transcribing")}
                     </span>
                   )}
-                  {centerKey === "injecting" && (
+                  {/* {centerKey === "injecting" && (
                     <Check className="size-3.5 text-te-accent" />
-                  )}
+                  )} */}
                   {centerKey === "error" && (
                     <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
                       {errorMessage ?? "ERROR"}
