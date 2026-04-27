@@ -26,7 +26,6 @@ import {
   requestAccessibility,
   requestMicrophone,
   requestInputMonitoring,
-  resetTccPermissionOne,
   type PermissionKind,
   type PermissionStatus,
   type PermissionUiStatus,
@@ -441,17 +440,27 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
   // 窗口 focus 回到应用时（用户去系统设置勾选完切回来）刷新一遍。
   // Tauri WebviewWindow 的 onFocusChanged 在 webview 进焦时也触发；与浏览器
   // window.focus 事件叠加监听，覆盖 dev / 生产两种 Web 容器行为差异。
+  //
+  // **同时 re-fire IOHIDRequestAccess**：macOS 26.x 会把"在 ListenEvent
+  // 列表里但未勾选 + 用户在期间处理了其他 TCC 项"的 pending 条目自动回收，
+  // 表现为「勾完辅助功能切回来，输入监控列表里 OpenSpeech 不见了」。每次
+  // 用户回到应用时再调一次 IOHIDRequestAccess（已 granted 时是 no-op，
+  // unknown/denied 时把条目刷回列表），是抵消该 macOS 行为的最便宜手段。
   useEffect(() => {
+    if (platform !== "macos") return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    const onFocus = () => {
+    const onFocusBack = () => {
       void recheckAll();
+      void requestInputMonitoring().catch((e) =>
+        logWarn(`[onboarding] focus re-register IM failed: ${String(e)}`),
+      );
     };
-    window.addEventListener("focus", onFocus);
+    window.addEventListener("focus", onFocusBack);
 
     void getCurrentWebviewWindow()
       .onFocusChanged(({ payload: focused }) => {
-        if (focused) void recheckAll();
+        if (focused) onFocusBack();
       })
       .then((un) => {
         if (cancelled) un();
@@ -460,22 +469,24 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
 
     return () => {
       cancelled = true;
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", onFocusBack);
       unlisten?.();
     };
-  }, [recheckAll]);
+  }, [recheckAll, platform]);
 
   // 主按钮：
   // - 信息卡 → 直接标 granted（用户确认知晓即可）
   // - 真权限卡：
-  //   1. **denied 状态先 reset 一次该项 TCC 条目**——macOS 一旦记录"用户拒绝过"，
-  //      之后所有 IOHIDRequestAccess / AXIsProcessTrustedWithOptions 都会被静默
-  //      no-op：不弹框、不重写列表。dev / ad-hoc 签名漂移也表现为 denied。
-  //      不 reset 直接 request 等于点一个空按钮——这就是用户报"列表里没有
-  //      OpenSpeech"的根源。
-  //   2. 再调 request_*（idempotent，把 OpenSpeech 写入系统设置的隐私权限列表；
+  //   1. 调 request_*（idempotent，把 OpenSpeech 写入系统设置的隐私权限列表；
   //      不调的话用户打开系统设置时根本看不到这一条 App 可以勾选）。
-  //   3. 最后 open_settings 把对应面板带到前台让用户勾选。
+  //   2. open_settings 把对应面板带到前台让用户勾选。
+  //
+  // **不再走 reset_tcc**：之前 denied 分支会跑 `tccutil reset`，但实测
+  // macOS 26.x 上 reset 后**同一进程内**调 IOHIDRequestAccess 由于 tccd
+  // cache 未刷新会被静默 no-op——结果是把列表里的 OpenSpeech 条目清掉了
+  // 又没能重新注册。reset 只在用户**主动**重启进程后才安全。这里改为
+  // 始终走 request → open_settings；若 macOS 26.x 行为导致条目从列表
+  // 消失，focus 监听里的 re-fire 会把它刷回来。
   const onPrimary = useCallback(
     async (card: PermissionCard) => {
       if (!card.permission) {
@@ -488,16 +499,7 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
         void logWarn(
           `[onboarding] onPrimary kind=${card.permission} status=${currentStatus}`,
         );
-        // 1. denied 路径：先精细 reset 该项的 TCC 条目，让后续 request 能真生效。
-        //    notDetermined / restricted / unknown 不 reset——前者是首次接触，
-        //    后者是 MDM/系统层限制，reset 帮不上忙也无副作用价值。
-        if (currentStatus === "denied") {
-          void logWarn(
-            `[onboarding] onPrimary: reset TCC for ${card.permission}`,
-          );
-          await resetTccPermissionOne(card.permission);
-        }
-        // 2. request：把 App 写入系统设置的隐私列表 + 触发可能的系统弹窗。
+        // request：把 App 写入系统设置的隐私列表 + 触发可能的系统弹窗。
         if (card.permission === "microphone") {
           await requestMicrophone();
           void logWarn("[onboarding] onPrimary: requestMicrophone done");
@@ -510,7 +512,7 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
           await requestAccessibility();
           void logWarn("[onboarding] onPrimary: requestAccessibility done");
         }
-        // 3. 打开系统设置面板，让用户在已经显示的 App 行上勾选开关。
+        // 打开系统设置面板，让用户在已经显示的 App 行上勾选开关。
         await openSystemSettings(card.permission);
         void logWarn(
           `[onboarding] onPrimary: openSystemSettings(${card.permission}) done`,
