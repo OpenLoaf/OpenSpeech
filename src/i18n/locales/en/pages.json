@@ -123,8 +123,8 @@
       "history": "History",
       "dictionary": "Dictionary"
     },
-    "account_fallback": "Account",
-    "login": "Login",
+    "account_fallback": "ACCOUNT",
+    "login": "LOGIN",
     "credits": "Credits",
     "credits_unlimited": "UNLIMITED",
     "settings": "Settings",
