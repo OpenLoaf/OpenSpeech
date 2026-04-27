@@ -169,12 +169,20 @@ pub async fn stt_start<R: Runtime>(
     lang: Option<String>,
     mode: Option<String>,
 ) -> Result<(), String> {
+    log::info!(
+        "[stt] stt_start request lang={:?} mode={:?}",
+        lang,
+        mode
+    );
     // realtime 不走 call_authed，握手 401 服务端就会直接断。这里先按 JWT exp
     // 做新鲜度检查，临近过期（≤30s）就立刻用 refresh_token 续期；续期失败等价
     // REST 链路里 refresh-fail 的清场（handle_session_expired），让前端弹登录框。
     {
         let ol = app.state::<SharedOpenLoaf>();
         if !ol.ensure_access_token_fresh().await {
+            log::warn!(
+                "[stt] stt_start aborted: ensure_access_token_fresh returned false (no/expired token, refresh failed)"
+            );
             handle_session_expired(&app, &ol);
             return Err(ERR_NOT_AUTHENTICATED.to_string());
         }
@@ -196,6 +204,7 @@ fn stt_start_impl<R: Runtime>(
 ) -> Result<(), String> {
     let ol = app.state::<SharedOpenLoaf>();
     let client = ol.authenticated_client().ok_or_else(|| {
+        log::warn!("[stt] stt_start aborted: authenticated_client() = None (not logged in)");
         // 没 access_token 就是未登录态——通知前端，不要走录音路径浪费用户力气。
         handle_session_expired(&app, &ol);
         ERR_NOT_AUTHENTICATED.to_string()
@@ -204,8 +213,10 @@ fn stt_start_impl<R: Runtime>(
     // 仅做"stream 是否在跑"的兜底校验——服务端 OL-TL-RT-002 固定按 16kHz mono
     // pcm16 解码，**不接受**客户端传 sampleRate / channels / encoding。
     // 重采样到 16k + mono 下混都在 audio callback 里（push_to_stt_pcm16）完成。
-    crate::audio::current_stream_info()
-        .ok_or_else(|| "audio stream not running; start mic first".to_string())?;
+    crate::audio::current_stream_info().ok_or_else(|| {
+        log::warn!("[stt] stt_start aborted: audio stream not running (start mic first)");
+        "audio stream not running; start mic first".to_string()
+    })?;
 
     // 保险：旧 session 没清干净（上一次 finalize 崩了等）先兜底关。
     close_if_active();
@@ -227,9 +238,11 @@ fn stt_start_impl<R: Runtime>(
             // realtime 不走 call_authed，401 由 WebSocket 握手返回，需要这里兜
             // 一次清场 + 广播，等价于 REST 的自动 refresh-fail 路径。
             if is_unauthorized(&raw) {
+                log::warn!("[stt] realtime connect 401, treating as session expired: {raw}");
                 handle_session_expired(&app, &ol);
                 ERR_UNAUTHORIZED.to_string()
             } else {
+                log::error!("[stt] realtime connect failed: {raw}");
                 format!("realtime connect: {e}")
             }
         })?;
@@ -350,7 +363,9 @@ fn handle_event<R: Runtime>(
     final_count: &Arc<AtomicI64>,
 ) -> bool {
     match ev {
-        RealtimeEvent::Ready { .. } => {}
+        RealtimeEvent::Ready { .. } => {
+            log::info!("[stt] realtime Ready (WS handshake complete, server ready to ingest audio)");
+        }
         RealtimeEvent::Partial { sentence_id, text } => {
             // partial 只反映「当前 sentence_id 这一句」从开口到现在的累积，前面已 Final
             // 的句子不会再回放。给 UI 一个连贯的 liveTranscript：把所有 Final 段（按
@@ -393,6 +408,7 @@ fn handle_event<R: Runtime>(
         RealtimeEvent::Credits {
             remaining_credits, ..
         } => {
+            log::info!("[stt] credits update: remaining={remaining_credits}");
             let _ = app.emit(EVENT_CREDITS, remaining_credits);
         }
         RealtimeEvent::Closed {
@@ -400,6 +416,9 @@ fn handle_event<R: Runtime>(
             total_credits,
             ..
         } => {
+            log::warn!(
+                "[stt] server closed session: reason={reason:?} total_credits={total_credits:?}"
+            );
             let _ = app.emit(
                 EVENT_CLOSED,
                 json!({ "reason": reason, "totalCredits": total_credits }),
@@ -407,6 +426,7 @@ fn handle_event<R: Runtime>(
             return true;
         }
         RealtimeEvent::Error { code, message } => {
+            log::error!("[stt] server error: code={code} message={message}");
             let _ = app.emit(EVENT_ERROR, ErrorPayload { code, message });
             return true;
         }

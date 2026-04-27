@@ -114,7 +114,7 @@ pub fn apply_bindings<R: Runtime>(
     app: &AppHandle<R>,
     payload: &HotkeyConfigPayload,
 ) -> Result<(), String> {
-    eprintln!(
+    log::warn!(
         "[hotkey] apply_bindings: {} entries",
         payload.bindings.len()
     );
@@ -141,10 +141,10 @@ pub fn apply_bindings<R: Runtime>(
         .collect();
     if let Some(mo_state) = app.try_state::<SharedModifierOnlyState>() {
         if let Err(e) = modifier_only::apply(&mo_state, &modifier_only_bindings) {
-            eprintln!("[hotkey] modifier_only apply failed: {e}");
+            log::warn!("[hotkey] modifier_only apply failed: {e}");
         }
     } else {
-        eprintln!(
+        log::warn!(
             "[hotkey] SharedModifierOnlyState missing; skip {} modifier-only binding(s)",
             modifier_only_bindings.len()
         );
@@ -154,17 +154,17 @@ pub fn apply_bindings<R: Runtime>(
     let mut desired: HashMap<Shortcut, (String, BindingId)> = HashMap::new();
     for (id_str, maybe) in &payload.bindings {
         let Some(id) = parse_binding_id(id_str) else {
-            eprintln!("[hotkey]   skip unknown id: {id_str}");
+            log::warn!("[hotkey]   skip unknown id: {id_str}");
             continue;
         };
         let Some(binding) = maybe else {
-            eprintln!("[hotkey]   skip null binding: {id_str}");
+            log::warn!("[hotkey]   skip null binding: {id_str}");
             continue;
         };
         // modifierOnly 已在上方分流；doubleTap 待实现，先 skip。
         if binding.kind != "combo" {
             if binding.kind != "modifierOnly" {
-                eprintln!(
+                log::warn!(
                     "[hotkey]   skip non-combo binding {id_str}: kind={} (not yet implemented)",
                     binding.kind
                 );
@@ -172,14 +172,14 @@ pub fn apply_bindings<R: Runtime>(
             continue;
         }
         let Some(sc) = build_shortcut(binding) else {
-            eprintln!(
+            log::warn!(
                 "[hotkey]   failed to parse shortcut for {id_str}: mods={:?} code={}",
                 binding.mods, binding.code
             );
             continue;
         };
         if desired.contains_key(&sc) {
-            eprintln!("[hotkey]   duplicate shortcut skipped for {id_str}: {sc:?}");
+            log::warn!("[hotkey]   duplicate shortcut skipped for {id_str}: {sc:?}");
             continue;
         }
         desired.insert(sc, (id_str.clone(), id));
@@ -191,7 +191,7 @@ pub fn apply_bindings<R: Runtime>(
             .iter()
             .all(|(sc, (_, id))| s.active.get(sc).is_some_and(|aid| aid == id));
     if same {
-        eprintln!(
+        log::warn!(
             "[hotkey] apply_bindings: no-op, already at target ({} active)",
             s.active.len()
         );
@@ -200,7 +200,7 @@ pub fn apply_bindings<R: Runtime>(
 
     // 2. unregister 当前激活的全部 shortcut
     for sc in s.active.keys() {
-        eprintln!("[hotkey]   unregister previous: {sc:?}");
+        log::warn!("[hotkey]   unregister previous: {sc:?}");
         let _ = plugin.unregister(*sc);
     }
     s.active.clear();
@@ -210,7 +210,7 @@ pub fn apply_bindings<R: Runtime>(
     for (sc, (id_str, id)) in desired {
         let result = plugin.register(sc).or_else(|first_err| {
             // OS 层可能残留（上次 crash / HMR 残留）；先 unregister 再重试一次。
-            eprintln!(
+            log::warn!(
                 "[hotkey]   first register failed for {id_str}: {first_err:?}; retry after unregister"
             );
             let _ = plugin.unregister(sc);
@@ -219,11 +219,11 @@ pub fn apply_bindings<R: Runtime>(
 
         match result {
             Ok(()) => {
-                eprintln!("[hotkey]   registered {id_str} -> {sc:?}");
+                log::warn!("[hotkey]   registered {id_str} -> {sc:?}");
                 next.insert(sc, id);
             }
             Err(e) => {
-                eprintln!("[hotkey]   REGISTER FAILED for {id_str} -> {sc:?}: {e:?}");
+                log::warn!("[hotkey]   REGISTER FAILED for {id_str} -> {sc:?}: {e:?}");
                 let _ = app.emit(
                     "openspeech://hotkey/register-failed",
                     serde_json::json!({ "id": id_str, "error": format!("{e:?}") }),
@@ -234,22 +234,22 @@ pub fn apply_bindings<R: Runtime>(
 
     let total = next.len();
     s.active = next;
-    eprintln!("[hotkey] apply_bindings done: {total} active shortcuts");
+    log::warn!("[hotkey] apply_bindings done: {total} active shortcuts");
 
     Ok(())
 }
 
 pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: ShortcutEvent) {
     let Some(state) = app.try_state::<SharedHotkeyState>() else {
-        eprintln!("[hotkey] handler: SharedHotkeyState missing");
+        log::warn!("[hotkey] handler: SharedHotkeyState missing");
         return;
     };
     let Ok(s) = state.lock() else {
-        eprintln!("[hotkey] handler: lock poisoned");
+        log::warn!("[hotkey] handler: lock poisoned");
         return;
     };
     let Some(&id) = s.active.get(shortcut) else {
-        eprintln!("[hotkey] handler: unrecognized shortcut {shortcut:?}");
+        log::warn!("[hotkey] handler: unrecognized shortcut {shortcut:?}");
         return;
     };
     drop(s);
@@ -259,19 +259,19 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
         ShortcutState::Released => "released",
     };
 
-    eprintln!("[hotkey] handler: {shortcut:?} id={id:?} phase={phase}");
+    log::warn!("[hotkey] handler: {shortcut:?} id={id:?} phase={phase}");
 
     // 按下立即 show overlay（不等前端事件往返，消除 50-100ms 感知延迟）；
     // hide 交给 overlay 窗口自己——进入 idle 状态时 invoke overlay_hide。
     if phase == "pressed" {
         if let Err(e) = crate::overlay::show(app) {
-            eprintln!("[overlay] show failed: {e:?}");
+            log::warn!("[overlay] show failed: {e:?}");
         }
     }
 
     let payload = HotkeyEventPayload { id, phase };
     if let Err(e) = app.emit(HOTKEY_EVENT, payload) {
-        eprintln!("[hotkey] emit failed: {e:?}");
+        log::warn!("[hotkey] emit failed: {e:?}");
     }
 }
 
@@ -292,7 +292,7 @@ pub async fn apply_hotkey_config<R: Runtime>(
 #[tauri::command]
 pub fn hotkey_init_listener<R: Runtime>(app: AppHandle<R>) {
     let Some(state) = app.try_state::<SharedModifierOnlyState>() else {
-        eprintln!("[hotkey] hotkey_init_listener: SharedModifierOnlyState missing");
+        log::warn!("[hotkey] hotkey_init_listener: SharedModifierOnlyState missing");
         return;
     };
     let state_arc: SharedModifierOnlyState = state.inner().clone();
@@ -314,7 +314,7 @@ fn pause_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             count += 1;
         }
     }
-    eprintln!("[hotkey] pause_combos: unregistered {count} shortcut(s)");
+    log::warn!("[hotkey] pause_combos: unregistered {count} shortcut(s)");
     Ok(())
 }
 
@@ -328,10 +328,10 @@ fn resume_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     for sc in s.active.keys() {
         match plugin.register(*sc) {
             Ok(()) => count += 1,
-            Err(e) => eprintln!("[hotkey] resume_combos: register {sc:?} failed: {e:?}"),
+            Err(e) => log::warn!("[hotkey] resume_combos: register {sc:?} failed: {e:?}"),
         }
     }
-    eprintln!("[hotkey] resume_combos: re-registered {count} shortcut(s)");
+    log::warn!("[hotkey] resume_combos: re-registered {count} shortcut(s)");
     Ok(())
 }
 
@@ -349,6 +349,6 @@ pub fn set_hotkey_recording<R: Runtime>(app: AppHandle<R>, enabled: bool) {
         resume_combos(&app)
     };
     if let Err(e) = res {
-        eprintln!("[hotkey] set_hotkey_recording({enabled}) combo toggle failed: {e}");
+        log::warn!("[hotkey] set_hotkey_recording({enabled}) combo toggle failed: {e}");
     }
 }

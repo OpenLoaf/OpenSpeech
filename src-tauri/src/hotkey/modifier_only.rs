@@ -45,7 +45,7 @@ static RECORDING_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_recording(enabled: bool) {
     RECORDING_ACTIVE.store(enabled, Ordering::SeqCst);
-    eprintln!("[modifier_only] recording mode → {enabled}");
+    log::warn!("[modifier_only] recording mode → {enabled}");
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,7 +272,7 @@ pub fn create_state() -> SharedModifierOnlyState {
 /// 完全可见）解决。
 pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlyState) {
     if LISTEN_STARTED.swap(true, Ordering::SeqCst) {
-        eprintln!("[modifier_only] start_listener: already started, skip");
+        log::warn!("[modifier_only] start_listener: already started, skip");
         return;
     }
 
@@ -288,7 +288,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
     const IDLE_RESET: std::time::Duration = std::time::Duration::from_secs(30);
 
     std::thread::spawn(move || {
-        eprintln!("[modifier_only] starting rdev::listen thread");
+        log::warn!("[modifier_only] starting rdev::listen thread");
         let result = rdev::listen(move |event: Event| {
             let (key, is_press) = match event.event_type {
                 EventType::KeyPress(k) => (k, true),
@@ -310,7 +310,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
             if stale {
                 if let Ok(mut s) = state_clone.lock() {
                     if !s.pressed.is_empty() || !s.active_ids.is_empty() {
-                        eprintln!(
+                        log::warn!(
                             "[modifier_only] idle > {}s → reset stale state (pressed={}, active={})",
                             IDLE_RESET.as_secs(),
                             s.pressed.len(),
@@ -334,7 +334,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
             // short-circuit binding 匹配——否则录入时按下 Fn 会顺带触发原 dictate_ptt。
             if RECORDING_ACTIVE.load(Ordering::Relaxed) {
                 if let Err(e) = app_clone.emit(HOTKEY_RECORDING_EVENT, preview) {
-                    eprintln!("[modifier_only] emit recording failed: {e:?}");
+                    log::warn!("[modifier_only] emit recording failed: {e:?}");
                 }
                 return;
             }
@@ -382,32 +382,32 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
             };
 
             for (id, id_str) in newly_pressed_ids {
-                eprintln!("[modifier_only] pressed: {id_str} id={id:?}");
+                log::warn!("[modifier_only] pressed: {id_str} id={id:?}");
                 // 与 combo 路径一致：按下立即 show overlay 消除感知延迟
                 if let Err(e) = crate::overlay::show(&app_clone) {
-                    eprintln!("[overlay] show failed: {e:?}");
+                    log::warn!("[overlay] show failed: {e:?}");
                 }
                 let payload = HotkeyEventPayload {
                     id,
                     phase: "pressed",
                 };
                 if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
-                    eprintln!("[modifier_only] emit pressed failed: {e:?}");
+                    log::warn!("[modifier_only] emit pressed failed: {e:?}");
                 }
             }
             for (id, id_str) in newly_released_ids {
-                eprintln!("[modifier_only] released: {id_str} id={id:?}");
+                log::warn!("[modifier_only] released: {id_str} id={id:?}");
                 let payload = HotkeyEventPayload {
                     id,
                     phase: "released",
                 };
                 if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
-                    eprintln!("[modifier_only] emit released failed: {e:?}");
+                    log::warn!("[modifier_only] emit released failed: {e:?}");
                 }
             }
         });
         if let Err(e) = result {
-            eprintln!(
+            log::warn!(
                 "[modifier_only] rdev::listen exited with error: {e:?}. \
                  modifier-only / Fn bindings will not work this session. \
                  Check macOS Accessibility / Input Monitoring permissions."
@@ -428,19 +428,19 @@ pub fn apply(
             continue;
         }
         if !b.code.is_empty() {
-            eprintln!(
+            log::warn!(
                 "[modifier_only]   skip {id_str}: kind=modifierOnly but code={:?} (must be empty)",
                 b.code
             );
             continue;
         }
         let Some(id) = parse_binding_id(id_str) else {
-            eprintln!("[modifier_only]   skip unknown id: {id_str}");
+            log::warn!("[modifier_only]   skip unknown id: {id_str}");
             continue;
         };
         let mods: HashSet<Mod> = b.mods.iter().filter_map(|s| str_to_mod(s)).collect();
         if mods.is_empty() {
-            eprintln!("[modifier_only]   skip {id_str}: empty mods after parse");
+            log::warn!("[modifier_only]   skip {id_str}: empty mods after parse");
             continue;
         }
         new_bindings.push(ModBinding {
@@ -451,12 +451,12 @@ pub fn apply(
     }
 
     let mut s = state.lock().map_err(|e| e.to_string())?;
-    eprintln!(
+    log::warn!(
         "[modifier_only] apply: {} binding(s) registered",
         new_bindings.len()
     );
     for b in &new_bindings {
-        eprintln!("[modifier_only]   - {} mods={:?}", b.id_str, b.mods);
+        log::warn!("[modifier_only]   - {} mods={:?}", b.id_str, b.mods);
     }
     s.bindings = new_bindings;
     s.active_ids.clear();
