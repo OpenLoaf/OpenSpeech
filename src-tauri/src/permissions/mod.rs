@@ -30,7 +30,9 @@ mod macos;
 pub fn permission_check_microphone() -> String {
     #[cfg(target_os = "macos")]
     {
-        macos::microphone_status()
+        let s = macos::microphone_status();
+        log::warn!("[permissions] check_microphone -> {s}");
+        s
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -42,7 +44,9 @@ pub fn permission_check_microphone() -> String {
 pub fn permission_check_accessibility() -> String {
     #[cfg(target_os = "macos")]
     {
-        macos::accessibility_status()
+        let s = macos::accessibility_status();
+        log::warn!("[permissions] check_accessibility -> {s}");
+        s
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -54,7 +58,9 @@ pub fn permission_check_accessibility() -> String {
 pub fn permission_check_input_monitoring() -> String {
     #[cfg(target_os = "macos")]
     {
-        macos::input_monitoring_status()
+        let s = macos::input_monitoring_status();
+        log::warn!("[permissions] check_input_monitoring -> {s}");
+        s
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -66,6 +72,7 @@ pub fn permission_check_input_monitoring() -> String {
 pub fn permission_request_input_monitoring() {
     #[cfg(target_os = "macos")]
     {
+        log::warn!("[permissions] permission_request_input_monitoring invoked");
         macos::request_input_monitoring();
     }
 }
@@ -74,6 +81,7 @@ pub fn permission_request_input_monitoring() {
 pub fn permission_open_settings(kind: String) {
     #[cfg(target_os = "macos")]
     {
+        log::warn!("[permissions] open_settings kind={kind}");
         macos::open_settings(&kind);
     }
     #[cfg(not(target_os = "macos"))]

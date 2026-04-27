@@ -136,6 +136,9 @@ export function LoginDialog({ open, onOpenChange }: Props) {
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
             {t("dialogs:login.title")}
           </DialogTitle>
+          <p className="font-sans text-xs leading-snug text-te-light-gray">
+            {t("dialogs:login.openloaf_note")}
+          </p>
           <DialogDescription className="sr-only">
             {t("dialogs:login.description")}
           </DialogDescription>

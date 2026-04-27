@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -21,6 +22,11 @@ import { STEP_TITLES, type OnboardingStep } from "./types";
 export default function OnboardingPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState<OnboardingStep>(1);
+  const [appVersion, setAppVersion] = useState("");
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+  }, []);
 
   // 引导期只响应 Cmd+Q（quit-requested）这条明确退出路径——Cmd+Q 在 macOS 任何 app
   // 都意味着退出，必须保留。Cmd+W / 红叉走 close-requested，引导期直接忽略：用户在
@@ -96,6 +102,11 @@ export default function OnboardingPage() {
           <span className="ml-2 font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
             // first run setup
           </span>
+          {appVersion && (
+            <span className="ml-2 font-mono text-[10px] uppercase tracking-widest text-te-light-gray/70">
+              v{appVersion}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">

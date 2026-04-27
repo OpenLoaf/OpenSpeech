@@ -60,6 +60,7 @@
   "login": {
     "section_tag": "// step 02 / account",
     "title": "登录 OpenLoaf 账号",
+    "subtitle_openloaf": "OpenSpeech 是 OpenLoaf 旗下产品，所有 OpenLoaf 产品共用同一个账号与积分。",
     "bonus_main": "新用户立即到账 200 积分",
     "bonus_minutes_prefix": "· 约",
     "bonus_minutes_value": "30 分钟",

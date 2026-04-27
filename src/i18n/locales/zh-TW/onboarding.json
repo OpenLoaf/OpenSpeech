@@ -60,6 +60,7 @@
   "login": {
     "section_tag": "// step 02 / account",
     "title": "登入 OpenLoaf 帳號",
+    "subtitle_openloaf": "OpenSpeech 屬於 OpenLoaf 產品線，所有 OpenLoaf 產品共用同一個帳號與點數。",
     "bonus_main": "新使用者立即到帳 200 點數",
     "bonus_minutes_prefix": "· 約",
     "bonus_minutes_value": "30 分鐘",

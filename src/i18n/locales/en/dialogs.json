@@ -1,6 +1,7 @@
 {
   "login": {
     "title": "Sign in to OpenLoaf",
+    "openloaf_note": "OpenSpeech is an OpenLoaf product — one OpenLoaf account works across the family.",
     "description": "Choose a sign-in method to continue",
     "subtitle": {
       "idle": "Choose how you'd like to sign in",

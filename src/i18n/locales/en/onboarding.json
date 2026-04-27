@@ -60,6 +60,7 @@
   "login": {
     "section_tag": "// step 02 / account",
     "title": "Sign in to OpenLoaf",
+    "subtitle_openloaf": "OpenSpeech is part of the OpenLoaf product family — one OpenLoaf account works across every product, with shared credits.",
     "bonus_main": "200 credits granted to new accounts",
     "bonus_minutes_prefix": "· about",
     "bonus_minutes_value": "30 minutes",

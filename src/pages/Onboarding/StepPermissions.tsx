@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { warn as logWarn } from "@tauri-apps/plugin-log";
 import {
   AlertCircle,
   ArrowRight,

@@ -1,6 +1,7 @@
 {
   "login": {
     "title": "登录 OpenLoaf",
+    "openloaf_note": "OpenSpeech 是 OpenLoaf 旗下产品，所有产品共用同一个 OpenLoaf 账号。",
     "description": "选择一种登录方式以继续",
     "subtitle": {
       "idle": "选择登录方式继续",

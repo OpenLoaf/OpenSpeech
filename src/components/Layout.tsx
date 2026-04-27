@@ -92,6 +92,48 @@ export default function Layout() {
   const setNoInternetOpen = useUIStore((s) => s.setNoInternetOpen);
   const openLogin = useUIStore((s) => s.openLogin);
   const openSettings = useUIStore((s) => s.openSettings);
+  const pendingUpdate = useUIStore((s) => s.pendingUpdate);
+  const setPendingUpdate = useUIStore((s) => s.setPendingUpdate);
+
+  // 启动时 main.tsx 后台 check 出新版本，会把 update 对象写到 ui store。这里
+  // 监听 store 弹一个常驻 toast，让用户在自己方便的时机点"立即安装"再下载——
+  // 而不是 boot 期间偷偷下载阻塞 LoadingScreen。
+  useEffect(() => {
+    if (!pendingUpdate) return;
+    const upd = pendingUpdate.update;
+    const id = toast.message(i18next.t("pages:layout.tray.update_found_title"), {
+      description: pendingUpdate.version,
+      duration: Infinity,
+      action: {
+        label: i18next.t("settings:about.install_now"),
+        onClick: () => {
+          void (async () => {
+            void logInfo(
+              `[updater] boot-prompt install start → ${pendingUpdate.version}`,
+            );
+            toast.dismiss(id);
+            toast.message(i18next.t("settings:about.install_in_progress"), {
+              description: pendingUpdate.version,
+            });
+            try {
+              await upd.downloadAndInstall();
+              void logInfo("[updater] boot-prompt downloadAndInstall returned");
+            } catch (e) {
+              void logError(
+                `[updater] boot-prompt install failed: ${String((e as Error)?.message ?? e)}`,
+              );
+              toast.error(i18next.t("settings:about.install_failed"), {
+                description: String((e as Error)?.message ?? e),
+              });
+            } finally {
+              setPendingUpdate(null);
+            }
+          })();
+        },
+      },
+      onDismiss: () => setPendingUpdate(null),
+    });
+  }, [pendingUpdate, setPendingUpdate]);
 
   // 用户名 fallback 链：name → email 前缀 → "账户"。邮箱截 @ 前，避免侧栏被挤爆。
   const displayName = (() => {

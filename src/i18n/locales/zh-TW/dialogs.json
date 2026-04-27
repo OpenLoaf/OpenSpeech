@@ -1,6 +1,7 @@
 {
   "login": {
     "title": "登入 OpenLoaf",
+    "openloaf_note": "OpenSpeech 屬於 OpenLoaf 產品線，所有產品共用同一個 OpenLoaf 帳號。",
     "description": "選擇一種登入方式以繼續",
     "subtitle": {
       "idle": "選擇登入方式繼續",

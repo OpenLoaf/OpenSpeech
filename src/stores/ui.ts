@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { Update } from "@tauri-apps/plugin-updater";
 
 // 仅主窗口持有有意义的 UI dialog 状态；overlay 也会跑到这里（recording.ts 在
 // 主窗 / overlay 共享代码），但 overlay 没有渲染 LoginDialog / SettingsDialog，
@@ -26,9 +27,16 @@ interface UIStore {
    * navigator.onLine，恢复就关弹窗，仍离线就提示一次。
    */
   noInternetOpen: boolean;
+  /**
+   * 启动 / 托盘 / 关于页 check 到的待安装更新。在用户点击 toast 上的"立即安装"
+   * 之前，更新对象只保存在 store 里，不阻塞 boot 流程；安装由用户主动触发以
+   * 避免下载途中 LoadingScreen 一直转。一次只保留一个最新发现的版本。
+   */
+  pendingUpdate: { version: string; update: Update } | null;
   setLoginOpen: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
   setNoInternetOpen: (v: boolean) => void;
+  setPendingUpdate: (v: { version: string; update: Update } | null) => void;
   /** 拉回主窗口 + 打开登录弹窗。供 recording gate / sidebar account 按钮调用。 */
   openLogin: () => void;
   /** 拉回主窗口 + 打开设置弹窗，可指定首屏 tab（如登录界面跳"自定义 STT"）。 */
@@ -49,10 +57,12 @@ export const useUIStore = create<UIStore>((set) => ({
   settingsOpen: false,
   settingsInitialTab: "GENERAL",
   noInternetOpen: false,
+  pendingUpdate: null,
 
   setLoginOpen: (v) => set({ loginOpen: v }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
   setNoInternetOpen: (v) => set({ noInternetOpen: v }),
+  setPendingUpdate: (v) => set({ pendingUpdate: v }),
 
   openLogin: () => {
     ensureMainWindowVisible();

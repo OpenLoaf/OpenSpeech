@@ -170,6 +170,9 @@ export function StepLogin({
           <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
             {t("onboarding:login.title")}
           </h2>
+          <p className="max-w-md font-sans text-xs leading-relaxed text-te-light-gray">
+            {t("onboarding:login.subtitle_openloaf")}
+          </p>
           <div className="inline-flex w-fit items-center gap-2 border border-te-accent/40 bg-te-accent/5 px-3 py-1.5">
             <Sparkles className="size-3.5 shrink-0 text-te-accent" />
             <span className="font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-te-accent">
