@@ -155,9 +155,7 @@ fn parse_mode(mode: Option<&str>) -> RealtimeAsrLlmVadMode {
     // 默认 None（manual）：与前端 settings 默认值一致 + 符合文档对 push-to-talk
     // 听写的推荐。前端如果没传 mode 也走 manual 兜底。
     match mode.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("auto") | Some("server_vad") | Some("server-vad") => {
-            RealtimeAsrLlmVadMode::ServerVad
-        }
+        Some("auto") | Some("server_vad") | Some("server-vad") => RealtimeAsrLlmVadMode::ServerVad,
         _ => RealtimeAsrLlmVadMode::None,
     }
 }
@@ -249,7 +247,14 @@ fn stt_start_impl<R: Runtime>(
     let worker = thread::Builder::new()
         .name("openspeech-stt".into())
         .spawn(move || {
-            run_worker(app_worker, sess, ctrl_rx, stop_worker, final_worker, count_worker)
+            run_worker(
+                app_worker,
+                sess,
+                ctrl_rx,
+                stop_worker,
+                final_worker,
+                count_worker,
+            )
         })
         .map_err(|e| format!("spawn stt worker: {e}"))?;
 

@@ -14,6 +14,7 @@
     "store:default",
     "clipboard-manager:allow-write-text",
     "log:default",
+    "dialog:allow-save",
     {
       "identifier": "sql:allow-load",
       "allow": [{ "url": "sqlite:openspeech.db" }]

@@ -141,11 +141,9 @@ pub async fn transcribe_long_audio_url<R: Runtime>(
     url: String,
     lang: Option<String>,
 ) -> Result<TranscribeFileResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        transcribe_long_audio_url_impl(app, url, lang)
-    })
-    .await
-    .map_err(|e| format!("transcribe long join: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || transcribe_long_audio_url_impl(app, url, lang))
+        .await
+        .map_err(|e| format!("transcribe long join: {e}"))?
 }
 
 fn transcribe_long_audio_url_impl<R: Runtime>(

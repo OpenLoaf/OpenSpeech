@@ -196,9 +196,7 @@ pub struct InputDeviceInfo {
 #[tauri::command]
 pub fn audio_list_input_devices() -> Vec<InputDeviceInfo> {
     let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|d| device_label(&d));
+    let default_name = host.default_input_device().and_then(|d| device_label(&d));
     let mut out = Vec::new();
     if let Ok(devices) = host.input_devices() {
         for d in devices {
@@ -461,9 +459,7 @@ pub fn audio_recording_start(id: String) -> Result<(), String> {
     let (sample_rate, channels) = stream_info()
         .lock()
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| {
-            "audio stream not running; call audio_level_start first".to_string()
-        })?;
+        .ok_or_else(|| "audio stream not running; call audio_level_start first".to_string())?;
 
     let mut slot = recording_slot().lock().map_err(|e| e.to_string())?;
     // 旧 session 未 stop 就又 start——丢弃旧 samples（Zeroizing 会清零）
@@ -494,9 +490,7 @@ pub async fn audio_recording_stop<R: Runtime>(
         .map_err(|e| format!("audio_recording_stop join: {e}"))?
 }
 
-fn audio_recording_stop_impl<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<RecordingResult, String> {
+fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingResult, String> {
     let session = {
         let mut slot = recording_slot().lock().map_err(|e| e.to_string())?;
         slot.take()
@@ -588,4 +582,31 @@ pub fn audio_recording_load<R: Runtime>(
     let abs = dir.join(filename);
     let bytes = std::fs::read(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
     Ok(Response::new(bytes))
+}
+
+/// 把 history 中某条录音另存到用户在系统对话框里选的位置。
+/// `audio_path` 沿用 `audio_recording_load` 的相对路径约定（`recordings/<id>.wav`），
+/// `dest_path` 来自前端 `plugin-dialog::save()` 的绝对路径——交给 std::fs::copy
+/// 由 OS 自行处理覆盖 / 权限。
+#[tauri::command]
+pub fn audio_recording_export<R: Runtime>(
+    app: AppHandle<R>,
+    audio_path: String,
+    dest_path: String,
+) -> Result<(), String> {
+    let Some(filename) = audio_path.strip_prefix("recordings/") else {
+        return Err("audio_path must start with recordings/".to_string());
+    };
+    if filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+    {
+        return Err("invalid filename in audio_path".to_string());
+    }
+    let dir = db::recordings_dir(&app)?;
+    let src = dir.join(filename);
+    std::fs::copy(&src, &dest_path)
+        .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dest_path))?;
+    Ok(())
 }
