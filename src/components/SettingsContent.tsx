@@ -939,8 +939,39 @@ function AboutTab() {
       const upd = await checkForUpdate();
       if (upd) {
         void logInfo(`[updater] about-page check found: ${upd.version}`);
+        // 找到新版后用 toast.action 给用户「立即安装」按钮——之前只 toast.message
+        // 干瞪眼，没有任何升级路径，用户必须手动去 GitHub 下 dmg。
+        // downloadAndInstall 在 macOS/Linux 会原地替换 + relaunch，UI 会消失。
         toast.message(i18next.t("pages:layout.tray.update_found_title"), {
           description: upd.version,
+          duration: 30_000,
+          action: {
+            label: i18next.t("settings:about.install_now"),
+            onClick: () => {
+              void (async () => {
+                void logInfo(
+                  `[updater] about-page install start → ${upd.version}`,
+                );
+                toast.message(
+                  i18next.t("settings:about.install_in_progress"),
+                  { description: upd.version },
+                );
+                try {
+                  await upd.downloadAndInstall();
+                  void logInfo(
+                    "[updater] about-page downloadAndInstall returned",
+                  );
+                } catch (e) {
+                  void logError(
+                    `[updater] about-page install failed: ${String((e as Error)?.message ?? e)}`,
+                  );
+                  toast.error(i18next.t("settings:about.install_failed"), {
+                    description: String((e as Error)?.message ?? e),
+                  });
+                }
+              })();
+            },
+          },
         });
       } else {
         void logInfo("[updater] about-page check: no update");

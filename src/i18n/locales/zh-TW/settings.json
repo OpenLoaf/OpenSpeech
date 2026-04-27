@@ -113,6 +113,9 @@
     "license": "授權",
     "source": "原始碼",
     "check_update": "檢查更新",
-    "rerun_onboarding": "重新執行首次導覽"
+    "rerun_onboarding": "重新執行首次導覽",
+    "install_now": "立即安裝",
+    "install_in_progress": "正在下載並安裝更新…",
+    "install_failed": "更新安裝失敗"
   }
 }

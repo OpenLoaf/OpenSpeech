@@ -125,41 +125,51 @@ export default function Layout() {
   })();
 
   useEffect(() => {
-    // Rust 端统一拦截主窗口关闭（Cmd+Q 经 App Menu / 红叉 / Alt+F4）后 emit 此事件，
-    // 前端只负责 UI 决策：读偏好 → 直接执行 / 弹对话框。
+    // Rust 端统一拦截主窗口关闭后 emit 事件，前端只负责 UI 决策：
+    //   close-requested: 红叉 / Cmd+W → 读 closeBehavior 偏好（HIDE/QUIT/PROMPT）
+    //   quit-requested:  Cmd+Q → 用户明确退出，沿用 close 行为以保持与历史版本一致
     // cancelled flag 是为了处理 React StrictMode：await listen 返回前组件可能已被
     // 卸载重挂，若不判断会注册两个 listener，导致 emit 触发两次。
-    let unlisten: (() => void) | undefined;
+    let unlistenClose: (() => void) | undefined;
+    let unlistenQuit: (() => void) | undefined;
     let cancelled = false;
 
+    const handleCloseRequest = async () => {
+      // 每次读最新设置（不订阅，不把关闭路径锁到 mount 时的快照）
+      const behavior = useSettingsStore.getState().general.closeBehavior;
+
+      if (behavior === "HIDE") {
+        await invoke("hide_to_tray");
+        return;
+      }
+
+      if (behavior === "QUIT") {
+        await invoke("exit_app");
+        return;
+      }
+
+      setClosePromptOpen(true);
+    };
+
     (async () => {
-      const unsub = await listen("openspeech://close-requested", async () => {
-        // 每次读最新设置（不订阅，不把关闭路径锁到 mount 时的快照）
-        const behavior = useSettingsStore.getState().general.closeBehavior;
-
-        if (behavior === "HIDE") {
-          await invoke("hide_to_tray");
-          return;
-        }
-
-        if (behavior === "QUIT") {
-          await invoke("exit_app");
-          return;
-        }
-
-        setClosePromptOpen(true);
-      });
+      const [unsubClose, unsubQuit] = await Promise.all([
+        listen("openspeech://close-requested", handleCloseRequest),
+        listen("openspeech://quit-requested", handleCloseRequest),
+      ]);
 
       if (cancelled) {
-        unsub();
+        unsubClose();
+        unsubQuit();
       } else {
-        unlisten = unsub;
+        unlistenClose = unsubClose;
+        unlistenQuit = unsubQuit;
       }
     })();
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unlistenClose?.();
+      unlistenQuit?.();
     };
   }, []);
 
@@ -213,6 +223,35 @@ export default function Layout() {
             void logInfo(`[updater] tray check found: ${upd.version}`);
             toast.message(i18next.t("pages:layout.tray.update_found_title"), {
               description: upd.version,
+              duration: 30_000,
+              action: {
+                label: i18next.t("settings:about.install_now"),
+                onClick: () => {
+                  void (async () => {
+                    void logInfo(
+                      `[updater] tray install start → ${upd.version}`,
+                    );
+                    toast.message(
+                      i18next.t("settings:about.install_in_progress"),
+                      { description: upd.version },
+                    );
+                    try {
+                      await upd.downloadAndInstall();
+                      void logInfo(
+                        "[updater] tray downloadAndInstall returned",
+                      );
+                    } catch (e) {
+                      void logError(
+                        `[updater] tray install failed: ${String((e as Error)?.message ?? e)}`,
+                      );
+                      toast.error(
+                        i18next.t("settings:about.install_failed"),
+                        { description: String((e as Error)?.message ?? e) },
+                      );
+                    }
+                  })();
+                },
+              },
             });
           } else {
             void logInfo("[updater] tray check: no update");

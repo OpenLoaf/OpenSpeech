@@ -85,10 +85,14 @@ const bootPromise = (async () => {
     if (useSettingsStore.getState().general.autoUpdate) {
       void logInfo("[updater] boot check start, autoUpdate=on");
       try {
+        // 30s 而非 5s——走代理 / 跨境 CDN 时 GitHub releases 一次 TLS 握手 +
+        // /latest/download/ 重定向常见 6~12s。5s 几乎必超时，导致用户永远
+        // 升不上来还误以为没新版。30s 是经验值：超出说明真有 GitHub /
+        // 代理故障，跳过本次启动检查、下次再来。
         const upd = await Promise.race([
           checkForUpdate(),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("updater check timeout")), 5000),
+            setTimeout(() => reject(new Error("updater check timeout")), 30_000),
           ),
         ]);
         if (upd) {

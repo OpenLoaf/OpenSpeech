@@ -113,6 +113,9 @@
     "license": "许可证",
     "source": "源代码",
     "check_update": "检查更新",
-    "rerun_onboarding": "重新运行首次引导"
+    "rerun_onboarding": "重新运行首次引导",
+    "install_now": "立即安装",
+    "install_in_progress": "正在下载并安装更新…",
+    "install_failed": "更新安装失败"
   }
 }

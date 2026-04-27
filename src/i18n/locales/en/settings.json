@@ -113,6 +113,9 @@
     "license": "License",
     "source": "Source code",
     "check_update": "Check for updates",
-    "rerun_onboarding": "Re-run first-launch onboarding"
+    "rerun_onboarding": "Re-run first-launch onboarding",
+    "install_now": "Install now",
+    "install_in_progress": "Downloading and installing update…",
+    "install_failed": "Update install failed"
   }
 }
