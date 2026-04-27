@@ -8,8 +8,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{
-    webview::Color, AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl,
-    WebviewWindowBuilder,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
+    webview::Color,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
@@ -37,21 +37,18 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // background_color 把 NSWindow / wry webview 默认色都设成 te-bg 黑——否则
     // window.show / 窗口尺寸变化的瞬间，webview 第一帧合成前会露出系统 NSWindow
     // 默认背景（macOS light mode 下是白），表现为出现/消失时一闪白色。
-    let builder = WebviewWindowBuilder::new(
-        app,
-        OVERLAY_LABEL,
-        WebviewUrl::App("index.html".into()),
-    )
-    .inner_size(WIDTH, HEIGHT)
-    .resizable(false)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .focused(false)
-    .shadow(false)
-    .visible(false)
-    .background_color(Color(0, 0, 0, 255))
-    .title("OpenSpeech Overlay");
+    let builder =
+        WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("index.html".into()))
+            .inner_size(WIDTH, HEIGHT)
+            .resizable(false)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focused(false)
+            .shadow(false)
+            .visible(false)
+            .background_color(Color(0, 0, 0, 255))
+            .title("OpenSpeech Overlay");
 
     #[cfg(target_os = "macos")]
     let builder = builder.visible_on_all_workspaces(true);
@@ -64,9 +61,7 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-fn position_to_bottom_center<R: Runtime>(
-    window: &tauri::WebviewWindow<R>,
-) -> tauri::Result<()> {
+fn position_to_bottom_center<R: Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
     position_to_bottom_center_with_height(window, HEIGHT)
 }
 
@@ -132,10 +127,7 @@ fn show_now<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 /// - 获焦：若期望可见，物理 hide（让 Home 的 Live 面板接管展示，避免视觉重复）；
 ///         desired 状态保持，等下一次失焦再补偿。
 /// 期望不可见（无录音流程）时 focus 变化无副作用。
-pub fn on_main_focus_changed<R: Runtime>(
-    app: &AppHandle<R>,
-    focused: bool,
-) -> tauri::Result<()> {
+pub fn on_main_focus_changed<R: Runtime>(app: &AppHandle<R>, focused: bool) -> tauri::Result<()> {
     if !DESIRED_VISIBLE.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -166,10 +158,7 @@ pub fn overlay_hide<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 // 错误条出现/消失时由前端调一次：传入新的窗口高度（默认 36；展开时 ~96）。
 // 重新设置 inner_size 后立即重新定位，使底部胶囊保持原位，错误条向上扩展。
 #[tauri::command]
-pub fn overlay_set_height<R: Runtime>(
-    app: AppHandle<R>,
-    height: f64,
-) -> Result<(), String> {
+pub fn overlay_set_height<R: Runtime>(app: AppHandle<R>, height: f64) -> Result<(), String> {
     let Some(w) = app.get_webview_window(OVERLAY_LABEL) else {
         return Ok(());
     };
@@ -179,4 +168,3 @@ pub fn overlay_set_height<R: Runtime>(
     position_to_bottom_center_with_height(&w, h).map_err(|e| e.to_string())?;
     Ok(())
 }
-

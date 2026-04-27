@@ -17,7 +17,9 @@ import {
   X,
 } from "lucide-react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
+import { exportRecordingTo } from "@/lib/audio";
 import {
   Dialog,
   DialogContent,
@@ -321,6 +323,32 @@ function RowActions({
     }
   };
 
+  const handleExport = async () => {
+    if (!audioPath) return;
+    // audio_path = "recordings/<id>.wav"。用 basename 作为系统 Save Dialog 的默认文件名。
+    const defaultName = audioPath.split("/").pop() || "openspeech-recording.wav";
+    let dest: string | null;
+    try {
+      dest = await saveFileDialog({
+        defaultPath: defaultName,
+        filters: [{ name: "WAV", extensions: ["wav"] }],
+      });
+    } catch (e) {
+      console.error("[history] save dialog failed:", e);
+      toast.error(t("pages:history.toast.export_failed"));
+      return;
+    }
+    if (!dest) return;
+    try {
+      await exportRecordingTo(audioPath, dest);
+      toast.success(t("pages:history.toast.export_success"));
+    } catch (e) {
+      console.error("[history] export failed:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(t("pages:history.toast.export_failed"), { description: msg });
+    }
+  };
+
   // 长录音（>5min）暂走不通——OL-TL-004 只接受公网 URL。在 UI 层提前禁用按钮，
   // 给出 title 提示，避免用户点击后才看到 toast。
   const tooLong = durationMs > 5 * 60 * 1000;
@@ -394,6 +422,16 @@ function RowActions({
       >
         <RotateCcw className="size-3.5" />
       </button>
+      {audioPath ? (
+        <button
+          type="button"
+          className={baseBtn}
+          title={t("pages:history.row.export")}
+          onClick={handleExport}
+        >
+          <Download className="size-3.5" />
+        </button>
+      ) : null}
       <button
         type="button"
         className={dangerBtn}

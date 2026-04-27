@@ -118,4 +118,3 @@ pub fn permission_reset_tcc_one(app: tauri::AppHandle, kind: String) {
         let _ = (app, kind);
     }
 }
-

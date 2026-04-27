@@ -53,7 +53,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let sess: DevSession = serde_json::from_slice(&fs::read(&session_path)?)?;
     println!("🔑 base_url: {}", sess.base_url);
-    println!("🔑 access_token: {}…（已加载）", &sess.access_token[..8.min(sess.access_token.len())]);
+    println!(
+        "🔑 access_token: {}…（已加载）",
+        &sess.access_token[..8.min(sess.access_token.len())]
+    );
 
     // ── 2. 选 WAV：命令行第 2 参数优先，否则 recordings/ 里找最新 ─────────
     let wav_path = match std::env::args().nth(1) {
@@ -82,13 +85,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 我们的 Rust 侧只写 16-bit PCM（Int）。其他格式的 WAV（32-bit float 等）罕见，
     // 先不支持——真遇到了再加分支。
     if spec.bits_per_sample != 16 || spec.sample_format != SampleFormat::Int {
-        eprintln!("❌ 仅支持 16-bit PCM int；got bits={} fmt={:?}", spec.bits_per_sample, spec.sample_format);
+        eprintln!(
+            "❌ 仅支持 16-bit PCM int；got bits={} fmt={:?}",
+            spec.bits_per_sample, spec.sample_format
+        );
         std::process::exit(1);
     }
 
-    let all_samples: Vec<i16> = reader
-        .samples::<i16>()
-        .collect::<Result<Vec<_>, _>>()?;
+    let all_samples: Vec<i16> = reader.samples::<i16>().collect::<Result<Vec<_>, _>>()?;
     let mono: Vec<i16> = if spec.channels <= 1 {
         all_samples
     } else {
@@ -135,14 +139,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 5. 按 200ms 分帧发送，穿插拉事件 ─────────────────────────────────
     let frame_samples = (TARGET_SAMPLE_RATE as usize * FRAME_MS as usize / 1000).max(1);
     let total_frames = pcm16k.len().div_ceil(frame_samples);
-    println!("📤 streaming {} frames × {} samples ({}ms each)", total_frames, frame_samples, FRAME_MS);
+    println!(
+        "📤 streaming {} frames × {} samples ({}ms each)",
+        total_frames, frame_samples, FRAME_MS
+    );
 
     let stream_t0 = Instant::now();
     for (i, chunk) in pcm16k.chunks(frame_samples).enumerate() {
-        let bytes: Vec<u8> = chunk
-            .iter()
-            .flat_map(|s| s.to_le_bytes())
-            .collect();
+        let bytes: Vec<u8> = chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
         rt.send_audio(bytes)?;
 
         // 拉排队事件（非阻塞）
@@ -158,7 +162,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   … sent {}/{}", i + 1, total_frames);
         }
     }
-    println!("📤 all audio sent in {} ms", stream_t0.elapsed().as_millis());
+    println!(
+        "📤 all audio sent in {} ms",
+        stream_t0.elapsed().as_millis()
+    );
 
     // ── 6. send_finish → 等 Final / Closed ───────────────────────────────
     rt.send_finish()?;
@@ -254,7 +261,9 @@ fn print_event(ev: &RealtimeEvent, t0: Instant) {
             remaining_credits,
             ..
         } => {
-            println!("[{ms:>5} ms] credits · consumed={consumed_credits} remaining={remaining_credits}");
+            println!(
+                "[{ms:>5} ms] credits · consumed={consumed_credits} remaining={remaining_credits}"
+            );
         }
         RealtimeEvent::Closed {
             reason,

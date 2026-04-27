@@ -84,3 +84,15 @@ export async function cancelRecording(): Promise<void> {
 export async function loadRecordingBytes(audioPath: string): Promise<ArrayBuffer> {
   return await invoke<ArrayBuffer>("audio_recording_load", { audioPath });
 }
+
+/**
+ * 把一条历史录音另存为到用户选的位置。`destPath` 是绝对路径——通常来自
+ * `@tauri-apps/plugin-dialog` 的 `save()`，由系统 Save 对话框得到。
+ * Rust 侧只校验 src 形如 `"recordings/<id>.wav"`，dest 交给 OS 处理。
+ */
+export async function exportRecordingTo(
+  audioPath: string,
+  destPath: string,
+): Promise<void> {
+  await invoke("audio_recording_export", { audioPath, destPath });
+}

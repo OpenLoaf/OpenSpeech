@@ -64,6 +64,7 @@
       "copy": "复制到剪贴板",
       "copied": "已复制",
       "reinject": "重新注入",
+      "export": "导出音频",
       "delete": "删除",
       "retry": "重试",
       "retrying_label": "重试中",
@@ -78,7 +79,9 @@
       "copy_failed": "复制失败",
       "retry_success": "重试成功",
       "retry_failed": "重试失败",
-      "delete_failed": "删除失败"
+      "delete_failed": "删除失败",
+      "export_success": "音频已导出",
+      "export_failed": "导出失败"
     },
     "confirm_clear": {
       "title": "删除全部历史",

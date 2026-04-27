@@ -39,6 +39,7 @@ base64 = "0.22"
 tiny_http = "0.12"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
+tauri-plugin-dialog = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

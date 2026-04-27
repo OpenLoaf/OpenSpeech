@@ -64,7 +64,9 @@ pub struct HotkeyState {
 
 impl Default for HotkeyState {
     fn default() -> Self {
-        Self { active: HashMap::new() }
+        Self {
+            active: HashMap::new(),
+        }
     }
 }
 
@@ -185,9 +187,9 @@ pub fn apply_bindings<R: Runtime>(
 
     // 幂等：如果目标与当前激活完全一致，跳过所有 OS 调用。
     let same = desired.len() == s.active.len()
-        && desired.iter().all(|(sc, (_, id))| {
-            s.active.get(sc).is_some_and(|aid| aid == id)
-        });
+        && desired
+            .iter()
+            .all(|(sc, (_, id))| s.active.get(sc).is_some_and(|aid| aid == id));
     if same {
         eprintln!(
             "[hotkey] apply_bindings: no-op, already at target ({} active)",
@@ -237,11 +239,7 @@ pub fn apply_bindings<R: Runtime>(
     Ok(())
 }
 
-pub fn handler<R: Runtime>(
-    app: &AppHandle<R>,
-    shortcut: &Shortcut,
-    event: ShortcutEvent,
-) {
+pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: ShortcutEvent) {
     let Some(state) = app.try_state::<SharedHotkeyState>() else {
         eprintln!("[hotkey] handler: SharedHotkeyState missing");
         return;

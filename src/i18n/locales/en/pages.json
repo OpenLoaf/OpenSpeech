@@ -64,6 +64,7 @@
       "copy": "Copy to clipboard",
       "copied": "Copied",
       "reinject": "Re-inject",
+      "export": "Export audio",
       "delete": "Delete",
       "retry": "Retry",
       "retrying_label": "Retrying",
@@ -78,7 +79,9 @@
       "copy_failed": "Copy failed",
       "retry_success": "Retry succeeded",
       "retry_failed": "Retry failed",
-      "delete_failed": "Delete failed"
+      "delete_failed": "Delete failed",
+      "export_success": "Audio exported",
+      "export_failed": "Export failed"
     },
     "confirm_clear": {
       "title": "Delete all history",

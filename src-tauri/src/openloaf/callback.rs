@@ -58,8 +58,8 @@ pub fn start(app: AppHandle) -> std::io::Result<u16> {
     // tiny_http::Server::from_listener 接受已 bind 的 listener。
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
-    let server = Server::from_listener(listener, None)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let server =
+        Server::from_listener(listener, None).map_err(|e| std::io::Error::other(e.to_string()))?;
 
     thread::spawn(move || {
         for req in server.incoming_requests() {
@@ -131,11 +131,8 @@ fn parse_callback(raw_url: &str) -> Option<CallbackParams> {
 }
 
 fn html_response(body: &str, status: u16) -> Response<std::io::Cursor<Vec<u8>>> {
-    let content_type = Header::from_bytes(
-        &b"Content-Type"[..],
-        &b"text/html; charset=utf-8"[..],
-    )
-    .expect("valid header");
+    let content_type = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+        .expect("valid header");
     Response::from_string(body)
         .with_status_code(status)
         .with_header(content_type)

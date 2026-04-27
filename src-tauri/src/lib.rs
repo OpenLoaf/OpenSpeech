@@ -168,7 +168,11 @@ fn open_network_settings() {
     let result = Command::new("gnome-control-center")
         .arg("network")
         .spawn()
-        .or_else(|_| Command::new("kcmshell5").arg("kcm_networkmanagement").spawn());
+        .or_else(|_| {
+            Command::new("kcmshell5")
+                .arg("kcm_networkmanagement")
+                .spawn()
+        });
 
     if let Err(e) = result {
         eprintln!("[network] open_network_settings failed: {e:?}");
@@ -183,7 +187,9 @@ fn read_show_dock_icon<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
     let Some(s) = app.store("settings.json").ok() else {
         return true;
     };
-    let Some(root) = s.get("root") else { return true };
+    let Some(root) = s.get("root") else {
+        return true;
+    };
     let Some(general) = root.get("general") else {
         return true;
     };
@@ -256,7 +262,11 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
         .build(app)?;
 
     // Auto-detect 项附系统默认设备名做提示，模板 "Auto-detect ({{name}})" 由前端按当前语言提供。
-    let auto_label = match devices.iter().find(|d| d.is_default).map(|d| d.name.clone()) {
+    let auto_label = match devices
+        .iter()
+        .find(|d| d.is_default)
+        .map(|d| d.name.clone())
+    {
         Some(n) => labels.auto_detect_with_name.replace("{{name}}", &n),
         None => labels.auto_detect.clone(),
     };
@@ -283,12 +293,14 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
     }
     let mic_submenu = mic_builder.build()?;
 
-    let dict = MenuItemBuilder::with_id("tray::open_dictionary", &labels.open_dictionary).build(app)?;
+    let dict =
+        MenuItemBuilder::with_id("tray::open_dictionary", &labels.open_dictionary).build(app)?;
     let version_label = labels.version_prefix.replace("{{version}}", &version);
     let version_item = MenuItemBuilder::with_id("tray::version", version_label)
         .enabled(false)
         .build(app)?;
-    let check_update = MenuItemBuilder::with_id("tray::check_update", &labels.check_update).build(app)?;
+    let check_update =
+        MenuItemBuilder::with_id("tray::check_update", &labels.check_update).build(app)?;
     let quit = MenuItemBuilder::with_id("tray::quit", &labels.quit)
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
@@ -352,6 +364,7 @@ fn disable_macos_fullscreen(window: &tauri::WebviewWindow) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 // Debug 整体放开 + 把噪声过大的网络栈拽回 Info；release 维持 Info。
@@ -361,7 +374,10 @@ pub fn run() {
                     tauri_plugin_log::log::LevelFilter::Info
                 })
                 .level_for("tungstenite", tauri_plugin_log::log::LevelFilter::Info)
-                .level_for("tokio_tungstenite", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for(
+                    "tokio_tungstenite",
+                    tauri_plugin_log::log::LevelFilter::Info,
+                )
                 .level_for("hyper", tauri_plugin_log::log::LevelFilter::Info)
                 .level_for("reqwest", tauri_plugin_log::log::LevelFilter::Info)
                 .level_for("rustls", tauri_plugin_log::log::LevelFilter::Info)
@@ -508,9 +524,7 @@ pub fn run() {
             // 菜单项详见 build_tray_menu。切换麦克风 / 插拔设备时通过
             // tray_refresh invoke 或 on_menu_event 末尾的重建触发刷新。
             // 托盘图标专用 PNG，独立于 bundle / 窗口图标，便于单独换样。
-            let icon = tauri::image::Image::from_bytes(include_bytes!(
-                "../icons/tray-icon.png"
-            ))?;
+            let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
             let initial_menu = build_tray_menu(&app.handle())?;
 
             TrayIconBuilder::with_id("main")
@@ -634,6 +648,7 @@ pub fn run() {
             audio::audio_recording_stop,
             audio::audio_recording_cancel,
             audio::audio_recording_load,
+            audio::audio_recording_export,
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,

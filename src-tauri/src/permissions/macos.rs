@@ -180,9 +180,7 @@ fn run_tccutil_reset(service: &str, bundle_id: &str) {
             eprintln!("[permissions] tccutil reset {service} {bundle_id} OK");
         }
         Ok(s) => {
-            eprintln!(
-                "[permissions] tccutil reset {service} {bundle_id} exited with {s}"
-            );
+            eprintln!("[permissions] tccutil reset {service} {bundle_id} exited with {s}");
         }
         Err(e) => {
             eprintln!("[permissions] tccutil reset {service} {bundle_id} failed: {e}");
