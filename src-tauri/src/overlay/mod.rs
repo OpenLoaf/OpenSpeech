@@ -57,7 +57,7 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     position_to_bottom_center(&window)?;
 
-    eprintln!("[overlay] window created (hidden)");
+    log::warn!("[overlay] window created (hidden)");
     Ok(())
 }
 
@@ -85,7 +85,7 @@ fn position_to_bottom_center_with_height<R: Runtime>(
     let x = origin_x + (logical_w - WIDTH) / 2.0;
     let y = origin_y + logical_h - height - BOTTOM_MARGIN;
     window.set_position(LogicalPosition::new(x, y))?;
-    eprintln!("[overlay] positioned at logical ({x:.1}, {y:.1}) h={height:.1}");
+    log::warn!("[overlay] positioned at logical ({x:.1}, {y:.1}) h={height:.1}");
     Ok(())
 }
 
@@ -96,7 +96,7 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     DESIRED_VISIBLE.store(true, Ordering::Relaxed);
     if let Some(main) = app.get_webview_window("main") {
         if main.is_focused().unwrap_or(false) {
-            eprintln!("[overlay] desired=true, defer show (main focused)");
+            log::warn!("[overlay] desired=true, defer show (main focused)");
             return Ok(());
         }
     }
@@ -107,7 +107,7 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     DESIRED_VISIBLE.store(false, Ordering::Relaxed);
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         w.hide()?;
-        eprintln!("[overlay] hide");
+        log::warn!("[overlay] hide");
     }
     Ok(())
 }
@@ -117,7 +117,7 @@ fn show_now<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         position_to_bottom_center(&w)?;
         w.show()?;
-        eprintln!("[overlay] show");
+        log::warn!("[overlay] show");
     }
     Ok(())
 }
@@ -135,11 +135,11 @@ pub fn on_main_focus_changed<R: Runtime>(app: &AppHandle<R>, focused: bool) -> t
         if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
             if w.is_visible().unwrap_or(false) {
                 w.hide()?;
-                eprintln!("[overlay] main focused → hide (desired remains true)");
+                log::warn!("[overlay] main focused → hide (desired remains true)");
             }
         }
     } else {
-        eprintln!("[overlay] main blurred → compensating show");
+        log::warn!("[overlay] main blurred → compensating show");
         show_now(app)?;
     }
     Ok(())

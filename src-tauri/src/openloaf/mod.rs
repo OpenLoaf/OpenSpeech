@@ -480,15 +480,15 @@ pub async fn openloaf_health_check(state: State<'_, SharedOpenLoaf>) -> Result<b
     match tokio::time::timeout(Duration::from_secs(5), task).await {
         Ok(Ok(Ok(_resp))) => Ok(true),
         Ok(Ok(Err(e))) => {
-            eprintln!("[health] list_plans failed: {e:?}");
+            log::warn!("[health] list_plans failed: {e:?}");
             Ok(false)
         }
         Ok(Err(join_err)) => {
-            eprintln!("[health] spawn_blocking join error: {join_err}");
+            log::warn!("[health] spawn_blocking join error: {join_err}");
             Ok(false)
         }
         Err(_elapsed) => {
-            eprintln!("[health] timeout after 5s");
+            log::warn!("[health] timeout after 5s");
             Ok(false)
         }
     }

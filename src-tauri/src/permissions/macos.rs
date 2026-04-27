@@ -161,7 +161,7 @@ pub fn reset_tcc_one(bundle_id: &str, kind: &str) {
         "accessibility" => "Accessibility",
         "input-monitoring" => "ListenEvent",
         _ => {
-            eprintln!("[permissions] reset_tcc_one: unknown kind {kind:?}, skip");
+            log::warn!("[permissions] reset_tcc_one: unknown kind {kind:?}, skip");
             return;
         }
     };
@@ -177,13 +177,13 @@ fn run_tccutil_reset(service: &str, bundle_id: &str) {
         .status();
     match status {
         Ok(s) if s.success() => {
-            eprintln!("[permissions] tccutil reset {service} {bundle_id} OK");
+            log::warn!("[permissions] tccutil reset {service} {bundle_id} OK");
         }
         Ok(s) => {
-            eprintln!("[permissions] tccutil reset {service} {bundle_id} exited with {s}");
+            log::warn!("[permissions] tccutil reset {service} {bundle_id} exited with {s}");
         }
         Err(e) => {
-            eprintln!("[permissions] tccutil reset {service} {bundle_id} failed: {e}");
+            log::warn!("[permissions] tccutil reset {service} {bundle_id} failed: {e}");
         }
     }
 }

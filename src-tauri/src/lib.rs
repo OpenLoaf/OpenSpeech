@@ -180,7 +180,7 @@ fn open_network_settings() {
         });
 
     if let Err(e) = result {
-        eprintln!("[network] open_network_settings failed: {e:?}");
+        log::warn!("[network] open_network_settings failed: {e:?}");
     }
 }
 
@@ -333,7 +333,7 @@ fn rebuild_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) {
         Ok(menu) => {
             let _ = tray.set_menu(Some(menu));
         }
-        Err(e) => eprintln!("[tray] rebuild menu failed: {e:?}"),
+        Err(e) => log::warn!("[tray] rebuild menu failed: {e:?}"),
     }
 }
 
@@ -362,7 +362,7 @@ fn disable_macos_fullscreen(window: &tauri::WebviewWindow) {
                 let _: () = msg_send![ns_window, setCollectionBehavior: new_behavior];
             }
         }
-        Err(e) => eprintln!("[window] ns_window() failed: {e:?}"),
+        Err(e) => log::warn!("[window] ns_window() failed: {e:?}"),
     }
 }
 
@@ -442,7 +442,7 @@ pub fn run() {
 
             // ---- 预创建悬浮录音条窗口（hidden，快捷键触发时 show）-----------
             if let Err(e) = overlay::ensure_overlay(&app.handle()) {
-                eprintln!("[overlay] ensure failed: {e:?}");
+                log::warn!("[overlay] ensure failed: {e:?}");
             }
 
             // ---- modifier-only state 注册（rdev::listen 暂不启动）----
@@ -610,7 +610,7 @@ pub fn run() {
                     // overlay；主窗回到前台则 hide overlay，由 Home 的 Live 面板展示。
                     WindowEvent::Focused(focused) => {
                         if let Err(e) = overlay::on_main_focus_changed(&app_handle, *focused) {
-                            eprintln!("[overlay] focus handler failed: {e:?}");
+                            log::warn!("[overlay] focus handler failed: {e:?}");
                         }
                     }
                     _ => {}

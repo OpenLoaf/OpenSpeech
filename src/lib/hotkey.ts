@@ -34,8 +34,9 @@ export const BINDING_IDS = ["dictate_ptt", "ask_ai", "translate"] as const;
 export type BindingId = (typeof BINDING_IDS)[number];
 
 /**
- * 平台感知的默认快捷键。对齐行业标杆（Wispr Flow / TypeLess / FreeFlow）：
- * - macOS:   PTT = `Fn`（modifier-only）
+ * 平台感知的默认快捷键：
+ * - macOS:   PTT = `Fn + Control`（modifier-only，组合键避免 Intel Mac / 外接键盘
+ *            上单 Fn 不可达 + 减少与系统 Fn 行为的歧义）
  * - Windows: PTT = `Ctrl + Win`（modifier-only，Win 键在内部抽象为 `meta`）
  * - Linux:   PTT = `Ctrl + Super`（modifier-only）
  *
@@ -46,7 +47,7 @@ export function getDefaultBindings(
 ): Record<BindingId, HotkeyBinding | null> {
   const ptt: HotkeyBinding =
     platform === "macos"
-      ? { kind: "modifierOnly", mods: ["fn"], code: "" }
+      ? { kind: "modifierOnly", mods: ["fn", "ctrl"], code: "" }
       : { kind: "modifierOnly", mods: ["ctrl", "meta"], code: "" };
 
   return {

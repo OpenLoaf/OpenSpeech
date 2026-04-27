@@ -234,14 +234,22 @@ fn spawn_monitor_thread<R: Runtime>(
                 None => host.default_input_device(),
             };
             let Some(device) = device else {
-                eprintln!("[audio] no input device available");
+                log::error!("[audio] no input device available (host has no default input)");
                 return;
             };
+            log::info!(
+                "[audio] selected device={:?} (requested={:?})",
+                device_label(&device),
+                device_name
+            );
 
             let supported = match device.default_input_config() {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[audio] default_input_config failed: {e}");
+                    log::error!(
+                        "[audio] default_input_config failed for device {:?}: {e}",
+                        device_label(&device)
+                    );
                     return;
                 }
             };
@@ -252,7 +260,7 @@ fn spawn_monitor_thread<R: Runtime>(
             let cb_channels = stream_config.channels;
             let cb_sample_rate = stream_config.sample_rate;
 
-            let err_fn = |e: cpal::StreamError| eprintln!("[audio] stream error: {e}");
+            let err_fn = |e: cpal::StreamError| log::warn!("[audio] stream error: {e}");
 
             let stream_result = match sample_format {
                 cpal::SampleFormat::F32 => device.build_input_stream(
@@ -320,7 +328,7 @@ fn spawn_monitor_thread<R: Runtime>(
                     None,
                 ),
                 other => {
-                    eprintln!("[audio] unsupported sample format: {other:?}");
+                    log::error!("[audio] unsupported sample format: {other:?}");
                     return;
                 }
             };
@@ -328,19 +336,25 @@ fn spawn_monitor_thread<R: Runtime>(
             let stream = match stream_result {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("[audio] build_input_stream failed: {e}");
+                    log::error!(
+                        "[audio] build_input_stream failed for device {:?} sr={}Hz ch={}: {e}",
+                        device_label(&device),
+                        stream_config.sample_rate,
+                        stream_config.channels
+                    );
                     return;
                 }
             };
             if let Err(e) = stream.play() {
-                eprintln!("[audio] stream.play failed: {e}");
+                log::error!("[audio] stream.play failed: {e}");
                 return;
             }
-            eprintln!(
-                "[audio] stream started (device={:?}, sr={}Hz, ch={})",
+            log::info!(
+                "[audio] stream started (device={:?}, sr={}Hz, ch={}, fmt={:?})",
                 device_label(&device),
                 stream_config.sample_rate,
-                stream_config.channels
+                stream_config.channels,
+                sample_format
             );
             // 把当前采样率 / 声道数交给录音命令读取
             {
@@ -364,7 +378,7 @@ fn spawn_monitor_thread<R: Runtime>(
                 let mut g = stream_info().lock().expect("stream_info poisoned");
                 *g = None;
             }
-            eprintln!("[audio] stream stopped");
+            log::info!("[audio] stream stopped");
         })
         .expect("spawn audio thread");
 
@@ -527,7 +541,7 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
         .finalize()
         .map_err(|e| format!("WavWriter::finalize: {e}"))?;
 
-    eprintln!(
+    log::info!(
         "[audio] recording saved: {} ({} ms, {} samples, {}Hz x{})",
         abs_path.display(),
         duration_ms,
