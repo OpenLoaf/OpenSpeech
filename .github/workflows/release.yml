@@ -155,26 +155,13 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      # macOS-only：headless runner 上没有用户图形会话，bundle_dmg.sh 通过 osascript
-      # 让 Finder 写 .DS_Store（窗口尺寸 / icon 位置 / background 指针）会静默失败——
-      # 结果是 .background/ 进 dmg 了但 .DS_Store 没生成，用户挂载看到的是默认 660×400
-      # 排列。下面把 Finder/Dock 重启 + 强制读一次 com.apple.finder defaults 来给当前
-      # 用户会话热身，让后续 osascript 能正常拿到 Finder 引用。
-      # 失败不阻塞 build；如果某次没起到效果，dmg 退化成默认布局，但仍可装。
-      - name: Warm up Finder (macOS dmg view options)
-        if: startsWith(matrix.platform, 'macos')
-        shell: bash
-        run: |
-          set +e
-          defaults read com.apple.finder >/dev/null 2>&1 || true
-          osascript -e 'tell application "System Events" to count processes whose name is "Finder"' 2>&1 || true
-          # 重启 Finder + Dock：让用户会话里的 Apple Events 队列重新建立
-          killall Finder >/dev/null 2>&1 || true
-          killall Dock   >/dev/null 2>&1 || true
-          sleep 2
-          # 探测 osascript 能否操作 Finder（失败也只是日志一行）
-          osascript -e 'tell application "Finder" to return name of (path to applications folder)' 2>&1 || true
-          exit 0
+      # NOTE: 之前在这里加过 Warm up Finder 步骤想救 bundle_dmg.sh 的 osascript→Finder
+      # 通信，实测无效——GitHub macOS runner 上 osascript 返回 0 但实际不写入
+      # .DS_Store（Apple Events 在 truly headless 下是 silent no-op）。
+      # 结果是 dmg 进了 .background/background.png 但缺 .DS_Store，Finder 挂载
+      # 用默认 660×400 排列。要彻底修复需要：(a) 用 Python ds_store 库手工生成
+      # binary .DS_Store + (b) hdiutil convert UDZO→UDRW 注入 + 转回 UDZO。
+      # 单独 spike，未做。
 
       # 直接调 Tauri CLI；macOS 签名 / 公证 / updater 签名都靠 env 透传给 CLI 自己处理。
       # tauri-action 替你做的 keychain import 是 Tauri CLI 2.x 已经内置的能力，env 配齐即可。
