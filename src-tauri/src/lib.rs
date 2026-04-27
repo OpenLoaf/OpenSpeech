@@ -32,7 +32,12 @@ mod stt;
 mod transcribe;
 
 // 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
+// close-requested: 关闭当前窗口的请求（红叉 / Cmd+W）。Onboarding 阶段会忽略，
+// 避免误触关闭引导；主界面按 closeBehavior 偏好走（HIDE/QUIT/PROMPT）。
 const CLOSE_REQUESTED_EVENT: &str = "openspeech://close-requested";
+// quit-requested: 用户明确退出应用的请求（Cmd+Q）。Onboarding 与主界面都直接退出，
+// 不弹"关闭还是隐藏"对话框——Cmd+Q 的语义就是退出。
+const QUIT_REQUESTED_EVENT: &str = "openspeech://quit-requested";
 // 托盘菜单事件：前端在 Layout.tsx 订阅，负责唤出主窗口 + Dialog/Navigate。
 const TRAY_OPEN_HOME_EVENT: &str = "openspeech://tray-open-home";
 const TRAY_OPEN_SETTINGS_EVENT: &str = "openspeech://tray-open-settings";
@@ -514,8 +519,9 @@ pub fn run() {
                 app.set_menu(menu)?;
                 app.on_menu_event(move |app, event| {
                     if event.id().as_ref() == "quit_app" {
-                        // Cmd+Q 被 App Menu 吃住，转成统一的 close-requested 事件。
-                        let _ = app.emit(CLOSE_REQUESTED_EVENT, ());
+                        // Cmd+Q：用户明确退出应用，走独立的 quit-requested 路径，
+                        // 与 Cmd+W / 红叉的 close-requested 区分开。
+                        let _ = app.emit(QUIT_REQUESTED_EVENT, ());
                     }
                 });
             }
