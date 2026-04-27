@@ -24,11 +24,16 @@ export async function listInputDevices(): Promise<InputDeviceInfo[]> {
   }
 }
 
-export async function startAudioLevel(deviceName: string | null): Promise<void> {
+// Rust 端 audio_level_start 现在同步等到 cpal stream 真正起来才返回（写入
+// stream_info 之后才 send Ok），失败/超时（默认 1.5s 上限）会抛错。调用方据此
+// 决定要不要继续走 stt_start，避免冷启动时撞 "audio stream not running"。
+export async function startAudioLevel(deviceName: string | null): Promise<boolean> {
   try {
     await invoke("audio_level_start", { deviceName });
+    return true;
   } catch (e) {
     console.warn("[audio] start failed:", e);
+    return false;
   }
 }
 

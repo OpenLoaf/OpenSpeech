@@ -39,7 +39,7 @@ interface HotkeyEvent {
 
 // 波形 bar 数量；Overlay 的 Waveform 组件消费这个长度的滑动窗口。
 // 15 × 50ms = 750ms 一个完整流动周期，密度够且肉眼能感受到"流过"。
-const LEVEL_BUFFER_LEN = 15;
+const LEVEL_BUFFER_LEN = 20;
 
 interface RecordingStore {
   state: RecordingState;
@@ -96,14 +96,34 @@ const emptyLevels = () => Array(LEVEL_BUFFER_LEN).fill(0) as number[];
 // stream（已观察到：main 传 "UGREEN…"、overlay 传 null，触发一次 stopped→started）。
 const IS_MAIN_WINDOW = getCurrentWebviewWindow().label === "main";
 
-const startMic = () => {
-  if (!IS_MAIN_WINDOW) return;
+const startMic = async (): Promise<boolean> => {
+  if (!IS_MAIN_WINDOW) return false;
   const device = useSettingsStore.getState().general.inputDevice || null;
-  void startAudioLevel(device);
+  return await startAudioLevel(device);
 };
 const stopMic = () => {
   if (!IS_MAIN_WINDOW) return;
   void stopAudioLevel();
+};
+
+// ESC 全局捕获：录音活跃期间把 Esc 注册为系统快捷键，前台 app 收不到 Esc。
+// 必须保证 stop 在所有"离开 active 态"路径上被调到——否则用户在浏览器 Esc 全失效。
+// 用 startedFlag 做幂等，避免对插件重复注册的隐性开销。
+let escCaptureActive = false;
+const escCaptureStart = () => {
+  if (!IS_MAIN_WINDOW || escCaptureActive) return;
+  escCaptureActive = true;
+  void invoke("esc_capture_start").catch((e) => {
+    escCaptureActive = false;
+    console.warn("[recording] esc_capture_start failed:", e);
+  });
+};
+const escCaptureStop = () => {
+  if (!IS_MAIN_WINDOW || !escCaptureActive) return;
+  escCaptureActive = false;
+  void invoke("esc_capture_stop").catch((e) => {
+    console.warn("[recording] esc_capture_stop failed:", e);
+  });
 };
 
 // 把错误/警告/提示推到悬浮条（悬浮条窗口监听 `openspeech://overlay-toast` 事件
@@ -254,11 +274,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       });
     }
   } else if (sttSettled.status === "fulfilled" && !sttSettled.value) {
-    // 已建连但 Final 空串——多半 send_finish 超时（FINALIZE_WAIT_MS = 3s 过了）
-    // 或全程静音。此时 history 按 status=failed 落，给用户一个友好提示。
-    notifyOverlay("warning", i18n.t("overlay:toast.no_transcript.title"), {
-      description: i18n.t("overlay:toast.no_transcript.description"),
-    });
+    // 全程静音 / 没说话 / send_finish 超时空串：直接静默关浮窗，不打扰用户。
+    // history 仍按 status=failed 落档便于事后查证。
+    console.warn("[stt] no final transcript (silent or timeout)");
   }
   if (recSettled.status === "rejected") {
     console.error("[recording] stop failed:", recSettled.reason);
@@ -505,6 +523,21 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         ) {
           playCancelCue();
         }
+
+        // ESC 全局捕获：preparing/recording/transcribing 期间吞掉 Esc，避免
+        // 用户在 Cursor / 编辑器里按 Esc 取消录音时同时退出 vim 模式 / 关 IME 候选窗。
+        // injecting 不开（注入只持续几十 ms，开了反而可能漏到下一次 active 期）。
+        const wasActive =
+          prevState === "preparing" ||
+          prevState === "recording" ||
+          prevState === "transcribing";
+        const isActive =
+          s.state === "preparing" ||
+          s.state === "recording" ||
+          s.state === "transcribing";
+        if (!wasActive && isActive) escCaptureStart();
+        else if (wasActive && !isActive) escCaptureStop();
+
         prevState = s.state;
 
         // error 自愈：每次状态变化先清旧定时器；若进入 error 则重新计时。
@@ -727,17 +760,28 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             recordingId,
             liveTranscript: "",
           });
-          startMic();
-          // 300ms 后 mic stream 已稳定才启动 Rust 录音 session——
-          // 避免 stream_info 为 None 导致 start 失败。若此时用户已第二次按下
-          // （快速双击 < 300ms 分支），state 已经回到 idle，下面会 skip。
-          window.setTimeout(() => {
+          // Rust audio_level_start 现在同步等到 cpal stream 真正起来才返回。
+          // 失败 / 超时 → 直接退回 idle 并提示，不再走 stt_start 撞 "audio
+          // stream not running"。中途用户若再按一次（state 已变），下方守卫会 skip。
+          void startMic().then((ok) => {
             const s = get();
-            if (s.state === "preparing" && s.activeId === id) {
-              startRecordingSession(recordingId);
-              set({ state: "recording" });
+            if (s.state !== "preparing" || s.activeId !== id) return;
+            if (!ok) {
+              set({
+                state: "idle",
+                activeId: null,
+                audioLevels: emptyLevels(),
+                recordingId: null,
+                liveTranscript: "",
+              });
+              notifyOverlay("error", i18n.t("overlay:toast.recording_start_failed.title"), {
+                description: i18n.t("overlay:error.stt_mic_not_ready"),
+              });
+              return;
             }
-          }, PREPARING_MS);
+            startRecordingSession(recordingId);
+            set({ state: "recording" });
+          });
           return;
         }
       });
@@ -876,10 +920,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
           console.log("[recording] Esc armed, awaiting confirm", { state: s });
           escArmedAt = now;
-          notifyOverlay("warning", i18n.t("overlay:toast.esc_arm.title"), {
-            description: i18n.t("overlay:toast.esc_arm.description"),
-            durationMs: ESC_CONFIRM_WINDOW_MS,
-          });
           window.setTimeout(() => {
             if (performance.now() - escArmedAt >= ESC_CONFIRM_WINDOW_MS) {
               escArmedAt = 0;

@@ -71,17 +71,22 @@ export function StepTryIt({
   const transcript = source === "mock" ? mockTranscript : realTranscript;
 
   // 真流的波形是 LEVEL_BUFFER_LEN=15（recording store 里），mock 用 60 直接驱动 fakeWaveform。
-  // 把两者都映射到 60 长度让 LiveDictationPanel 视觉一致。
+  // 把两者都映射到 60 长度让面板视觉一致。早先把 15 个真值右对齐 + 前面填 0，结果
+  // 只有最右边 25% 有波形（用户报告 bug）。改为按比例复制到 60 槽位，让真实波形覆盖整条。
   const audioLevels = useMemo(() => {
     if (source === "mock") {
       return mockState === "recording" || mockState === "preparing"
         ? fakeWaveform(mockSeed)
         : SILENT_LEVELS;
     }
-    // real：把 15 长度的 buffer pad 成 60，避免突然变窄/宽
+    if (realLevels.length === 0) return SILENT_LEVELS;
     if (realLevels.length >= 60) return realLevels.slice(-60);
-    const padLen = 60 - realLevels.length;
-    return [...Array(padLen).fill(0), ...realLevels];
+    const out: number[] = new Array(60);
+    for (let i = 0; i < 60; i++) {
+      const srcIdx = Math.floor((i * realLevels.length) / 60);
+      out[i] = realLevels[srcIdx]!;
+    }
+    return out;
   }, [source, mockState, mockSeed, realLevels]);
 
   // mock 录音时刷新假波形

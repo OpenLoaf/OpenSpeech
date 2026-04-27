@@ -17,7 +17,10 @@ import { useRecordingStore } from "@/stores/recording";
 
 const BAR_MIN_H = 3;
 const BAR_MAX_H = 26;
-const VISUAL_GAIN = 1.5;
+// Rust 端已经做了 noise gate + PEAK_GAIN 的归一化，这里只负责"形状映射"，
+// 用 sqrt 把低音区拉高让 bar 不至于贴底，但不再叠加放大倍率（叠加会让底噪
+// 漏掉时直接拉满，这是开车场景看到波形常驻的根因）。
+const VISUAL_GAIN = 1.0;
 
 const PILL_HEIGHT = 36;
 const TOAST_HEIGHT = 42;
@@ -54,7 +57,7 @@ interface OverlayToastState extends OverlayToastPayload {
 const Waveform = memo(function Waveform() {
   const levels = useRecordingStore((s) => s.audioLevels);
   return (
-    <div className="flex h-full items-center gap-[2px]">
+    <div className="flex h-full w-full items-center justify-between">
       {levels.map((lvl, i) => {
         const boosted = Math.min(1, Math.sqrt(Math.max(0, lvl)) * VISUAL_GAIN);
         const ratio =
@@ -179,18 +182,17 @@ export default function OverlayPage() {
     dismissToast();
   };
 
-  // overlay_hide 不在 state→idle 当下立即调用——交给 motion 出场动画结束后由
-  // onExitComplete 触发，避免窗口在 fade-out 中途就被砍掉。height 复位也跟着
-  // 推后；放在 visibleRef 守卫的 onExitComplete 里，可在过渡期被新的 show 抢回。
-  const visibleRef = useRef(visible);
-  visibleRef.current = visible;
-  const handleExitComplete = () => {
-    if (visibleRef.current) return;
+  // visible 由 true → false 时立刻物理 hide。原本走 motion onExitComplete 的
+  // 退场动画导致：① 关闭延迟（要先跑完 React fade）② 由于 Tauri overlay 窗口
+  // 是不透明黑底，opacity → 0 之后到 hide 之间会出现一个"全黑长条"。直接 hide
+  // 让窗口在 state 切走的同一帧消失，避免这两个问题。下次 show 再恢复高度。
+  useEffect(() => {
+    if (visible) return;
     invoke("overlay_set_height", { height: PILL_HEIGHT }).catch(() => {});
     invoke("overlay_hide").catch((e) =>
       console.warn("[overlay] hide failed", e),
     );
-  };
+  }, [visible]);
 
   const isRecording = state === "recording";
   const isPreparing = state === "preparing";
@@ -215,18 +217,16 @@ export default function OverlayPage() {
         ? "error"
         : "wave";
 
+  if (!visible) return null;
   return (
-    <AnimatePresence onExitComplete={handleExitComplete}>
-      {visible && (
-        <motion.div
-          key="overlay-shell"
-          initial={{ opacity: 0, scale: 0.94, y: 4 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.94, y: 4 }}
-          transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-          className="flex h-screen w-screen flex-col bg-te-bg"
-          style={{ transformOrigin: "50% 100%" }}
-        >
+    <motion.div
+      key="overlay-shell"
+      initial={{ opacity: 0, scale: 0.94, y: 4 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+      className="flex h-screen w-screen flex-col bg-te-bg"
+      style={{ transformOrigin: "50% 100%" }}
+    >
           <AnimatePresence>
             {toast && (
               <motion.div
@@ -332,8 +332,6 @@ export default function OverlayPage() {
               <Check className="size-3" />
             </button>
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </motion.div>
   );
 }
