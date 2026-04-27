@@ -38,8 +38,10 @@ use storage::KeyringAuthStorage;
 // 两者都可用环境变量 OPENLOAF_BASE_URL 覆盖，例：
 //   OPENLOAF_BASE_URL=https://staging.openloaf.hexems.com cargo build --release
 // 不在这里放机密（只是 URL，安全）。
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(feature = "staging")))]
 const FALLBACK_BASE_URL: &str = "http://localhost:5180";
+#[cfg(all(debug_assertions, feature = "staging"))]
+const FALLBACK_BASE_URL: &str = "https://openloaf.hexems.com";
 #[cfg(not(debug_assertions))]
 const FALLBACK_BASE_URL: &str = "https://openloaf.hexems.com";
 
@@ -50,8 +52,10 @@ const DEFAULT_BASE_URL: &str = match option_env!("OPENLOAF_BASE_URL") {
 
 // OpenLoaf Web 前端地址。订阅/充值走 Web 页面（App 内不内嵌支付流程），
 // 前端通过 openloaf_web_url command 拿完整 URL 后 openUrl 到浏览器。
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(feature = "staging")))]
 const FALLBACK_WEB_URL: &str = "http://localhost:5180";
+#[cfg(all(debug_assertions, feature = "staging"))]
+const FALLBACK_WEB_URL: &str = "https://openloaf.hexems.com";
 #[cfg(not(debug_assertions))]
 const FALLBACK_WEB_URL: &str = "https://openloaf.hexems.com";
 
