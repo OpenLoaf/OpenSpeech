@@ -22,14 +22,15 @@ export default function OnboardingPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState<OnboardingStep>(1);
 
-  // Cmd+Q / 红叉 / 菜单关闭：Rust 拦截后 emit close-requested，Layout 是默认监听者，
-  // 但 onboarding 页不进 Layout，没人监听就会"按下没反应"。这里直接退出（onboarding
-  // 期还没决策 close 偏好，HIDE 到托盘也不合理，统一 quit）。
+  // 引导期只响应 Cmd+Q（quit-requested）这条明确退出路径——Cmd+Q 在 macOS 任何 app
+  // 都意味着退出，必须保留。Cmd+W / 红叉走 close-requested，引导期直接忽略：用户在
+  // 半完成引导状态下误触 Cmd+W 不应让整个 app 退出（Rust 已 prevent_close，前端不响
+  // 应即等同"什么都不发生"）。
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     (async () => {
-      const unsub = await listen("openspeech://close-requested", async () => {
+      const unsub = await listen("openspeech://quit-requested", async () => {
         await invoke("exit_app");
       });
       if (cancelled) unsub();
