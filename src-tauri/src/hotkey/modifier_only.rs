@@ -21,6 +21,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use rdev::{Event, EventType, Key};
 use serde::Serialize;
@@ -233,6 +234,14 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
     let state_clone = Arc::clone(&state);
     let app_clone = app.clone();
 
+    // App 长时间空闲后 macOS 会让 CGEventTap 进入低功耗模式，恢复时常会丢一个事件
+    // （典型是漏 release）——`s.active_ids` 残留导致下一次按下被判为"未变化"，
+    // 用户感知"必须按两下才能激活"。+ cmd-tab 切窗口期间偶发漏发 modifier release
+    // 也会卡死同一 binding。统一用空闲时长门槛 reset：本次事件距上次 > 阈值就先
+    // 清掉 pressed / active_ids，让下一帧从干净状态重新匹配。
+    let last_event_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    const IDLE_RESET: std::time::Duration = std::time::Duration::from_secs(30);
+
     std::thread::spawn(move || {
         eprintln!("[modifier_only] starting rdev::listen thread");
         let result = rdev::listen(move |event: Event| {
@@ -241,6 +250,32 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 EventType::KeyRelease(k) => (k, false),
                 _ => return,
             };
+
+            // 空闲超阈值则视为状态可能与系统不同步，先 reset 再处理本次事件。
+            let stale = {
+                let mut last = match last_event_at.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                let now = Instant::now();
+                let stale = last.map_or(false, |t| now.duration_since(t) > IDLE_RESET);
+                *last = Some(now);
+                stale
+            };
+            if stale {
+                if let Ok(mut s) = state_clone.lock() {
+                    if !s.pressed.is_empty() || !s.active_ids.is_empty() {
+                        eprintln!(
+                            "[modifier_only] idle > {}s → reset stale state (pressed={}, active={})",
+                            IDLE_RESET.as_secs(),
+                            s.pressed.len(),
+                            s.active_ids.len()
+                        );
+                        s.pressed.clear();
+                        s.active_ids.clear();
+                    }
+                }
+            }
 
             // 预览通道：无条件向前端发送每一个 press/release，让 Home 页给 Fn 等
             // DOM 拿不到的键也能做视觉反馈。与录入 / binding 匹配完全独立。

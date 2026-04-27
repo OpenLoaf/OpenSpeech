@@ -697,7 +697,7 @@ pub async fn handle_login_callback(app: &AppHandle, state_str: String, login_cod
     };
     // 5 分钟超时：SaaS 通常 state 签名有更短的 TTL，这层做兜底。
     if flow.started_at.elapsed().as_secs() > 5 * 60 {
-        emit_login(app, &state_str, Err("登录超时，请重试".into()));
+        emit_login(app, &state_str, Err("AUTH_LOGIN_TIMEOUT".into()));
         return;
     }
 
@@ -725,7 +725,7 @@ pub async fn handle_login_callback(app: &AppHandle, state_str: String, login_cod
         }
         Err(join_err) => {
             log::warn!("openloaf: exchange join error: {join_err}");
-            emit_login(app, &state_str, Err("内部错误".into()));
+            emit_login(app, &state_str, Err("AUTH_INTERNAL".into()));
         }
     }
 }
