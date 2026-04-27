@@ -2,9 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import {
+  info as logInfo,
+  error as logError,
+} from "@tauri-apps/plugin-log";
+import i18next from "i18next";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { SECRET_STT_API_KEY, getSecret, setSecret } from "@/lib/secrets";
@@ -51,13 +58,16 @@ type TabDef = {
   icon: typeof User2;
 };
 
-const TABS: TabDef[] = [
-  { id: "ACCOUNT", label: "账户", icon: User2 },
-  { id: "GENERAL", label: "通用", icon: Sliders },
-  { id: "MODEL", label: "模型", icon: Cloud },
-  { id: "PERSONALIZATION", label: "个性化", icon: Sparkles },
-  { id: "ABOUT", label: "关于", icon: Info },
-];
+function useTabs(): TabDef[] {
+  const { t } = useTranslation("settings");
+  return [
+    { id: "ACCOUNT", label: t("tabs.account"), icon: User2 },
+    { id: "GENERAL", label: t("tabs.general"), icon: Sliders },
+    { id: "MODEL", label: t("tabs.model"), icon: Cloud },
+    { id: "PERSONALIZATION", label: t("tabs.personalization"), icon: Sparkles },
+    { id: "ABOUT", label: t("tabs.about"), icon: Info },
+  ];
+}
 
 /* ──────────────────────────────────────────────────────────────── */
 /*  Primitive controls (TE industrial)                                */
@@ -327,6 +337,7 @@ function LevelMeter({ peak }: { peak: number }) {
 const UNDO_WINDOW_MS = 8000;
 
 function HotkeysSection() {
+  const { t } = useTranslation("settings");
   const bindings = useHotkeysStore((s) => s.bindings);
   const setBinding = useHotkeysStore((s) => s.setBinding);
   const recordUndo = useHotkeysStore((s) => s.recordUndo);
@@ -360,10 +371,10 @@ function HotkeysSection() {
     <div className="flex flex-col">
       <div className="mb-3 border border-te-gray/40 bg-te-surface/60 px-4 py-3">
         <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-accent">
-          // HOW IT WORKS
+          {t("hotkeys.how_it_works")}
         </div>
         <div className="mt-1.5 font-sans text-xs leading-relaxed text-te-light-gray">
-          按一下快捷键开始说话，再按一下结束并把文字插入到当前焦点。两次按下间隔 &lt; 300 ms 视为快速双击误触，本次录音丢弃。
+          {t("hotkeys.how_it_works_body")}
         </div>
       </div>
 
@@ -389,6 +400,7 @@ function HotkeysSection() {
 /* ──────────────────────────────────────────────────────────────── */
 
 function GeneralTab() {
+  const { t } = useTranslation("settings");
   const general = useSettingsStore((s) => s.general);
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const loaded = useSettingsStore((s) => s.loaded);
@@ -468,59 +480,72 @@ function GeneralTab() {
       {
         value: "",
         label: systemDefaultName
-          ? `跟随系统（当前：${systemDefaultName}）`
-          : "跟随系统",
+          ? t("device.system_default_with_current", { name: systemDefaultName })
+          : t("device.system_default"),
       },
     ];
     for (const d of devices) {
       base.push({
         value: d.name,
-        label: d.isDefault ? `${d.name} · 系统默认` : d.name,
+        label: d.isDefault
+          ? t("device.is_default_suffix", { name: d.name })
+          : d.name,
       });
     }
-    // 用户曾选中、但此刻不在设备列表（拔掉耳机等）→ 追加占位项：
-    // <select> 需要这条来让 value 命中，文案说清楚正在走系统默认兜底
     if (wanted && !devices.some((d) => d.name === wanted)) {
       base.push({
         value: wanted,
         label: systemDefaultName
-          ? `${wanted} · 已断开，暂用系统默认（${systemDefaultName}）`
-          : `${wanted} · 已断开`,
+          ? t("device.disconnected_with_fallback", {
+              name: wanted,
+              fallback: systemDefaultName,
+            })
+          : t("device.disconnected", { name: wanted }),
       });
     }
     return base;
-  }, [devices, wanted, systemDefaultName]);
+  }, [devices, wanted, systemDefaultName, t]);
 
   return (
     <div>
       {/* Keyboard shortcuts */}
-      <SectionTitle>键盘快捷键</SectionTitle>
+      <SectionTitle>{t("section.shortcuts")}</SectionTitle>
       <HotkeysSection />
 
       {/* Language */}
-      <SectionTitle>语言</SectionTitle>
-      <Row label="界面语言">
+      <SectionTitle>{t("section.language")}</SectionTitle>
+      <Row label={t("general.interface_lang")}>
         <Select
           value={general.interfaceLang}
           onChange={(v) => void setGeneral("interfaceLang", v)}
-          options={["跟随系统", "简体中文", "English"]}
+          options={[
+            { value: "system", label: t("common:lang.system") },
+            { value: "zh-CN", label: t("common:lang.zh-CN") },
+            { value: "zh-TW", label: t("common:lang.zh-TW") },
+            { value: "en", label: t("common:lang.en") },
+          ]}
         />
       </Row>
-      <Row label="听写语种">
+      <Row label={t("general.dictation_lang")}>
         <Select
           value={general.dictationLang}
           onChange={(v) => void setGeneral("dictationLang", v)}
-          options={["自动检测", "ZH", "EN", "JA"]}
+          options={[
+            { value: "自动检测", label: t("common:value.auto_detect") },
+            { value: "ZH", label: "ZH" },
+            { value: "EN", label: "EN" },
+            { value: "JA", label: "JA" },
+          ]}
         />
       </Row>
-      <Row label="翻译目标">
+      <Row label={t("general.translation_target")}>
         <Select
           value={general.translationTarget}
           onChange={(v) => void setGeneral("translationTarget", v)}
           options={["EN", "ZH", "JA"]}
         />
       </Row>
-      <Row label="语言变体">
+      <Row label={t("general.lang_variant")}>
         <Select
           value={general.langVariant}
           onChange={(v) => void setGeneral("langVariant", v)}
@@ -529,8 +554,8 @@ function GeneralTab() {
       </Row>
 
       {/* Audio */}
-      <SectionTitle>音频</SectionTitle>
-      <Row label="输入设备">
+      <SectionTitle>{t("section.audio")}</SectionTitle>
+      <Row label={t("general.input_device")}>
         <Select
           value={general.inputDevice}
           onChange={(v) => void setGeneral("inputDevice", v)}
@@ -539,16 +564,16 @@ function GeneralTab() {
         />
       </Row>
       <Row
-        label="输入声音"
+        label={t("general.input_level")}
         hint={
           effectiveName
-            ? `实时电平 · 正在监听：${effectiveName}`
-            : "实时麦克风电平"
+            ? t("general.input_level_hint_listening", { name: effectiveName })
+            : t("general.input_level_hint")
         }
       >
         <LevelMeter peak={peak} />
       </Row>
-      <Row label="开始/结束提示音">
+      <Row label={t("general.cue_sound")}>
         <Switch
           checked={general.cueSound}
           onChange={(v) => void setGeneral("cueSound", v)}
@@ -556,7 +581,7 @@ function GeneralTab() {
       </Row>
 
       {/* ASR segmentation */}
-      <SectionTitle>分句模式</SectionTitle>
+      <SectionTitle>{t("section.asr_segment")}</SectionTitle>
       <div className="py-3">
         <RadioBlock
           value={general.asrSegmentMode}
@@ -564,20 +589,20 @@ function GeneralTab() {
           options={[
             {
               value: "MANUAL",
-              label: "手动分句（推荐）",
-              hint: "整段录音视为一次完整对话，松开按键后再返回转写结果；模型有完整上下文，更准、更不易被停顿误切。",
+              label: t("asr_segment.manual_label"),
+              hint: t("asr_segment.manual_hint"),
             },
             {
               value: "AUTO",
-              label: "自动分句",
-              hint: "服务端按停顿自动切句、录音过程中实时回填；适合长会议字幕、直播转写等无人值守场景。",
+              label: t("asr_segment.auto_label"),
+              hint: t("asr_segment.auto_hint"),
             },
           ]}
         />
       </div>
 
       {/* Text injection */}
-      <SectionTitle>文本注入</SectionTitle>
+      <SectionTitle>{t("section.text_injection")}</SectionTitle>
       <div className="py-3">
         <RadioBlock
           value={general.injectMethod}
@@ -585,20 +610,20 @@ function GeneralTab() {
           options={[
             {
               value: "CLIPBOARD + PASTE",
-              label: "剪贴板 + 粘贴",
-              hint: "默认方式，快速且可靠。",
+              label: t("inject.clipboard_label"),
+              hint: t("inject.clipboard_hint"),
             },
             {
               value: "SIMULATE KEYBOARD",
-              label: "模拟键盘",
-              hint: "逐字符键入。",
+              label: t("inject.keyboard_label"),
+              hint: t("inject.keyboard_hint"),
             },
           ]}
         />
       </div>
       <Row
-        label="粘贴后恢复剪贴板"
-        hint="建议保持开启"
+        label={t("general.restore_clipboard")}
+        hint={t("general.restore_clipboard_hint")}
       >
         <Switch
           checked={general.restoreClipboard}
@@ -607,8 +632,8 @@ function GeneralTab() {
       </Row>
 
       {/* Behavior */}
-      <SectionTitle>行为</SectionTitle>
-      <Row label="开机自启">
+      <SectionTitle>{t("section.behavior")}</SectionTitle>
+      <Row label={t("general.launch_startup")}>
         <Switch
           checked={general.launchStartup}
           onChange={(v) => {
@@ -619,8 +644,8 @@ function GeneralTab() {
       </Row>
       {detectPlatform() === "macos" ? (
         <Row
-          label="在 Dock 中显示应用"
-          hint="在 macOS Dock 中显示 OpenSpeech 图标，便于快速访问。关闭后应用作为纯菜单栏应用运行（仍可通过系统托盘打开主窗口）"
+          label={t("general.show_dock")}
+          hint={t("general.show_dock_hint")}
         >
           <Switch
             checked={general.showDockIcon}
@@ -634,8 +659,8 @@ function GeneralTab() {
         </Row>
       ) : null}
       <Row
-        label="悬浮录音条常驻显示"
-        hint="开启后录音条始终悬浮在屏幕上（即使未录音），方便看到状态"
+        label={t("general.overlay_always_visible")}
+        hint={t("general.overlay_always_visible_hint")}
       >
         <Switch
           checked={general.overlayAlwaysVisible}
@@ -643,8 +668,8 @@ function GeneralTab() {
         />
       </Row>
       <Row
-        label="关闭时最小化到托盘"
-        hint="开启后关闭主窗口直接隐藏到托盘；关闭时每次弹确认对话框"
+        label={t("general.close_to_tray")}
+        hint={t("general.close_to_tray_hint")}
       >
         <Switch
           checked={general.closeBehavior === "HIDE"}
@@ -654,8 +679,8 @@ function GeneralTab() {
         />
       </Row>
       <Row
-        label="自动更新"
-        hint="启动时静默检查并安装新版本；关闭后只能通过托盘「检查更新」手动触发"
+        label={t("general.auto_update")}
+        hint={t("general.auto_update_hint")}
       >
         <Switch
           checked={general.autoUpdate}
@@ -664,7 +689,7 @@ function GeneralTab() {
       </Row>
       {!loaded ? (
         <div className="mt-6 font-mono text-xs text-te-light-gray/70">
-          // loading settings…
+          {t("general.loading")}
         </div>
       ) : null}
     </div>
@@ -672,6 +697,7 @@ function GeneralTab() {
 }
 
 function ModelTab() {
+  const { t } = useTranslation("settings");
   const general = useSettingsStore((s) => s.general);
   const setGeneral = useSettingsStore((s) => s.setGeneral);
 
@@ -698,28 +724,28 @@ function ModelTab() {
     try {
       await setSecret(SECRET_STT_API_KEY, apiKey);
       apiKeyInitial.current = apiKey;
-      toast.success("API Key 已保存到系统密钥链");
+      toast.success(t("model.key_saved_toast"));
     } catch (e) {
-      toast.error(`API Key 保存失败: ${e}`);
+      toast.error(t("model.key_save_failed_toast", { error: String(e) }));
     }
   };
 
   return (
     <div>
-      <SectionTitle>大模型（REST）</SectionTitle>
+      <SectionTitle>{t("section.model_rest")}</SectionTitle>
       <div className="mb-3 border border-te-gray/40 bg-te-surface/60 px-4 py-3">
         <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-accent">
-          // BYO-MODEL
+          {t("model.byo_unavailable_tag")}
         </div>
         <div className="mt-1.5 font-sans text-xs leading-relaxed text-te-light-gray">
-          OpenSpeech 不内置模型。填写你自己的 STT REST 端点，音频会直接从本机发送到该端点；API Key 仅存于系统密钥链。
+          {t("model.byo_unavailable_body")}
         </div>
       </div>
 
-      <div className="space-y-3 py-2">
+      <div className="pointer-events-none space-y-3 py-2 opacity-50" aria-disabled="true">
         <div>
           <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-            端点 URL
+            {t("model.endpoint")}
           </div>
           <TextInput
             value={general.endpoint}
@@ -730,9 +756,9 @@ function ModelTab() {
         </div>
         <div>
           <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-            API Key
+            {t("model.api_key")}
             <span className="ml-2 text-[10px] tracking-normal text-te-light-gray/70 normal-case">
-              存储于系统密钥链；失去焦点时自动保存
+              {t("model.api_key_hint")}
             </span>
           </div>
           <TextInput
@@ -747,7 +773,7 @@ function ModelTab() {
                 type="button"
                 onClick={() => setShowKey((s) => !s)}
                 className="flex size-7 items-center justify-center text-te-light-gray transition-colors hover:text-te-accent"
-                aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}
+                aria-label={showKey ? t("model.hide_key") : t("model.show_key")}
               >
                 {showKey ? (
                   <EyeOff className="size-4" />
@@ -761,7 +787,7 @@ function ModelTab() {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
             <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-              模型名称
+              {t("model.model_name")}
             </div>
             <TextInput
               value={general.modelName}
@@ -771,7 +797,7 @@ function ModelTab() {
           </div>
           <div>
             <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-              请求超时（秒）
+              {t("model.timeout_seconds")}
             </div>
             <TextInput
               value={general.timeout}
@@ -783,7 +809,7 @@ function ModelTab() {
         </div>
         <div>
           <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-            音频格式
+            {t("model.audio_format")}
           </div>
           <Select
             value={general.audioFormat}
@@ -794,10 +820,11 @@ function ModelTab() {
         <div className="pt-2">
           <button
             type="button"
-            className="group inline-flex items-center gap-2 border border-te-accent bg-te-accent px-5 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
+            disabled
+            className="group inline-flex cursor-not-allowed items-center gap-2 border border-te-gray/50 bg-te-gray/30 px-5 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray"
           >
-            <span className="size-1.5 bg-te-accent-fg" />
-            测试连接
+            <span className="size-1.5 bg-te-light-gray" />
+            {t("model.test_connection_disabled")}
           </button>
         </div>
       </div>
@@ -806,15 +833,16 @@ function ModelTab() {
 }
 
 function PersonalizationTab() {
+  const { t } = useTranslation("settings");
   const personalization = useSettingsStore((s) => s.personalization);
   const setPersonalization = useSettingsStore((s) => s.setPersonalization);
 
   return (
     <div>
-      <SectionTitle>AI 增强</SectionTitle>
+      <SectionTitle>{t("section.ai_enhance")}</SectionTitle>
       <Row
-        label="AI 自动润色"
-        hint="移除口头禅与口误"
+        label={t("personalization.auto_polish")}
+        hint={t("personalization.auto_polish_hint")}
       >
         <Switch
           checked={personalization.autoPolish}
@@ -822,8 +850,8 @@ function PersonalizationTab() {
         />
       </Row>
       <Row
-        label="上下文风格"
-        hint="将前台应用名传给模型以适配语气"
+        label={t("personalization.context_style")}
+        hint={t("personalization.context_style_hint")}
       >
         <Switch
           checked={personalization.contextStyle}
@@ -831,18 +859,18 @@ function PersonalizationTab() {
         />
       </Row>
 
-      <SectionTitle>词典学习</SectionTitle>
+      <SectionTitle>{t("section.dictionary_learning")}</SectionTitle>
       <Row
-        label="学习灵敏度"
-        hint="控制新词汇被自动收集的积极程度"
+        label={t("personalization.sensitivity")}
+        hint={t("personalization.sensitivity_hint")}
       >
         <SegButton
           value={personalization.sensitivity}
           onChange={(v) => void setPersonalization("sensitivity", v)}
           options={[
-            { value: "LOW", label: "低" },
-            { value: "NORMAL", label: "标准" },
-            { value: "HIGH", label: "高" },
+            { value: "LOW", label: t("personalization.low") },
+            { value: "NORMAL", label: t("personalization.normal") },
+            { value: "HIGH", label: t("personalization.high") },
           ]}
         />
       </Row>
@@ -851,31 +879,32 @@ function PersonalizationTab() {
 }
 
 function AccountTab() {
+  const { t } = useTranslation("settings");
   return (
     <div>
-      <SectionTitle>身份</SectionTitle>
-      <Row label="电子邮件">
+      <SectionTitle>{t("section.identity")}</SectionTitle>
+      <Row label={t("account.email")}>
         <span className="font-mono text-sm text-te-fg">
           dynamicoct@gmail.com
         </span>
       </Row>
-      <Row label="订阅" hint="使用自带的模型 Key">
+      <Row label={t("account.subscription")} hint={t("account.subscription_hint")}>
         <span className="inline-flex items-center gap-2 border border-te-accent/60 bg-te-accent/8 px-3 py-1 font-mono text-xs uppercase tracking-[0.15em] text-te-accent">
           <span className="size-1.5 bg-te-accent" />
-          免费 / 自带模型
+          {t("account.free_byo_badge")}
         </span>
       </Row>
 
-      <SectionTitle>会话</SectionTitle>
+      <SectionTitle>{t("section.session")}</SectionTitle>
       <div className="py-4">
         <button
           type="button"
           className="w-full border border-te-gray px-5 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent md:w-auto md:min-w-[16rem]"
         >
-          退出登录
+          {t("account.sign_out")}
         </button>
         <p className="mt-3 font-sans text-xs text-te-light-gray">
-          退出后将清除本地登录状态。本地录音、历史与词典将保留。
+          {t("account.sign_out_hint")}
         </p>
       </div>
     </div>
@@ -883,10 +912,12 @@ function AccountTab() {
 }
 
 function AboutTab() {
+  const { t } = useTranslation("settings");
   const navigate = useNavigate();
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const [appVersion, setAppVersion] = useState("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
@@ -900,6 +931,33 @@ function AboutTab() {
     navigate("/onboarding", { replace: true });
   };
 
+  const handleCheckUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    void logInfo("[updater] about-page check start");
+    try {
+      const upd = await checkForUpdate();
+      if (upd) {
+        void logInfo(`[updater] about-page check found: ${upd.version}`);
+        toast.message(i18next.t("pages:layout.tray.update_found_title"), {
+          description: upd.version,
+        });
+      } else {
+        void logInfo("[updater] about-page check: no update");
+        toast(i18next.t("pages:layout.tray.update_none"));
+      }
+    } catch (e) {
+      void logError(
+        `[updater] about-page check failed: ${String((e as Error)?.message ?? e)}`,
+      );
+      toast.error(i18next.t("pages:layout.tray.update_check_failed"), {
+        description: String((e as Error)?.message ?? e),
+      });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
   const deps = [
     { name: "Tauri", version: "2.x" },
     { name: "React", version: "19" },
@@ -911,16 +969,16 @@ function AboutTab() {
 
   return (
     <div>
-      <SectionTitle>构建</SectionTitle>
-      <Row label="版本">
+      <SectionTitle>{t("section.build")}</SectionTitle>
+      <Row label={t("about.version")}>
         <span className="font-mono text-sm text-te-fg">
           {appVersion ? `v${appVersion}` : "—"}
         </span>
       </Row>
-      <Row label="许可证">
+      <Row label={t("about.license")}>
         <span className="font-mono text-sm text-te-fg">MIT</span>
       </Row>
-      <Row label="源代码">
+      <Row label={t("about.source")}>
         <a
           href="https://github.com/OpenLoaf/OpenSpeech"
           target="_blank"
@@ -935,10 +993,12 @@ function AboutTab() {
       <div className="flex flex-wrap items-center gap-3 py-4">
         <button
           type="button"
-          className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+          onClick={() => void handleCheckUpdate()}
+          disabled={checkingUpdate}
+          className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <span className="size-1.5 bg-te-accent" />
-          检查更新
+          <span className={cn("size-1.5 bg-te-accent", checkingUpdate && "animate-pulse")} />
+          {t("about.check_update")}
         </button>
         <button
           type="button"
@@ -946,11 +1006,11 @@ function AboutTab() {
           className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
         >
           <Rocket className="size-3.5" />
-          重新运行首次引导
+          {t("about.rerun_onboarding")}
         </button>
       </div>
 
-      <SectionTitle>第三方依赖</SectionTitle>
+      <SectionTitle>{t("section.third_party")}</SectionTitle>
       <div className="grid grid-cols-1 gap-px border border-te-gray/30 bg-te-gray/30 md:grid-cols-2">
         {deps.map((d) => (
           <div
@@ -973,15 +1033,17 @@ function AboutTab() {
 /* ──────────────────────────────────────────────────────────────── */
 
 function SubNav({
+  tabs,
   active,
   onChange,
 }: {
+  tabs: TabDef[];
   active: TabId;
   onChange: (id: TabId) => void;
 }) {
   return (
     <nav className="flex flex-col gap-px border border-te-gray/30 bg-te-surface">
-      {TABS.map((t) => {
+      {tabs.map((t) => {
         const isActive = t.id === active;
         const Icon = t.icon;
         return (
@@ -1019,6 +1081,7 @@ export default function SettingsContent({
   initialTab = "GENERAL",
 }: { initialTab?: TabId } = {}) {
   const [tab, setTab] = useState<TabId>(initialTab);
+  const tabs = useTabs();
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col md:flex-row">
@@ -1029,7 +1092,7 @@ export default function SettingsContent({
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <SubNav active={tab} onChange={setTab} />
+        <SubNav tabs={tabs} active={tab} onChange={setTab} />
       </motion.aside>
 
       {/* Right: tab content — 独立滚动；不再额外嵌套框，避免 Dialog 内 surface 半透明叠加造成的视觉模糊 */}

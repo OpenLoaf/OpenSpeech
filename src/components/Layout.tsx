@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import i18next from "i18next";
+import { useTranslation } from "react-i18next";
 import { BookOpen, History, Home, Settings, UserCircle } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import {
+  info as logInfo,
+  error as logError,
+} from "@tauri-apps/plugin-log";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AccountDialog } from "@/components/AccountDialog";
@@ -25,17 +31,18 @@ import { detectPlatform } from "@/lib/platform";
 
 type NavItem = {
   to: string;
-  label: string;
+  i18nKey: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
 };
 
 const MAIN_NAV: NavItem[] = [
-  { to: "/", label: "首页", icon: Home },
-  { to: "/history", label: "历史记录", icon: History },
-  { to: "/dictionary", label: "词典", icon: BookOpen },
+  { to: "/", i18nKey: "home", icon: Home },
+  { to: "/history", i18nKey: "history", icon: History },
+  { to: "/dictionary", i18nKey: "dictionary", icon: BookOpen },
 ];
 
 function NavRow({ item }: { item: NavItem }) {
+  const { t } = useTranslation();
   const Icon = item.icon;
   return (
     <NavLink
@@ -59,7 +66,7 @@ function NavRow({ item }: { item: NavItem }) {
             )}
           />
           <Icon className="size-4 shrink-0" />
-          <span>{item.label}</span>
+          <span>{t(`pages:layout.nav.${item.i18nKey}`)}</span>
         </>
       )}
     </NavLink>
@@ -67,6 +74,7 @@ function NavRow({ item }: { item: NavItem }) {
 }
 
 export default function Layout() {
+  const { t } = useTranslation();
   const [accountOpen, setAccountOpen] = useState<boolean>(false);
   const [closePromptOpen, setClosePromptOpen] = useState<boolean>(false);
   const navigate = useNavigate();
@@ -87,13 +95,13 @@ export default function Layout() {
 
   // 用户名 fallback 链：name → email 前缀 → "账户"。邮箱截 @ 前，避免侧栏被挤爆。
   const displayName = (() => {
-    if (!isAuthenticated) return "登录";
+    if (!isAuthenticated) return t("pages:layout.login");
     const name = user?.name?.trim();
     if (name) return name;
     const email = user?.email ?? profile?.email ?? "";
     const atIdx = email.indexOf("@");
     if (atIdx > 0) return email.slice(0, atIdx);
-    return email || "账户";
+    return email || t("pages:layout.account_fallback");
   })();
 
   const avatarUrl = user?.avatarUrl ?? profile?.avatarUrl ?? null;
@@ -198,16 +206,23 @@ export default function Layout() {
         },
       );
       await addSub<unknown>("openspeech://tray-check-update", async () => {
+        void logInfo("[updater] tray check start");
         try {
           const upd = await checkForUpdate();
           if (upd) {
-            toast.message("发现新版本", { description: upd.version });
+            void logInfo(`[updater] tray check found: ${upd.version}`);
+            toast.message(i18next.t("pages:layout.tray.update_found_title"), {
+              description: upd.version,
+            });
           } else {
-            toast("当前已是最新版本");
+            void logInfo("[updater] tray check: no update");
+            toast(i18next.t("pages:layout.tray.update_none"));
           }
         } catch (e) {
-          // updater endpoints 未配置 / 网络失败都会走这里；给用户一个 toast 即可。
-          toast.error("检查更新失败", {
+          void logError(
+            `[updater] tray check failed: ${String((e as Error)?.message ?? e)}`,
+          );
+          toast.error(i18next.t("pages:layout.tray.update_check_failed"), {
             description: String((e as Error)?.message ?? e),
           });
         }
@@ -418,7 +433,7 @@ export default function Layout() {
             className="flex items-center gap-2 px-3 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:text-te-fg"
           >
             <Settings className="size-4" />
-            <span>设置</span>
+            <span>{t("pages:layout.settings")}</span>
           </button>
         </div>
       </aside>
