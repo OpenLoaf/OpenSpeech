@@ -365,15 +365,22 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
 
     // 三个 request 一次性 fire-and-forget。已 granted / denied 时系统 no-op；
     // 仅 notDetermined 时弹框；macOS 内部排队，不会同时弹三个。
-    void requestMicrophone().catch((e) =>
-      console.warn("[onboarding] auto-request Microphone failed:", e),
-    );
-    void requestAccessibility().catch((e) =>
-      console.warn("[onboarding] auto-request Accessibility failed:", e),
-    );
-    void requestInputMonitoring().catch((e) =>
-      console.warn("[onboarding] auto-register IM failed:", e),
-    );
+    void logWarn("[onboarding] mount: auto-request Mic/AX/IM");
+    void requestMicrophone()
+      .then(() => logWarn("[onboarding] auto-request Microphone OK"))
+      .catch((e) =>
+        logWarn(`[onboarding] auto-request Microphone failed: ${String(e)}`),
+      );
+    void requestAccessibility()
+      .then(() => logWarn("[onboarding] auto-request Accessibility OK"))
+      .catch((e) =>
+        logWarn(`[onboarding] auto-request Accessibility failed: ${String(e)}`),
+      );
+    void requestInputMonitoring()
+      .then(() => logWarn("[onboarding] auto-register IM (IOHIDRequestAccess) OK"))
+      .catch((e) =>
+        logWarn(`[onboarding] auto-register IM failed: ${String(e)}`),
+      );
 
     let ticks = 0;
     const interval = window.setInterval(async () => {
@@ -478,29 +485,45 @@ export function StepPermissions({ onNext }: { onNext: () => void }) {
       setBusy(card.id, true);
       try {
         const currentStatus = statuses[card.id];
+        void logWarn(
+          `[onboarding] onPrimary kind=${card.permission} status=${currentStatus}`,
+        );
         // 1. denied 路径：先精细 reset 该项的 TCC 条目，让后续 request 能真生效。
         //    notDetermined / restricted / unknown 不 reset——前者是首次接触，
         //    后者是 MDM/系统层限制，reset 帮不上忙也无副作用价值。
         if (currentStatus === "denied") {
+          void logWarn(
+            `[onboarding] onPrimary: reset TCC for ${card.permission}`,
+          );
           await resetTccPermissionOne(card.permission);
         }
         // 2. request：把 App 写入系统设置的隐私列表 + 触发可能的系统弹窗。
         if (card.permission === "microphone") {
           await requestMicrophone();
+          void logWarn("[onboarding] onPrimary: requestMicrophone done");
         } else if (card.permission === "input-monitoring") {
           await requestInputMonitoring();
+          void logWarn(
+            "[onboarding] onPrimary: requestInputMonitoring done",
+          );
         } else if (card.permission === "accessibility") {
           await requestAccessibility();
+          void logWarn("[onboarding] onPrimary: requestAccessibility done");
         }
         // 3. 打开系统设置面板，让用户在已经显示的 App 行上勾选开关。
         await openSystemSettings(card.permission);
+        void logWarn(
+          `[onboarding] onPrimary: openSystemSettings(${card.permission}) done`,
+        );
         // 触发 / 打开后稍等一拍再检测，让系统授权状态有时间落到 API 层。
         // 用户在系统设置勾选完切回应用时还会再触发一次 recheckAll。
         window.setTimeout(() => {
           void recheck(card);
         }, 600);
       } catch (e) {
-        console.warn("[onboarding] permission action failed:", card.id, e);
+        void logWarn(
+          `[onboarding] permission action failed: ${card.id} ${String(e)}`,
+        );
       } finally {
         setBusy(card.id, false);
       }
