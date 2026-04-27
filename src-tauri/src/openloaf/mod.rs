@@ -27,6 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 mod callback;
 mod dev_session;
+pub mod feedback;
 mod storage;
 use dev_session::{clear_dev_session, dump_dev_session};
 use storage::KeyringAuthStorage;

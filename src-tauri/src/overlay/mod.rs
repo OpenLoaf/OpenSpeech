@@ -115,6 +115,11 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 fn show_now<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     ensure_overlay(app)?;
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
+        // 强制把窗口尺寸复位到 PILL 高度——上一次 toast 把窗口扩到 EXPANDED_HEIGHT
+        // 后，前端 set_height 复位与 hide 的 IPC 谁先到 macOS 不保证；如果 hide 先到，
+        // 窗口会带着旧的 EXPANDED 尺寸进入下次 show，position_to_bottom_center 按
+        // PILL 算坐标 → 半个窗口卡在屏幕底外。每次 show 显式归位。
+        w.set_size(LogicalSize::new(WIDTH, HEIGHT))?;
         position_to_bottom_center(&w)?;
         w.show()?;
         log::warn!("[overlay] show");

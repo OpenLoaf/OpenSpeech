@@ -379,15 +379,64 @@ jobs:
           echo "--- release_notes.md ---"
           cat release_notes.md
 
+      # Channel 判定：tag 含 `-beta`（包括 `-beta.N`）走 beta 通道，发 prerelease。
+      # 其它（`v0.3.0` 这种）走 stable，正常 release。
+      # 注意：beta 也照常上传 latest.json 到自己的 release——`releases/latest/download/`
+      # 走 GitHub 的 latest 算法（自动跳过 prerelease），所以 stable 客户端不会误拉。
+      - name: Detect channel
+        id: channel
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-beta* ]]; then
+            echo "is_beta=true" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_beta=false" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # latest-beta.json：beta 通道的指针——内容跟 latest.json 完全一样，只是文件名不同。
+      # stable release 也生成它，因为 stable 版本号严格大于上一版 beta（SemVer：0.3.0 > 0.3.0-beta.2），
+      # beta 用户拉到这份就被升级到 stable，正好满足"关闭 beta 后只更新比 beta 大的下个版本"。
+      - name: Generate latest-beta.json
+        shell: bash
+        run: cp latest.json latest-beta.json
+
       - name: Publish draft release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: 'OpenSpeech ${{ github.ref_name }}'
           draft: true
-          prerelease: false
+          prerelease: ${{ steps.channel.outputs.prerelease }}
           fail_on_unmatched_files: true
           body_path: release_notes.md
           files: |
             staging/*
             latest.json
+            latest-beta.json
+
+      # channel-beta 滚动指针：每次 release（stable + beta）都把当前的 latest-beta.json
+      # 覆盖到 `channel-beta` 这个固定 tag 的 release。前端 beta 通道直接拉
+      # `releases/download/channel-beta/latest-beta.json` 永远拿到最新。
+      # 第一次跑会自动创建这个 release（标记为 prerelease，列表里折叠隐藏）。
+      - name: Update channel-beta pointer release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view channel-beta --repo "$REPO" >/dev/null 2>&1; then
+            gh release create channel-beta \
+              --repo "$REPO" \
+              --title "Channel: Beta (rolling pointer)" \
+              --notes "Auto-updated pointer to the latest beta-or-stable release. Do not download from here." \
+              --prerelease
+          fi
+          gh release upload channel-beta latest-beta.json --repo "$REPO" --clobber
+          gh release edit channel-beta --repo "$REPO" \
+            --notes "Latest beta-channel pointer · upstream tag: ${TAG} · updated $(date -u +%Y-%m-%dT%H:%M:%SZ)"
