@@ -213,10 +213,9 @@ impl OpenLoafState {
         }
 
         let client = self.client.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            client.auth().bootstrap(Some(&client_info()))
-        })
-        .await;
+        let result =
+            tokio::task::spawn_blocking(move || client.auth().bootstrap(Some(&client_info())))
+                .await;
 
         match result {
             Ok(Ok(Some(restored))) => {
@@ -376,14 +375,8 @@ pub fn handle_session_expired<R: Runtime>(app: &AppHandle<R>, state: &OpenLoafSt
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 enum LoginEvent {
-    Success {
-        state: String,
-        user: PublicUser,
-    },
-    Error {
-        state: String,
-        message: String,
-    },
+    Success { state: String, user: PublicUser },
+    Error { state: String, message: String },
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────
@@ -532,11 +525,9 @@ pub async fn openloaf_try_recover(
     }
 
     let client = ol.client.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        client.auth().bootstrap(Some(&client_info()))
-    })
-    .await
-    .map_err(|e| format!("join error: {e}"))?;
+    let result = tokio::task::spawn_blocking(move || client.auth().bootstrap(Some(&client_info())))
+        .await
+        .map_err(|e| format!("join error: {e}"))?;
 
     match result {
         Ok(Some(restored)) => {
@@ -546,7 +537,10 @@ pub async fn openloaf_try_recover(
                 &restored.refresh_token,
                 restored.user,
             );
-            log::info!("openloaf: session recovered on demand via {:?}", restored.via);
+            log::info!(
+                "openloaf: session recovered on demand via {:?}",
+                restored.via
+            );
             if let Err(e) = app.emit(RESTORED_EVENT, user) {
                 log::warn!("openloaf: emit restored event failed: {e}");
             }
@@ -639,11 +633,7 @@ pub async fn openloaf_fetch_profile(
 // 业务代码直接 `call_authed(&app, &ol, |client| client.xxx().yyy()).await?`，
 // 不再每个 command 手搓 401 处理。
 
-async fn call_authed<T, F>(
-    app: &AppHandle,
-    ol: &SharedOpenLoaf,
-    op: F,
-) -> SaaSResult<T>
+async fn call_authed<T, F>(app: &AppHandle, ol: &SharedOpenLoaf, op: F) -> SaaSResult<T>
 where
     F: Fn(SaaSClient) -> SaaSResult<T> + Send + Sync + Clone + 'static,
     T: Send + 'static,
@@ -772,11 +762,24 @@ pub async fn bootstrap(app: &AppHandle) {
     // SDK 自身的 bootstrap：从注入的 storage 读 family/refresh token，
     // 命中 family → `/auth/family/exchange`（首选，跨 App SSO），
     // 否则 fallback `/auth/refresh`，都失败 → SDK 自动清 storage。
+    //
+    // 30s 硬超时：bootstrap 内部走 ureq 同步 HTTP，base_url 不可达时（典型场景：
+    // dev keychain 污染导致 base_url=localhost:5180 但 dev server 已关，或网络
+    // 大面积故障）默认超时叠加重试可能堆到几分钟，前端启动直接挂死在 Loading。
+    // 这里超时只 warn，不清 storage——下一次启动还能再试。
     let client = shared.client.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        client.auth().bootstrap(Some(&client_info()))
-    })
-    .await;
+    let bootstrap_fut =
+        tokio::task::spawn_blocking(move || client.auth().bootstrap(Some(&client_info())));
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(30), bootstrap_fut).await
+    {
+        Ok(joined) => joined,
+        Err(_) => {
+            log::warn!(
+                "openloaf: bootstrap timeout (>30s); base_url unreachable? skipping restore, UI will require manual login"
+            );
+            return;
+        }
+    };
 
     match result {
         Ok(Ok(Some(restored))) => {
@@ -786,7 +789,10 @@ pub async fn bootstrap(app: &AppHandle) {
                 &restored.refresh_token,
                 restored.user,
             );
-            log::info!("openloaf: session restored from keychain via {:?}", restored.via);
+            log::info!(
+                "openloaf: session restored from keychain via {:?}",
+                restored.via
+            );
             if let Err(e) = app.emit(RESTORED_EVENT, user) {
                 log::warn!("openloaf: emit restored event failed: {e}");
             }

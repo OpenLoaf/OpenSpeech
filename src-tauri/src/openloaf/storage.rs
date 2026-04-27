@@ -1,9 +1,11 @@
 //! `AuthStorage` 实现：把 SDK 0.3.2 的认证持久化绑到系统 Keychain。
 //!
 //! 设计要点（与 SDK 协议对齐，跨 OpenLoaf 桌面应用 SSO 共享）：
-//! - service `"ai.openloaf.saas"`、account `"default"`：SDK 0.3.2 推荐的跨应用 SSO 命名。
-//!   OpenLoaf 自家其它桌面端写到同一空间即视为同一台机器登过了；OpenSpeech `bootstrap` 时
-//!   优先吃 `family_token` 即拿到本应用自己的 access+refresh，无需用户再 OAuth。
+//! - service 名按 build profile 分岔：release 用 `"ai.openloaf.saas"` 走 SDK 0.3.2 推荐的
+//!   跨应用 SSO 命名；debug 用 `"ai.openloaf.saas.dev"` 完全隔离，避免本机跑 dev SaaS
+//!   时把 dev token 写进生产共享 entry 后污染生产 OpenSpeech / 其他生产 OpenLoaf 应用。
+//!   线上事故案例：dev 启动后写入 `ai.openloaf.saas`，prod 启动读到 base_url=localhost:5180
+//!   的 token，登录 hang 在 Loading（dev server 已关）。
 //! - value 是 `serde_json(StoredAuth)`，含 `family_token / refresh_token / userId / source` 等。
 //!   字段全部 camelCase + 全 optional → Node SDK 写的也能反序列化，反之亦然。
 //! - 错误一律 `SaaSError::Input`：keyring 失败不是 SDK 自家协议的错误，包成 Input
@@ -14,7 +16,11 @@ use std::sync::Arc;
 use keyring::{Entry, Error as KeyringError};
 use openloaf_saas::{AuthStorage, SaaSError, SaaSResult, StoredAuth};
 
+#[cfg(not(debug_assertions))]
 const SERVICE: &str = "ai.openloaf.saas";
+#[cfg(debug_assertions)]
+const SERVICE: &str = "ai.openloaf.saas.dev";
+
 const ACCOUNT: &str = "default";
 
 /// 老版 OpenSpeech 自家的 keychain 命名，仅用于 `cleanup_legacy()` 一次性清理。
