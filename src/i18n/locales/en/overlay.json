@@ -5,7 +5,8 @@
     "close_result": "Close result"
   },
   "status": {
-    "error_fallback": "Error"
+    "error_fallback": "Error",
+    "transcribing": "Thinking…"
   },
   "panel": {
     "tag": {

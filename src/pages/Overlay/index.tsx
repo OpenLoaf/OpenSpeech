@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, Check, Loader2, X } from "lucide-react";
+import { AlertTriangle, Check, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
@@ -302,7 +302,9 @@ export default function OverlayPage() {
                   className="flex h-full w-full items-center justify-center"
                 >
                   {centerKey === "transcribing" && (
-                    <Loader2 className="size-3.5 text-te-accent animate-spin" />
+                    <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg">
+                      {t("overlay:status.transcribing")}
+                    </span>
                   )}
                   {centerKey === "injecting" && (
                     <Check className="size-3.5 text-te-accent" />

@@ -5,7 +5,8 @@
     "close_result": "关闭结果"
   },
   "status": {
-    "error_fallback": "错误"
+    "error_fallback": "错误",
+    "transcribing": "思考中…"
   },
   "panel": {
     "tag": {
