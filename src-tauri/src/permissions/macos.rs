@@ -113,9 +113,30 @@ pub fn input_monitoring_status() -> String {
 /// **plugin 不暴露此 API**：tauri-plugin-macos-permissions 的
 /// `request_input_monitoring_permission` 只 `open` 系统设置 URL，
 /// 不调 IOHIDRequestAccess。所以这一条仍由我们自己保留。
-pub fn request_input_monitoring() {
-    unsafe {
-        IOHIDRequestAccess(IOHID_REQUEST_LISTEN_EVENT);
+///
+/// 返回 IOHIDRequestAccess 的 raw u8 结果（1=granted，0=denied/未决）。
+/// 同时打印调用前后的 IOHIDCheckAccess 状态，便于诊断"app 不出现在列表"问题：
+/// 若 before/after 都是 unknown 但函数返回 0，说明 macOS 拒绝注册条目（多见于
+/// 已签 Developer ID 但 TCC 在同一进程内 reset 后未刷新 cache）。
+pub fn request_input_monitoring() -> u8 {
+    let before = unsafe { IOHIDCheckAccess(IOHID_REQUEST_LISTEN_EVENT) };
+    let result = unsafe { IOHIDRequestAccess(IOHID_REQUEST_LISTEN_EVENT) };
+    let after = unsafe { IOHIDCheckAccess(IOHID_REQUEST_LISTEN_EVENT) };
+    log::warn!(
+        "[permissions] IOHIDRequestAccess(ListenEvent) before={} ret={} after={}",
+        access_str(before),
+        result,
+        access_str(after),
+    );
+    result
+}
+
+fn access_str(v: u32) -> &'static str {
+    match v {
+        IOHID_GRANTED => "granted(0)",
+        IOHID_DENIED => "denied(1)",
+        2 => "unknown(2)",
+        _ => "other",
     }
 }
 
