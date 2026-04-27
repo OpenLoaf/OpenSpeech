@@ -632,6 +632,8 @@ pub fn run() {
             hotkey::apply_hotkey_config,
             hotkey::set_hotkey_recording,
             hotkey::hotkey_init_listener,
+            hotkey::esc_capture_start,
+            hotkey::esc_capture_stop,
             overlay::overlay_show,
             overlay::overlay_hide,
             overlay::overlay_set_height,

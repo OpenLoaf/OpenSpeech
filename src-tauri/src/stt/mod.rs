@@ -210,13 +210,21 @@ fn stt_start_impl<R: Runtime>(
         ERR_NOT_AUTHENTICATED.to_string()
     })?;
 
-    // 仅做"stream 是否在跑"的兜底校验——服务端 OL-TL-RT-002 固定按 16kHz mono
-    // pcm16 解码，**不接受**客户端传 sampleRate / channels / encoding。
-    // 重采样到 16k + mono 下混都在 audio callback 里（push_to_stt_pcm16）完成。
-    crate::audio::current_stream_info().ok_or_else(|| {
+    // 兜底校验"stream 是否在跑"。新版 audio_level_start 已同步等到 stream_info
+    // 写入才返回，理论上这里第一次读就有值；保留短自旋是为了覆盖：
+    //   - 老版本前端绕过 await 直接调 stt_start
+    //   - 切换设备瞬间（旧 stream 已 drop，新 stream 还差几 ms 写入）
+    // 总等待上限 200ms，对用户无感知。服务端 OL-TL-RT-002 固定 16kHz mono pcm16 解码。
+    let stream_ready = (0..10).any(|i| {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        crate::audio::current_stream_info().is_some()
+    });
+    if !stream_ready {
         log::warn!("[stt] stt_start aborted: audio stream not running (start mic first)");
-        "audio stream not running; start mic first".to_string()
-    })?;
+        return Err("audio stream not running; start mic first".to_string());
+    }
 
     // 保险：旧 session 没清干净（上一次 finalize 崩了等）先兜底关。
     close_if_active();

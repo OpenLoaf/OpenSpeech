@@ -55,6 +55,9 @@ fn device_label<D: DeviceTrait>(d: &D) -> Option<String> {
 const AUDIO_LEVEL_EVENT: &str = "openspeech://audio-level";
 const TICK_MS: u64 = 50; // 20Hz emit
 const PEAK_GAIN: f32 = 1.6; // 轻度增益，普通说话音量下 bar 更明显
+// 噪声门：低于该幅值的窗口直接送 0，避免开车 / 风噪 / 空调底噪把波形拉满。
+// 取 0.04（约 -28 dBFS）刚好高于常见车厢底噪 (-34 ~ -30 dBFS)，又远低于人声基音。
+const NOISE_GATE: f32 = 0.04;
 // WAV 输出：16-bit PCM。采样率 / 声道跟随采集配置，不做 resample / 下混——
 // 这两步留给 STT 集成阶段（大多数 STT 服务上传前自己会做）。
 const WAV_BITS_PER_SAMPLE: u16 = 16;
@@ -209,9 +212,15 @@ pub fn audio_list_input_devices() -> Vec<InputDeviceInfo> {
     out
 }
 
+/// audio 线程把 stream 起来 / 起失败的结果回报给 `start()`，让命令真正同步。
+/// 历史上 spawn 完就返回，调用方 300ms 后调 stt_start 经常撞上 stream_info 还没
+/// 写入（macOS 冷启动 cpal init ≈ 1s），命中 "audio stream not running"。
+type ReadyTx = mpsc::SyncSender<Result<(), String>>;
+
 fn spawn_monitor_thread<R: Runtime>(
     app: AppHandle<R>,
     device_name: Option<String>,
+    ready_tx: ReadyTx,
 ) -> (mpsc::Sender<()>, JoinHandle<()>) {
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let peak_bits = Arc::new(AtomicU32::new(0));
@@ -235,6 +244,7 @@ fn spawn_monitor_thread<R: Runtime>(
             };
             let Some(device) = device else {
                 log::error!("[audio] no input device available (host has no default input)");
+                let _ = ready_tx.send(Err("no input device available".into()));
                 return;
             };
             log::info!(
@@ -250,6 +260,7 @@ fn spawn_monitor_thread<R: Runtime>(
                         "[audio] default_input_config failed for device {:?}: {e}",
                         device_label(&device)
                     );
+                    let _ = ready_tx.send(Err(format!("default_input_config: {e}")));
                     return;
                 }
             };
@@ -329,6 +340,7 @@ fn spawn_monitor_thread<R: Runtime>(
                 ),
                 other => {
                     log::error!("[audio] unsupported sample format: {other:?}");
+                    let _ = ready_tx.send(Err(format!("unsupported sample format: {other:?}")));
                     return;
                 }
             };
@@ -342,11 +354,13 @@ fn spawn_monitor_thread<R: Runtime>(
                         stream_config.sample_rate,
                         stream_config.channels
                     );
+                    let _ = ready_tx.send(Err(format!("build_input_stream: {e}")));
                     return;
                 }
             };
             if let Err(e) = stream.play() {
                 log::error!("[audio] stream.play failed: {e}");
+                let _ = ready_tx.send(Err(format!("stream.play: {e}")));
                 return;
             }
             log::info!(
@@ -356,18 +370,27 @@ fn spawn_monitor_thread<R: Runtime>(
                 stream_config.channels,
                 sample_format
             );
-            // 把当前采样率 / 声道数交给录音命令读取
+            // stream_info 必须在 ready_tx 通知之前写入——start() 同步返回后调用方
+            // （stt_start_impl）会立刻读 current_stream_info()，这里要保证 happens-before。
             {
                 let mut g = stream_info().lock().expect("stream_info poisoned");
                 *g = Some((stream_config.sample_rate, stream_config.channels));
             }
+            let _ = ready_tx.send(Ok(()));
 
             loop {
                 match stop_rx.recv_timeout(Duration::from_millis(TICK_MS)) {
                     Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         let bits = peak_tick.swap(0, Ordering::Relaxed);
-                        let peak = (f32::from_bits(bits) * PEAK_GAIN).min(1.0).max(0.0);
+                        let raw = f32::from_bits(bits);
+                        // gate 之后把 [GATE, 1] 重新铺到 [0, 1]，避免门刚开时电平骤跳。
+                        let gated = if raw < NOISE_GATE {
+                            0.0
+                        } else {
+                            (raw - NOISE_GATE) / (1.0 - NOISE_GATE)
+                        };
+                        let peak = (gated * PEAK_GAIN).clamp(0.0, 1.0);
                         let _ = app.emit(AUDIO_LEVEL_EVENT, peak);
                     }
                 }
@@ -385,13 +408,17 @@ fn spawn_monitor_thread<R: Runtime>(
     (stop_tx, th)
 }
 
-pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) {
-    // 快速路径：已在运行且设备相同 → 只增引用计数
+/// 同步等 audio 线程把 cpal stream 起来。冷启动 macOS 实测 ~1s，所以默认 1.5s
+/// 上限——超时即视为失败，调用方拿到 Err 不会再贸然走 stt_start。
+const STREAM_READY_TIMEOUT: Duration = Duration::from_millis(1500);
+
+pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Result<(), String> {
+    // 快速路径：已在运行且设备相同 → 只增引用计数（stream_info 已就绪，无需等待）
     {
         let mut guard = monitor().lock().expect("monitor mutex poisoned");
         if guard.thread.is_some() && guard.current_device == device_name {
             guard.ref_count += 1;
-            return;
+            return Ok(());
         }
     }
 
@@ -408,13 +435,35 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) {
         let _ = th.join();
     }
 
-    let (stop_tx, th) = spawn_monitor_thread(app, device_name.clone());
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let (stop_tx, th) = spawn_monitor_thread(app, device_name.clone(), ready_tx);
+
+    let ready = match ready_rx.recv_timeout(STREAM_READY_TIMEOUT) {
+        Ok(r) => r,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "audio stream not ready within {}ms",
+            STREAM_READY_TIMEOUT.as_millis()
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("audio thread disconnected before ready".into())
+        }
+    };
+
+    if let Err(ref e) = ready {
+        log::warn!("[audio] start failed: {e}");
+        // 起失败：让 audio 线程退出（spawn 时即便走了 ready_tx 失败 return，线程已经
+        // 自然结束；这里 join 兜底，避免句柄泄漏）。ref_count 不递增。
+        let _ = stop_tx.send(());
+        let _ = th.join();
+        return ready;
+    }
 
     let mut guard = monitor().lock().expect("monitor mutex poisoned");
     guard.ref_count += 1;
     guard.current_device = device_name;
     guard.stop_tx = Some(stop_tx);
     guard.thread = Some(th);
+    Ok(())
 }
 
 pub fn stop() {
@@ -443,8 +492,13 @@ pub fn stop() {
 // command 会阻塞 Tauri 命令线程池，和 stt_* 挤一起时肉眼可见卡顿——全部挪到
 // spawn_blocking 池里。
 #[tauri::command]
-pub async fn audio_level_start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) {
-    let _ = tauri::async_runtime::spawn_blocking(move || start(app, device_name)).await;
+pub async fn audio_level_start<R: Runtime>(
+    app: AppHandle<R>,
+    device_name: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || start(app, device_name))
+        .await
+        .map_err(|e| format!("audio_level_start join: {e}"))?
 }
 
 #[tauri::command]

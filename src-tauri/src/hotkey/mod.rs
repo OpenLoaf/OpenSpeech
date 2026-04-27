@@ -240,6 +240,11 @@ pub fn apply_bindings<R: Runtime>(
 }
 
 pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: ShortcutEvent) {
+    // ESC 注册仅用于"吞键"，业务逻辑走 rdev 的 key-preview 通道（已有 ARM/双击确认）。
+    // 这里 short-circuit 避免 "unrecognized shortcut" 噪声日志。
+    if *shortcut == esc_shortcut() {
+        return;
+    }
     let Some(state) = app.try_state::<SharedHotkeyState>() else {
         log::warn!("[hotkey] handler: SharedHotkeyState missing");
         return;
@@ -351,4 +356,58 @@ pub fn set_hotkey_recording<R: Runtime>(app: AppHandle<R>, enabled: bool) {
     if let Err(e) = res {
         log::warn!("[hotkey] set_hotkey_recording({enabled}) combo toggle failed: {e}");
     }
+}
+
+/// 录音活跃期间临时把 Esc 注册为全局快捷键，**吞掉**前台应用对 Esc 的响应。
+/// 默认 rdev::listen 是只读观察（CGEventTapCreate listenOnly），无法 swallow；
+/// 用户在 Cursor / 编辑器里按 Esc 取消录音时，编辑器会同时退出 vim 模式 / 关 IME
+/// candidate window —— 这是用户报"按 Esc 也会触发当前激活软件功能"的根源。
+///
+/// global-shortcut 用 Carbon RegisterEventHotKey（macOS）/ RegisterHotKey（Win），
+/// 注册后 OS 直接 short-circuit 给我们的 handler，不再 dispatch 给前台。rdev 仍能
+/// 观测到（不同层级），所以前端原本基于 `openspeech://key-preview` 的 ESC ARM
+/// 逻辑保持不变；这里只解决"吞键"问题。
+///
+/// 幂等：重复 start / start 期间又 start 都安全。`esc_capture_stop` 在录音状态机
+/// 离开 active 态（idle/error/cancelled）时调用，**必须保证最终调到**——否则
+/// 用户在浏览器等 app 里 Esc 全失效，体验灾难。
+fn esc_shortcut() -> Shortcut {
+    Shortcut::new(None, Code::Escape)
+}
+
+#[tauri::command]
+pub fn esc_capture_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let plugin = app.global_shortcut();
+    let sc = esc_shortcut();
+    if plugin.is_registered(sc) {
+        return Ok(());
+    }
+    plugin
+        .register(sc)
+        .or_else(|first_err| {
+            log::warn!("[hotkey] esc_capture_start: first register failed: {first_err:?}; retry");
+            let _ = plugin.unregister(sc);
+            plugin.register(sc)
+        })
+        .map_err(|e| {
+            log::warn!("[hotkey] esc_capture_start failed: {e:?}");
+            format!("esc_capture_start: {e}")
+        })?;
+    log::warn!("[hotkey] esc_capture_start: Esc swallowed from foreground app");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn esc_capture_stop<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let plugin = app.global_shortcut();
+    let sc = esc_shortcut();
+    if !plugin.is_registered(sc) {
+        return Ok(());
+    }
+    plugin.unregister(sc).map_err(|e| {
+        log::warn!("[hotkey] esc_capture_stop failed: {e:?}");
+        format!("esc_capture_stop: {e}")
+    })?;
+    log::warn!("[hotkey] esc_capture_stop: Esc returned to foreground");
+    Ok(())
 }

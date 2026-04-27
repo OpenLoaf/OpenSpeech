@@ -351,6 +351,34 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                     Ok(s) => s,
                     Err(_) => return, // poisoned
                 };
+
+                // 状态-OS 不一致检测：rdev 在 cmd-tab / 空间切换 / CGEventTap 短暂
+                // 掉线期会偶发漏发事件（典型是漏 release）。残留的 active_ids 让
+                // "下一次按下"被判为 was_active && is_active，无 transition、不
+                // emit pressed —— 用户感知"必须按两次才有反应"。靠 IDLE_RESET=30s
+                // 兜底无效（cmd-tab 间隔几秒就绕过了）。
+                //
+                // 两个强信号：
+                //   - KeyPress 但 mod 已在 pressed：macOS 修饰键无 auto-repeat，
+                //     重复 press 必然意味着上次 release 丢了。
+                //   - KeyRelease 但 mod 不在 pressed：漏 press。
+                // 两种都先清空 active_ids，让本次事件按"全新"匹配，必能 emit
+                // 出正确的 pressed/released。pressed 集合按本次事件的真实方向更新。
+                let inconsistent = if is_press {
+                    s.pressed.contains(&m)
+                } else {
+                    !s.pressed.contains(&m)
+                };
+                if inconsistent {
+                    log::warn!(
+                        "[modifier_only] state divergence on {key:?} is_press={is_press} \
+                         (pressed={:?}, active={:?}) → reset active_ids",
+                        s.pressed,
+                        s.active_ids
+                    );
+                    s.active_ids.clear();
+                }
+
                 if is_press {
                     s.pressed.insert(m);
                 } else {
