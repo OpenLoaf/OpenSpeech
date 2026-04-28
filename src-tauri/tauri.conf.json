@@ -15,13 +15,15 @@
     "windows": [
       {
         "title": "OpenSpeech",
-        "width": 1100,
-        "height": 780,
-        "minWidth": 1000,
-        "minHeight": 680,
+        "width": 1060,
+        "height": 740,
+        "minWidth": 800,
+        "minHeight": 600,
         "maxWidth": 1600,
         "maxHeight": 1100,
         "fullscreen": false,
+        "decorations": false,
+        "shadow": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
       }
@@ -41,6 +43,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "languages": [
+          "English",
+          "SimpChinese",
+          "TradChinese"
+        ]
+      }
+    },
     "macOS": {
       "minimumSystemVersion": "10.15",
       "entitlements": "./entitlements.plist",

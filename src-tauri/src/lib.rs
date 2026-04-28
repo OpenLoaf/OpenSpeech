@@ -7,7 +7,7 @@
 
 use std::sync::Mutex;
 use tauri::{
-    Emitter, Manager, Runtime, WindowEvent,
+    Emitter, LogicalSize, Manager, Runtime, WindowEvent,
     menu::{
         CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem,
         SubmenuBuilder,
@@ -38,6 +38,7 @@ mod update_channel;
 const CLOSE_REQUESTED_EVENT: &str = "openspeech://close-requested";
 // quit-requested: 用户明确退出应用的请求（Cmd+Q）。Onboarding 与主界面都直接退出，
 // 不弹"关闭还是隐藏"对话框——Cmd+Q 的语义就是退出。
+#[cfg(target_os = "macos")]
 const QUIT_REQUESTED_EVENT: &str = "openspeech://quit-requested";
 // 托盘菜单事件：前端在 Layout.tsx 订阅，负责唤出主窗口 + Dialog/Navigate。
 const TRAY_OPEN_HOME_EVENT: &str = "openspeech://tray-open-home";
@@ -153,6 +154,44 @@ fn sync_dock_icon(_app: tauri::AppHandle) {
 // 直接 spawn 系统命令打开网络设置面板——`tauri-plugin-opener` 默认 scope 不允许
 // `x-apple.systempreferences:` / `ms-settings:` 这种自定义 scheme，自管更省事。
 // 失败只记日志（按钮已经按下了，弹另一个错误对话框打扰更甚）。
+#[tauri::command]
+fn open_log_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("failed to resolve log dir: {e:?}"))?;
+    std::fs::create_dir_all(&log_dir).ok();
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        Command::new("open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("open failed: {e:?}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        Command::new("explorer")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("explorer failed: {e:?}"))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        Command::new("xdg-open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("xdg-open failed: {e:?}"))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn open_network_settings() {
     use std::process::Command;
@@ -441,6 +480,28 @@ pub fn run() {
         .manage(hotkey::SharedHotkeyState::default())
         .manage::<openloaf::SharedOpenLoaf>(std::sync::Arc::new(openloaf::OpenLoafState::new()))
         .setup(|app| {
+            // ---- 主窗口尺寸自适应屏幕 ----------------------------------------
+            // 初始尺寸（tauri.conf.json）是上限值；小屏 / 高 DPI 时按主显示器
+            // work area 缩小，留出任务栏和边距。只影响首次启动，用户手动调大小后
+            // 由系统记住。
+            if let Some(window) = app.get_webview_window("main") {
+                if let Some(monitor) = window.primary_monitor().ok().flatten() {
+                    let scale = monitor.scale_factor();
+                    let wa = monitor.work_area();
+                    let wa_w = wa.size.width as f64 / scale;
+                    let wa_h = wa.size.height as f64 / scale;
+                    // 边距：上下左右各留一定空间，避免窗口贴边
+                    let pad_x = 80.0;
+                    let pad_y = 80.0;
+                    let ideal_w = 1060.0_f64.min(wa_w - pad_x);
+                    let ideal_h = 740.0_f64.min(wa_h - pad_y);
+                    let w = ideal_w.max(800.0);
+                    let h = ideal_h.max(600.0);
+                    let _ = window.set_size(LogicalSize::new(w, h));
+                    let _ = window.center();
+                }
+            }
+
             // ---- OpenLoaf 启动自检 + 自动恢复登录 ---------------------------
             // 静态库版本自检 + 若 Keychain 存了 refresh token 则尝试 refresh。
             // 失败（过期/网络）只记日志，不阻断 UI。
@@ -629,6 +690,7 @@ pub fn run() {
             update_tray_labels,
             sync_dock_icon,
             open_network_settings,
+            open_log_dir,
             hotkey::apply_hotkey_config,
             hotkey::set_hotkey_recording,
             hotkey::hotkey_init_listener,

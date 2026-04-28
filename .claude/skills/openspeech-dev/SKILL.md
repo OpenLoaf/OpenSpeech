@@ -218,7 +218,7 @@ src-tauri/
 
 ### 窗口与标题栏
 - 主窗口 `titleBarStyle: "Overlay"` + `hiddenTitle: true`；macOS 红绿灯嵌入内容区左上角。
-- 主窗口尺寸 `1000×680` 起、`1600×1100` 止（logical px）。
+- 主窗口尺寸：`minWidth=800 / minHeight=600`，初始上限 `1060×740`，实际启动尺寸由 `lib.rs setup` 按主显示器 work area 自适应计算（上限与屏幕可用空间取小值），`maxWidth=1600 / maxHeight=1100`（均为 logical px）。
 - **全屏被全局禁用**：`tauri.conf.json` 初始 `fullscreen: false`；macOS 端在 `lib.rs` 的 `disable_macos_fullscreen` 里清 `FullScreenPrimary` / 加 `FullScreenNone`，绿按钮降级为 zoom。**不要**再加"进入全屏"菜单项或调 `set_fullscreen(true)`。
 - **Drag region 分布**（必读，否则只剩侧边栏一小块能拖）：
   - 侧边栏顶部 `h-8 shrink-0 data-tauri-drag-region`（240×32）。
@@ -266,6 +266,9 @@ src-tauri/
 - **Dev 模式跳过 `check()`**：`import.meta.env.DEV` 一律不调，pubkey 未配 + `latest.json` 未发布时 Rust 侧会打 ERROR 污染日志。托盘"检查更新"仍可手动触发。
 - **macOS 签名/公证 Secrets** 复用 OpenLoaf 仓库命名（`MAC_CER_BASE64` / `MAC_CER_PASSWORD` / `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`），CI 内映射成 Tauri 认的变量名。Secrets 为空时 tauri-action 自动跳签名。证书每年到期需重新导出 `.p12` 更新 `MAC_CER_BASE64`。
 - **Hardened Runtime entitlements**（`src-tauri/entitlements.plist`）已开 `network.client / device.audio-input / automation.apple-events / cs.allow-jit / allow-unsigned-executable-memory / disable-library-validation`，分别为 STT / cpal / enigo / WKWebView / rdev fork / 动态加载兜底。
+
+### Windows NSIS 安装包国际化
+- NSIS 语言列表在 `tauri.conf.json` 的 `bundle.windows.nsis.languages`，与应用内 i18n 三语对齐。NSIS 启动时自动匹配 Windows 系统 UI 语言，无需用户手动选择；未命中则 fallback English。新增 i18n 语言时同步往此数组加对应 NSIS 语言名。
 
 ### Dialog 优先：设置 / 账户
 两者都用 Dialog，由 Layout 侧边栏底部图标按钮触发。**`SettingsContent.tsx` 是 Dialog 与 `/settings` 路由共享组件**，改设置只动一处。账户内容若未来变重再评估拆页。
