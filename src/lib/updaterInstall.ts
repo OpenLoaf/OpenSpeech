@@ -76,33 +76,41 @@ export async function installUpdateWithProgress(
 
   try {
     void logInfo(`[updater] ${source} install start → ${version}`);
-    await update.downloadAndInstall((event) => {
-      if (event.event === "Started") {
-        total = event.data.contentLength ?? 0;
-        downloaded = 0;
-        lastPercent = -1;
-        lastRenderAt = 0;
-        showProgress();
-      } else if (event.event === "Progress") {
-        downloaded += event.data.chunkLength;
-        // 每 1% 或每 200ms 刷新一次，避免 sonner 在每个 chunk 上重排
-        const now = Date.now();
-        const percent =
-          total > 0 ? Math.floor((downloaded / total) * 100) : -1;
-        if (percent !== lastPercent || now - lastRenderAt >= 200) {
-          lastPercent = percent;
-          lastRenderAt = now;
+    await update.downloadAndInstall(
+      (event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0;
+          downloaded = 0;
+          lastPercent = -1;
+          lastRenderAt = 0;
           showProgress();
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          // 每 1% 或每 200ms 刷新一次，避免 sonner 在每个 chunk 上重排
+          const now = Date.now();
+          const percent =
+            total > 0 ? Math.floor((downloaded / total) * 100) : -1;
+          if (percent !== lastPercent || now - lastRenderAt >= 200) {
+            lastPercent = percent;
+            lastRenderAt = now;
+            showProgress();
+          }
+        } else if (event.event === "Finished") {
+          toast.message(i18next.t("settings:about.install_finalizing"), {
+            id: toastId,
+            description: version,
+            duration: Infinity,
+          });
         }
-      } else if (event.event === "Finished") {
-        toast.message(i18next.t("settings:about.install_finalizing"), {
-          id: toastId,
-          description: version,
-          duration: Infinity,
-        });
-      }
-    });
+      },
+      // plugin-updater 内部 reqwest 没默认 read timeout，redirect / TLS hang 会让 download 永久卡死。
+      // 5 分钟够下完几十 MB；超时后 await 抛错走 catch，用户能看到失败 toast 而不是干瞪眼。
+      { timeout: 5 * 60 * 1000 },
+    );
     void logInfo(`[updater] ${source} downloadAndInstall returned`);
+    // plugin-updater 2.x 的 install 不会自动 relaunch（macOS 只 mv .app；Linux 只覆盖 AppImage），
+    // 不显式重启的话用户即使替换成功也仍在跑旧进程，下次手动重启才能感知到新版本。
+    await invoke("relaunch_app");
   } catch (e) {
     void logError(
       `[updater] ${source} install failed: ${String((e as Error)?.message ?? e)}`,

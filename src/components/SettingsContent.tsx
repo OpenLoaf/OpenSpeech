@@ -972,7 +972,7 @@ function AboutTab() {
         void logInfo(`[updater] about-page check found: ${upd.version}`);
         // 找到新版后用 toast.action 给用户「立即安装」按钮——之前只 toast.message
         // 干瞪眼，没有任何升级路径，用户必须手动去 GitHub 下 dmg。
-        // downloadAndInstall 在 macOS/Linux 会原地替换 + relaunch，UI 会消失。
+        // installUpdateWithProgress 内部下载完替换后会显式 relaunch_app，UI 会消失。
         toast.message(i18next.t("pages:layout.tray.update_found_title"), {
           description: upd.version,
           duration: 30_000,
