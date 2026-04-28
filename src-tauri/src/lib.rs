@@ -30,6 +30,7 @@ mod permissions;
 mod secrets;
 mod stt;
 mod transcribe;
+mod update_channel;
 
 // 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
 // close-requested: 关闭当前窗口的请求（红叉 / Cmd+W）。Onboarding 阶段会忽略，
@@ -670,6 +671,9 @@ pub fn run() {
             permissions::permission_open_settings,
             permissions::permission_reset_tcc,
             permissions::permission_reset_tcc_one,
+            update_channel::get_update_channel,
+            update_channel::set_update_channel,
+            update_channel::check_for_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
