@@ -17,6 +17,7 @@
 | [permissions.md](./permissions.md) | 各平台系统权限规则 |
 | [onboarding.md](./onboarding.md) | 首次启动向导 + 持久横条 |
 | [subscription.md](./subscription.md) | 订阅与计费规则 |
+| [speech-providers.md](./speech-providers.md) | 语音引擎 Provider 抽象规划（多服务商 / 开源适配器） |
 
 ## 术语
 

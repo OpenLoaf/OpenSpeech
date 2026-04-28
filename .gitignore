@@ -47,3 +47,9 @@ dist-ssr
 
 # 本地临时素材（icon 源图等）
 .tmp/
+
+# IDE local history（VS Code Local History 插件等本地快照）
+.history/
+
+# MCP server 本地配置（每位开发者可能不同，不入库）
+.mcp.json
