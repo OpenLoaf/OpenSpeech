@@ -924,9 +924,11 @@ function AccountTab() {
 
 function AboutTab() {
   const { t } = useTranslation("settings");
+  const { t: tFeedback } = useTranslation("feedback");
   const navigate = useNavigate();
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const openFeedback = useUIStore((s) => s.openFeedback);
   const [appVersion, setAppVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   // updateChannel 真源在 Rust 侧的 update-channel 文件，前端只缓存当前值用于 UI。
@@ -1077,6 +1079,18 @@ function AboutTab() {
           <Rocket className="size-3.5" />
           {t("about.rerun_onboarding")}
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            // feedback 弹窗与设置 Dialog 不并存——关掉设置再开反馈
+            setSettingsOpen(false);
+            openFeedback();
+          }}
+          className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+        >
+          <MessageSquare className="size-3.5" />
+          {tFeedback("menu_label")}
+        </button>
       </div>
 
       <SectionTitle>{t("section.third_party")}</SectionTitle>
@@ -1168,25 +1182,6 @@ export default function SettingsContent({
 }: { initialTab?: TabId } = {}) {
   const [tab, setTab] = useState<TabId>(initialTab);
   const tabs = useTabs();
-  const { t: tFeedback } = useTranslation("feedback");
-  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
-  const openFeedback = useUIStore((s) => s.openFeedback);
-
-  const subNavActions = useMemo<SubNavAction[]>(
-    () => [
-      {
-        id: "FEEDBACK",
-        label: tFeedback("menu_label"),
-        icon: MessageSquare,
-        onClick: () => {
-          // 反馈弹窗与设置 Dialog 不并存——关掉设置再开反馈，避免两层 modal 叠在一起。
-          setSettingsOpen(false);
-          openFeedback();
-        },
-      },
-    ],
-    [tFeedback, setSettingsOpen, openFeedback],
-  );
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col md:flex-row">
@@ -1197,7 +1192,7 @@ export default function SettingsContent({
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <SubNav tabs={tabs} active={tab} onChange={setTab} actions={subNavActions} />
+        <SubNav tabs={tabs} active={tab} onChange={setTab} />
       </motion.aside>
 
       {/* Right: tab content — 独立滚动；不再额外嵌套框，避免 Dialog 内 surface 半透明叠加造成的视觉模糊 */}
