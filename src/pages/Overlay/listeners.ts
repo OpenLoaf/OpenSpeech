@@ -47,7 +47,7 @@ export function useOverlayListeners(handlers: OverlayHandlers) {
     const pending: Promise<UnlistenFn>[] = [];
 
     pending.push(
-      listen<FsmPayload>("openspeech://overlay-fsm", (e) => {
+      listen<FsmPayload>("openspeech://recording-phase", (e) => {
         if (alive) handlersRef.current.onFsm(e.payload);
       }),
     );

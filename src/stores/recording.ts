@@ -3,6 +3,7 @@ import { emit, emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
+import { toast } from "sonner";
 import i18n from "@/i18n";
 import type { BindingId, HotkeyBinding } from "@/lib/hotkey";
 import { useSettingsStore, type AsrSegmentMode } from "@/stores/settings";
@@ -82,6 +83,11 @@ const getEffectiveSegmentMode = (): AsrSegmentMode =>
   useSettingsStore.getState().general.asrSegmentMode;
 
 const PREPARING_MS = 300;
+// 录音净时长 < MIN_RECORD_MS 视为"没说出有效内容"——直接丢弃，不转录、不保存
+// WAV、不写历史。覆盖快速双击误触 + "按了一下就改主意"两类。
+// 阈值 = PREPARING_MS（流准备）+ 1000（最少说话时长）
+const MIN_RECORD_MS = 1000;
+const TOO_SHORT_TOTAL_MS = PREPARING_MS + MIN_RECORD_MS;
 
 // error 态最长停留时长——超过后自动回 idle，避免悬浮条因用户没注意到错误而
 // 永久挂在屏幕上。Toast (2s) 提示先消失，再多给约 2s 让用户读 pill 上的错误
@@ -378,6 +384,69 @@ const discardRecording = () => {
   resetIncrementalInject();
 };
 
+// preflight：进入 preparing 之前同步检查 (1) 麦克风权限 (2) 至少有一个输入设备。
+// 失败时返回 reason，跳过 preparing 状态直接 toast，避免"按了快捷键 → 进入 preparing
+// flicker → 100ms 后失败 toast"的卡顿体验。
+type PreflightResult = { ok: true } | { ok: false; reason: string };
+const preflightMic = async (): Promise<PreflightResult> => {
+  try {
+    const status = await invoke<string>("permission_check_microphone");
+    if (status !== "granted") {
+      return { ok: false, reason: i18n.t("overlay:error.preflight_permission_denied") };
+    }
+  } catch (e) {
+    console.warn("[recording] preflight: permission check threw, assume granted", e);
+  }
+  try {
+    const devices = await invoke<{ name: string; is_default: boolean }[]>(
+      "audio_list_input_devices",
+    );
+    if (!devices || devices.length === 0) {
+      return { ok: false, reason: i18n.t("overlay:error.preflight_no_device") };
+    }
+  } catch (e) {
+    console.warn("[recording] preflight: device list threw", e);
+    return { ok: false, reason: i18n.t("overlay:error.preflight_no_device") };
+  }
+  return { ok: true };
+};
+
+// 中止录音 = 保存音频文件到历史，但跳过转录。区别于 discardRecording（什么都不留）。
+// ESC 双击 / X 按钮触发；调用方负责把 FSM 设回 idle 与 stopMic。
+// 异步：包含一次 stopRecordingAndSave + history.add，平均 50~100ms，不阻塞 FSM 切回 idle。
+const abortAndSaveHistory = async (): Promise<void> => {
+  if (!IS_MAIN_WINDOW) return;
+  console.log("[recording] abort: saving audio without transcription");
+  // stt 直接 cancel，不等结果
+  void cancelSttSession();
+  resetIncrementalInject();
+  let rec: RecordingResult | null = null;
+  try {
+    rec = await stopRecordingAndSave();
+  } catch (e) {
+    // 没有活跃 session（例：用户连按导致重复 abort）→ 静默；其他错误也只 log 不打扰
+    console.warn("[recording] abort: stopRecordingAndSave failed:", e);
+  }
+  if (rec) {
+    try {
+      await useHistoryStore.getState().add({
+        type: "dictation",
+        text: i18n.t("overlay:transcript.aborted_placeholder"),
+        status: "cancelled",
+        duration_ms: rec.duration_ms,
+        audio_path: rec.audio_path,
+      });
+    } catch (e) {
+      console.warn("[recording] abort: history.add failed:", e);
+    }
+  }
+  toast.info(i18n.t("overlay:toast.aborted_saved.title"), {
+    description: rec
+      ? i18n.t("overlay:toast.aborted_saved.description")
+      : undefined,
+  });
+};
+
 // 听写开始 / 结束的提示音——Web Audio 即时合成，零素材依赖。
 // 开始：上行双音（880→1320Hz），结束：单声中音（660Hz）。
 // AudioContext lazy 初始化；macOS WKWebView / Windows WebView2 在桌面壳内
@@ -452,54 +521,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       set({ startedListening: true });
       console.log("[recording] initListeners: attaching listeners");
 
-      // overlay 是镜像窗口：不跑独立状态机（hidden 期间 webview JS 会被
-      // 系统 throttle，状态推进不可靠），改由主窗 FSM 通过 emitTo 向 overlay
-      // 单向广播；按钮交互通过 emitTo('main', ...) 反向转发。
+      // overlay 不再调用 initListeners——main.tsx 的 overlay 分支只 sync i18n，
+      // overlay 状态机由 OverlayPage 内的 useOverlayMachine + useOverlayListeners
+      // 自管。这里 IS_MAIN_WINDOW 守卫保留作为防御性检查（HMR / 误用兜底）。
       if (!IS_MAIN_WINDOW) {
-        const um1 = await listen<{
-          state: RecordingState;
-          activeId: BindingId | null;
-          errorMessage: string | null;
-          recordingId: string | null;
-          liveTranscript: string;
-        }>("openspeech://overlay-fsm", (evt) => {
-          const p = evt.payload;
-          set({
-            state: p.state,
-            activeId: p.activeId,
-            errorMessage: p.errorMessage,
-            recordingId: p.recordingId,
-            liveTranscript: p.liveTranscript,
-          });
-        });
-
-        // audio-level 仍直接广播给 overlay（推进波形）；mirror 同时不再发
-        // audioLevels 字段，避免 20Hz 跨窗口 IPC 浪费。
-        let levelTickCount = 0;
-        const um2 = await listen<number>(
-          "openspeech://audio-level",
-          (evt) => {
-            const v = Math.max(0, Math.min(1, Number(evt.payload) || 0));
-            levelTickCount += 1;
-            if (levelTickCount % 20 === 0) {
-              console.log(
-                "[overlay] audio-level tick",
-                levelTickCount,
-                "v=",
-                v.toFixed(3),
-              );
-            }
-            set((s) => ({
-              audioLevels: [...s.audioLevels.slice(1), v],
-            }));
-          },
-        );
-
-        unlistens.push(um1, um2);
-        console.log("[overlay] mirror listeners attached");
-        // 通知主窗"overlay 已就绪"——主窗收到后会立即把当前 FSM 快照重发一份。
-        // 解决 boot race：overlay 挂监听器之前主窗已发过的状态变化不会丢。
-        void emit("openspeech://overlay-ready");
+        console.log("[recording] non-main window: skip initListeners");
         return;
       }
 
@@ -577,7 +603,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         });
         if (snap === prevSnapshot) return;
         prevSnapshot = snap;
-        void emitTo("overlay", "openspeech://overlay-fsm", {
+        // 全局广播 recording-phase：所有 webview 都能消费，overlay listeners.ts
+        // 是当前唯一订阅者，但未来 Live 面板、调试 / 监控工具可以共用同一个事件。
+        void emit("openspeech://recording-phase", {
           state: s.state,
           activeId: s.activeId,
           errorMessage: s.errorMessage,
@@ -602,23 +630,26 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       );
 
       // overlay 启动握手：overlay 任意时间启动（重启 / HMR / 第一次加载）
-      // 都会广播 overlay-ready，主窗收到后立即重发当前 FSM 快照，避免 overlay
-      // 监听器挂上之前的状态变化丢失。
+      // 都会广播 overlay-ready，主窗收到后立即重发一次 recording-phase，避免
+      // overlay 监听器挂上之前的状态变化丢失。
       const ur = await listen("openspeech://overlay-ready", () => {
         const s = get();
-        void emitTo("overlay", "openspeech://overlay-fsm", {
+        void emit("openspeech://recording-phase", {
           state: s.state,
           activeId: s.activeId,
           errorMessage: s.errorMessage,
           recordingId: s.recordingId,
           liveTranscript: s.liveTranscript,
         });
-        console.log("[recording] overlay-ready → resent FSM snapshot");
+        console.log("[recording] overlay-ready → resent recording-phase snapshot");
       });
       unlistens.push(ua, ur);
 
       const u1 = await listen<HotkeyEvent>("openspeech://hotkey", async (evt) => {
-        console.log("[recording] event received:", evt.payload);
+        console.log("[recording] event received:", evt.payload, {
+          curState: get().state,
+          curActiveId: get().activeId,
+        });
         const { id, phase } = evt.payload;
         const now = performance.now();
         const cur = get();
@@ -635,6 +666,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           ) {
             const duration = now - cur.lastPressAt;
             if (duration < PREPARING_MS) {
+              console.log(
+                "[recording] toggle: quick double-tap < PREPARING_MS, discard",
+                { duration },
+              );
               discardRecording();
               stopMic();
               set({
@@ -646,6 +681,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               });
               return;
             }
+            console.log("[recording] toggle: stopping → transcribing", {
+              duration,
+            });
             // 正常结束：停录音 → 写 history → transcribing 占位 800ms → idle。
             // injecting 中间态原本是给 ✓ 反馈用的 200ms padding，✓ 已移除，
             // 多一帧空白 state 没意义，直接跳过。
@@ -666,7 +704,17 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
 
           // Transcribing / injecting 等中间态忽略新的触发（见 voice-input-flow.md）
-          if (cur.state !== "idle" && cur.state !== "error") return;
+          if (cur.state !== "idle" && cur.state !== "error") {
+            console.warn(
+              "[recording] press IGNORED: state not idle/error and activeId mismatch",
+              {
+                pressed_id: id,
+                cur_state: cur.state,
+                cur_activeId: cur.activeId,
+              },
+            );
+            return;
+          }
 
           // Gate：转写后端必须至少一条可用，否则录了一段没人转的废录音是浪费。
           //   saasReady = 已登录 OpenLoaf（默认 dictationSource=SAAS 走云端）
@@ -766,6 +814,19 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                 // 命令本身抛错（极少见，比如未注册 invoke）只打日志，不打扰用户。
                 console.warn("[recording] health check invoke failed:", e);
               });
+          }
+
+          // preflight：mic 权限 / 设备列表预检；失败时不进入 preparing，避免
+          // "按键 → preparing flicker → 100ms 后失败 toast"的闪烁体验。
+          const pre = await preflightMic();
+          if (!pre.ok) {
+            console.warn("[recording] preflight failed:", pre.reason);
+            notifyOverlay(
+              "error",
+              i18n.t("overlay:toast.preflight_failed.title"),
+              { description: pre.reason },
+            );
+            return;
           }
 
           const recordingId = newId();
@@ -937,7 +998,13 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         clearEscTimers();
         escFirstAt = 0;
         void emitTo("overlay", "openspeech://esc-disarmed", null);
-        discardRecording();
+        // preparing/recording 时保存音频到历史（用户语义：取消转录但留下录音）；
+        // transcribing 时音频已落盘 + stt 在跑，只丢 stt 结果即可。
+        if (s === "preparing" || s === "recording") {
+          void abortAndSaveHistory();
+        } else {
+          discardRecording();
+        }
         stopMic();
         set({
           state: "idle",
@@ -974,12 +1041,17 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           console.log("[recording] Esc #1 → pending", { state: s });
           escPendingTimer = window.setTimeout(() => {
             escPendingTimer = null;
-            // 0.5s 内没有第二次 ESC → 切到 EscPrompt：弹提示 + 黄闪。
+            // 0.5s 内没有第二次 ESC → 切到 EscPrompt：先标 X 按钮 armed，再弹
+            // 提示。两步并发到达 overlay 时 reducer 都能正确处理，但顺序确保：
+            // 即便 toast 略迟，X 按钮的描边变化也已经先到，没有"先红一下再变黄"
+            // 的视觉错觉。
             console.log("[recording] Esc pending timeout → prompt");
-            notifyOverlay("warning", i18n.t("overlay:toast.esc_arm.title"), {
+            void emitTo("overlay", "openspeech://esc-armed", null);
+            // info 风格：te-light-gray 描边 + 白字，与 te-accent（黄）/ 任何
+            // 错误（红）风格都拉开距离，避免被误读为"录音条出错了"。
+            notifyOverlay("info", i18n.t("overlay:toast.esc_arm.title"), {
               durationMs: ESC_PROMPT_MS,
             });
-            void emitTo("overlay", "openspeech://esc-armed", null);
             escPromptTimer = window.setTimeout(() => {
               escPromptTimer = null;
               escFirstAt = 0;
@@ -1028,7 +1100,12 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     },
 
     simulateCancel: () => {
-      discardRecording();
+      const cur = get();
+      if (cur.state === "preparing" || cur.state === "recording") {
+        void abortAndSaveHistory();
+      } else {
+        discardRecording();
+      }
       stopMic();
       set({
         state: "idle",

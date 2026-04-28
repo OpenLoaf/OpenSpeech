@@ -2,9 +2,13 @@ import SectionLabel from "../components/SectionLabel";
 
 export default function CTASection() {
   return (
-    <section className="relative h-screen w-full bg-te-bg">
+    <section
+      data-promo-section
+      style={{ position: "relative" }}
+      className="h-screen w-full bg-te-bg"
+    >
       <div className="flex h-full w-full flex-col items-center justify-center gap-8 px-8 text-center">
-        <SectionLabel index="06" title="DOWNLOAD" />
+        <SectionLabel index="04" title="DOWNLOAD" />
 
         <img
           src="/logo-write.png"

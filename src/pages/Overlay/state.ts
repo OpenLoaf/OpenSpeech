@@ -2,8 +2,9 @@ import { useEffect, useReducer, useRef } from "react";
 import type { RecordingState } from "@/stores/recording";
 
 // 悬浮条 UI 状态机：单一 reducer + 集中 timer，所有副作用集中在 useOverlayMachine 内。
-// B-Phase 1：mainState 仍由主窗 emitTo("overlay","overlay-fsm") 镜像；toast / escArmed
-// 子状态由 reducer 自治，timer 由 hook 管理（state enter 启 / state exit 清）。
+// 输入 main 字段来自全局广播 `openspeech://recording-phase`（主窗 FSM 每次状态变化
+// 时 emit），overlay 不依赖任何"被点对点投递"的 mirror 事件——同一个广播 main /
+// overlay / 未来的 Live 面板都能消费。toast / escArmed 子状态由 reducer 自治。
 
 export type ToastKind = "error" | "warning" | "info";
 export type ToastActionKey =

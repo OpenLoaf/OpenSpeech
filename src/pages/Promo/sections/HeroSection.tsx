@@ -16,37 +16,45 @@ export default function HeroSection() {
   const cursorOpacity = useTransform(scrollYProgress, [0.7, 0.75], [0, 1]);
 
   return (
-    <section ref={ref} className="relative h-[200vh] w-full">
+    <section
+      ref={ref}
+      data-promo-section
+      style={{ position: "relative" }}
+      className="h-[150vh] w-full"
+    >
       <div className="sticky top-0 flex h-screen w-full items-center justify-center overflow-hidden">
-        <SectionLabel index="00" title="HERO" />
+        <SectionLabel index="01" title="HERO" />
         <BackgroundWaveform progress={scrollYProgress} />
 
-        <div className="relative flex flex-col items-center gap-8 px-8 text-center">
-          <motion.div className="relative" style={{ opacity: slowOpacity }}>
-            <h1 className="font-mono text-5xl font-bold uppercase tracking-tight text-te-fg sm:text-7xl md:text-8xl">
-              Typing is slow.
-            </h1>
+        <div className="relative flex flex-col items-center gap-6 px-8 text-center">
+          <div className="relative grid">
             <motion.div
-              className="absolute left-0 top-1/2 h-[6px] -translate-y-1/2 bg-te-accent"
-              style={{ width: strikeWidth }}
-            />
-          </motion.div>
+              className="relative col-start-1 row-start-1"
+              style={{ opacity: slowOpacity }}
+            >
+              <h1 className="font-mono text-5xl font-bold uppercase tracking-tight text-te-fg sm:text-7xl md:text-8xl">
+                Typing is slow.
+              </h1>
+              <motion.div
+                className="absolute left-0 top-1/2 h-[6px] -translate-y-1/2 bg-te-accent"
+                style={{ width: strikeWidth }}
+              />
+            </motion.div>
 
-          <motion.h1
-            className="absolute font-mono text-5xl font-bold uppercase tracking-tight text-te-fg sm:text-7xl md:text-8xl"
-            style={{ opacity: speakOpacity, y: speakY }}
-          >
-            Just speak.
-            <motion.span
-              className="ml-2 inline-block h-[0.9em] w-[0.5em] translate-y-[0.1em] bg-te-accent"
-              style={{ opacity: cursorOpacity }}
-              animate={{ opacity: [1, 1, 0, 0] }}
-              transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-            />
-          </motion.h1>
+            <motion.h1
+              className="col-start-1 row-start-1 font-mono text-5xl font-bold uppercase tracking-tight text-te-fg sm:text-7xl md:text-8xl"
+              style={{ opacity: speakOpacity, y: speakY }}
+            >
+              Just speak.
+              <motion.span
+                className="ml-2 inline-block h-[0.85em] w-[0.5em] translate-y-[0.05em] bg-te-accent align-middle"
+                style={{ opacity: cursorOpacity }}
+              />
+            </motion.h1>
+          </div>
 
           <motion.p
-            className="mt-32 max-w-md text-xs uppercase tracking-[0.3em] text-te-light-gray"
+            className="mt-4 max-w-md text-xs uppercase tracking-[0.3em] text-te-light-gray"
             style={{ opacity: speakOpacity }}
           >
             OpenSpeech · cross-platform voice typing

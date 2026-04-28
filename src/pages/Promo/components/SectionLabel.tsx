@@ -7,6 +7,7 @@ type Props = {
 export default function SectionLabel({ index, title, className }: Props) {
   return (
     <div
+      data-promo-hide-mobile
       className={
         "absolute left-8 top-8 z-20 flex items-center gap-3 text-[10px] uppercase tracking-[0.3em] text-te-light-gray " +
         (className ?? "")

@@ -414,31 +414,81 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                     Err(_) => return, // poisoned
                 };
 
-                // 状态-OS 不一致检测：rdev 在 cmd-tab / 空间切换 / CGEventTap 短暂
-                // 掉线期会偶发漏发事件（典型是漏 release）。残留的 active_ids 让
-                // "下一次按下"被判为 was_active && is_active，无 transition、不
-                // emit pressed —— 用户感知"必须按两次才有反应"。靠 IDLE_RESET=30s
-                // 兜底无效（cmd-tab 间隔几秒就绕过了）。
+                // rdev 在 enigo 合成事件 / cmd-tab / 空间切换 / CGEventTap 短暂掉线
+                // 期间会丢事件。两类不一致信号 + 各自的恢复策略：
                 //
-                // 两个强信号：
-                //   - KeyPress 但 mod 已在 pressed：macOS 修饰键无 auto-repeat，
-                //     重复 press 必然意味着上次 release 丢了。
-                //   - KeyRelease 但 mod 不在 pressed：漏 press。
-                // 两种都先清空 active_ids，让本次事件按"全新"匹配，必能 emit
-                // 出正确的 pressed/released。pressed 集合按本次事件的真实方向更新。
-                let inconsistent = if is_press {
-                    s.pressed.contains(&m)
-                } else {
-                    !s.pressed.contains(&m)
-                };
-                if inconsistent {
+                //   1) ghost release（release 但 pressed 不含此键）—— 漏了 press。
+                //   2) ghost press（press 但 pressed 已含此键）—— 漏了 release。
+                //
+                // 一旦检测到任意 ghost，强行 reset：清空 pressed（甩掉 phantom
+                // modifier，例如 enigo 注入 Cmd-V 后没回收的 Cmd），仅保留本次事件的
+                // 键。然后按 subset 匹配 bindings——任意 mods ⊆ pressed 的 binding
+                // 都算命中，避免"用户按 Fn 但 pressed=={Meta,Fn} 因 phantom 卡死"
+                // 这类完全相等比较的失败。
+                //
+                // ghost release 还会额外合成"丢失的 press"：先 insert(m)、按 subset
+                // 算 virtual_matching、把还没 active 的 binding 写进 active_ids 当作
+                // newly_pressed 发出去；然后走正常 release 路径让 active_ids 收尾发
+                // newly_released。一次 ghost release 等价一次完整 tap。
+                let mut newly_pressed: Vec<(BindingId, String)> = Vec::new();
+                let mut newly_released: Vec<(BindingId, String)> = Vec::new();
+
+                let ghost_release = !is_press && !s.pressed.contains(&m);
+                let ghost_press = is_press && s.pressed.contains(&m);
+                let is_ghost = ghost_release || ghost_press;
+
+                if is_ghost {
                     log::warn!(
-                        "[modifier_only] state divergence on {key:?} is_press={is_press} \
-                         (pressed={:?}, active={:?}) → reset active_ids",
+                        "[modifier_only] ghost {phase} on {key:?} → reset pressed/active \
+                         (was pressed={:?}, active={:?})",
                         s.pressed,
-                        s.active_ids
+                        s.active_ids,
+                        phase = if ghost_press { "press" } else { "release" },
                     );
+                    s.pressed.clear();
                     s.active_ids.clear();
+                }
+
+                if ghost_release {
+                    // 合成"丢失的 press"：临时把 m 当作刚刚按下，按 subset 匹配
+                    // bindings，把命中的 id 都算 newly_pressed。
+                    s.pressed.insert(m);
+                    let virtual_matching: HashSet<BindingId> = s
+                        .bindings
+                        .iter()
+                        .filter(|b| !b.mods.is_empty() && b.mods.is_subset(&s.pressed))
+                        .map(|b| b.id)
+                        .collect();
+                    let to_synth: Vec<(BindingId, String)> = s
+                        .bindings
+                        .iter()
+                        .filter(|b| {
+                            virtual_matching.contains(&b.id)
+                                && !s.active_ids.contains(&b.id)
+                        })
+                        .map(|b| (b.id, b.id_str.clone()))
+                        .collect();
+                    for (id, _) in &to_synth {
+                        s.active_ids.insert(*id);
+                    }
+                    let synth_count = to_synth.len();
+                    newly_pressed.extend(to_synth);
+                    let bindings_dump: Vec<String> = s
+                        .bindings
+                        .iter()
+                        .map(|b| format!("{}:{:?}", b.id_str, b.mods))
+                        .collect();
+                    log::warn!(
+                        "[modifier_only] ghost release recovery on {key:?} → \
+                         synthesized {synth_count} press (pressed={:?}, active={:?}, \
+                         bindings_count={}, bindings=[{}])",
+                        s.pressed,
+                        s.active_ids,
+                        bindings_dump.len(),
+                        bindings_dump.join(", "),
+                    );
+                    // pressed.insert 已经做了，跳过下面的"正常 pressed 更新"——
+                    // 直接做 release：从 pressed 移除让 release 路径正常执行。
                 }
 
                 if is_press {
@@ -447,15 +497,14 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                     s.pressed.remove(&m);
                 }
 
-                let mut matching: HashSet<BindingId> = HashSet::new();
-                for b in &s.bindings {
-                    if b.mods == s.pressed {
-                        matching.insert(b.id);
-                    }
-                }
-
-                let mut newly_pressed: Vec<(BindingId, String)> = Vec::new();
-                let mut newly_released: Vec<(BindingId, String)> = Vec::new();
+                // 正常路径用 exact match 保留"修饰键集合完全相等"的语义；ghost 路径
+                // 已经把 pressed 清干净，subset 与 exact 等价。
+                let matching: HashSet<BindingId> = s
+                    .bindings
+                    .iter()
+                    .filter(|b| b.mods == s.pressed)
+                    .map(|b| b.id)
+                    .collect();
 
                 for b in &s.bindings {
                     let was_active = s.active_ids.contains(&b.id);

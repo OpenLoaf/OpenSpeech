@@ -79,10 +79,18 @@
     },
     "esc_arm": {
       "title": "Press ESC again to cancel"
+    },
+    "preflight_failed": {
+      "title": "Can't start recording"
+    },
+    "aborted_saved": {
+      "title": "Cancelled, not transcribed",
+      "description": "Recording saved to history"
     }
   },
   "transcript": {
-    "placeholder": "(Transcript unavailable)"
+    "placeholder": "(Transcript unavailable)",
+    "aborted_placeholder": "(Cancelled, not transcribed)"
   },
   "error": {
     "stt_not_authenticated": "Not signed in to OpenLoaf",
@@ -91,6 +99,8 @@
     "stt_mic_not_ready": "Microphone not ready",
     "stt_network": "Network unreachable",
     "register_failed": "Registration failed: {{id}} ({{error}})",
-    "sync_hotkey_failed": "Failed to sync hotkeys to Rust: {{error}}"
+    "sync_hotkey_failed": "Failed to sync hotkeys to Rust: {{error}}",
+    "preflight_permission_denied": "Microphone permission not granted",
+    "preflight_no_device": "No microphone available"
   }
 }

@@ -79,10 +79,18 @@
     },
     "esc_arm": {
       "title": "再次按 ESC 取消"
+    },
+    "preflight_failed": {
+      "title": "無法開始錄音"
+    },
+    "aborted_saved": {
+      "title": "已取消，未轉寫",
+      "description": "錄音已儲存到歷史"
     }
   },
   "transcript": {
-    "placeholder": "（未能取得轉寫結果）"
+    "placeholder": "（未能取得轉寫結果）",
+    "aborted_placeholder": "（已取消，未轉寫）"
   },
   "error": {
     "stt_not_authenticated": "尚未登入 OpenLoaf",
@@ -91,6 +99,8 @@
     "stt_mic_not_ready": "麥克風尚未就緒",
     "stt_network": "網路不可達",
     "register_failed": "註冊失敗：{{id}}（{{error}}）",
-    "sync_hotkey_failed": "同步快捷鍵到 Rust 失敗：{{error}}"
+    "sync_hotkey_failed": "同步快捷鍵到 Rust 失敗：{{error}}",
+    "preflight_permission_denied": "未授予麥克風權限",
+    "preflight_no_device": "未找到可用麥克風"
   }
 }

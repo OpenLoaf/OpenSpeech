@@ -79,10 +79,18 @@
     },
     "esc_arm": {
       "title": "再次按 ESC 取消"
+    },
+    "preflight_failed": {
+      "title": "无法开始录音"
+    },
+    "aborted_saved": {
+      "title": "已取消，未转录",
+      "description": "录音已保存到历史"
     }
   },
   "transcript": {
-    "placeholder": "（未能获取转写结果）"
+    "placeholder": "（未能获取转写结果）",
+    "aborted_placeholder": "（已取消，未转录）"
   },
   "error": {
     "stt_not_authenticated": "未登录 OpenLoaf",
@@ -91,6 +99,8 @@
     "stt_mic_not_ready": "麦克风未就绪",
     "stt_network": "网络不可达",
     "register_failed": "注册失败：{{id}}（{{error}}）",
-    "sync_hotkey_failed": "同步快捷键到 Rust 失败：{{error}}"
+    "sync_hotkey_failed": "同步快捷键到 Rust 失败：{{error}}",
+    "preflight_permission_denied": "未授予麦克风权限",
+    "preflight_no_device": "未找到可用麦克风"
   }
 }
