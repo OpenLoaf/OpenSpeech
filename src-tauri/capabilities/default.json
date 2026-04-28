@@ -15,6 +15,7 @@
     "clipboard-manager:allow-write-text",
     "log:default",
     "dialog:allow-save",
+    "mcp-bridge:default",
     {
       "identifier": "sql:allow-load",
       "allow": [{ "url": "sqlite:openspeech.db" }]

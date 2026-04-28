@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emit, emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
@@ -497,6 +497,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
 
         unlistens.push(um1, um2);
         console.log("[overlay] mirror listeners attached");
+        // 通知主窗"overlay 已就绪"——主窗收到后会立即把当前 FSM 快照重发一份。
+        // 解决 boot race：overlay 挂监听器之前主窗已发过的状态变化不会丢。
+        void emit("openspeech://overlay-ready");
         return;
       }
 
@@ -536,7 +539,16 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           s.state === "recording" ||
           s.state === "transcribing";
         if (!wasActive && isActive) escCaptureStart();
-        else if (wasActive && !isActive) escCaptureStop();
+        else if (wasActive && !isActive) {
+          escCaptureStop();
+          // 离开 active 态（提交 / 完成 / 别处取消）时同步清掉 ESC 状态：
+          // 否则 timer 仍在跑，下一次进入录音的瞬间可能误触发 disarm/cancel。
+          if (escFirstAt > 0 || escPendingTimer !== null || escPromptTimer !== null) {
+            clearEscTimers();
+            escFirstAt = 0;
+            void emitTo("overlay", "openspeech://esc-disarmed", null);
+          }
+        }
 
         prevState = s.state;
 
@@ -588,7 +600,22 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
         },
       );
-      unlistens.push(ua);
+
+      // overlay 启动握手：overlay 任意时间启动（重启 / HMR / 第一次加载）
+      // 都会广播 overlay-ready，主窗收到后立即重发当前 FSM 快照，避免 overlay
+      // 监听器挂上之前的状态变化丢失。
+      const ur = await listen("openspeech://overlay-ready", () => {
+        const s = get();
+        void emitTo("overlay", "openspeech://overlay-fsm", {
+          state: s.state,
+          activeId: s.activeId,
+          errorMessage: s.errorMessage,
+          recordingId: s.recordingId,
+          liveTranscript: s.liveTranscript,
+        });
+        console.log("[recording] overlay-ready → resent FSM snapshot");
+      });
+      unlistens.push(ua, ur);
 
       const u1 = await listen<HotkeyEvent>("openspeech://hotkey", async (evt) => {
         console.log("[recording] event received:", evt.payload);
@@ -879,50 +906,87 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       );
 
       // Esc 取消——走 Rust modifier_only 的预览通道（`openspeech://key-preview`），
-      // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc；见 docs/hotkeys.md
-      // 的 "Esc 处理 · 状态化"）。状态门控：只有当录音 / 转写流程活跃时才响应，
-      // idle / injecting 一律忽略——injecting 几十毫秒来不及撤回，ignore。
+      // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc）。状态门控：仅当录音 /
+      // 转写流程活跃时响应，idle / injecting 忽略。
       //
-      // 双击确认：单次 ESC 不直接取消（避免在别的 app 里按 Esc 误触把录音作废）。
-      // 第一次 ESC 进入 ARM 窗口（仅记录时间戳，无视觉提示），第二次 ESC 在窗口期
-      // 内真正取消；窗口期由 ESC_CONFIRM_WINDOW_MS 控制，超时自动清 ARM。
-      const ESC_CONFIRM_WINDOW_MS = 1500;
-      let escArmedAt = 0;
-      const u8 = await listen<{ code: string; phase: "pressed" | "released" }>(
+      // 双段确认：
+      //   ESC#1 + Recording → EscPending（0.5s 静默窗口，不弹提示、不发 esc-armed）
+      //   ESC#2 在 0.5s 内 → 直接取消（用户已确认意图，不打扰）
+      //   0.5s 超时 → EscPrompt（弹"再按一下中止"提示 + esc-armed 黄闪 X 按钮，3s 自动 disarm）
+      //   ESC during EscPrompt → 取消
+      // 这样快速双击的用户不会被无谓的提示打扰；犹豫的用户会看到提示。
+      const ESC_PENDING_MS = 500;
+      const ESC_PROMPT_MS = 3000;
+      let escFirstAt = 0;
+      let escPendingTimer: number | null = null;
+      let escPromptTimer: number | null = null;
+
+      const clearEscTimers = () => {
+        if (escPendingTimer !== null) {
+          window.clearTimeout(escPendingTimer);
+          escPendingTimer = null;
+        }
+        if (escPromptTimer !== null) {
+          window.clearTimeout(escPromptTimer);
+          escPromptTimer = null;
+        }
+      };
+
+      const cancelByEsc = (s: RecordingState) => {
+        console.log("[recording] Esc confirmed, cancelling", { state: s });
+        clearEscTimers();
+        escFirstAt = 0;
+        void emitTo("overlay", "openspeech://esc-disarmed", null);
+        discardRecording();
+        stopMic();
+        set({
+          state: "idle",
+          activeId: null,
+          audioLevels: emptyLevels(),
+          recordingId: null,
+          liveTranscript: "",
+        });
+      };
+
+      const u8 = await listen<{
+        code: string;
+        phase: "pressed" | "released";
+        isRepeat?: boolean;
+      }>(
         "openspeech://key-preview",
         (evt) => {
           if (evt.payload.phase !== "pressed") return;
           if (evt.payload.code !== "Escape") return;
+          // macOS 长按 Esc 会以 ~30ms 间隔触发 KeyPress——is_repeat=true 必须丢弃。
+          if (evt.payload.isRepeat) return;
           const s = get().state;
           if (s === "idle" || s === "error" || s === "injecting") return;
-          const now = performance.now();
-          if (escArmedAt > 0 && now - escArmedAt <= ESC_CONFIRM_WINDOW_MS) {
-            console.log("[recording] Esc confirmed, cancelling", { state: s });
-            escArmedAt = 0;
-            void emitTo("overlay", "openspeech://esc-disarmed", null);
-            discardRecording();
-            stopMic();
-            set({
-              state: "idle",
-              activeId: null,
-              audioLevels: emptyLevels(),
-              recordingId: null,
-              liveTranscript: "",
-            });
+
+          // 已经 armed（任意阶段：pending 或 prompt）→ 第二次 ESC = 取消。
+          if (escFirstAt > 0) {
+            cancelByEsc(s);
             return;
           }
-          console.log("[recording] Esc armed, awaiting confirm", { state: s });
-          escArmedAt = now;
-          notifyOverlay("warning", i18n.t("overlay:toast.esc_arm.title"), {
-            durationMs: ESC_CONFIRM_WINDOW_MS,
-          });
-          void emitTo("overlay", "openspeech://esc-armed", null);
-          window.setTimeout(() => {
-            if (performance.now() - escArmedAt >= ESC_CONFIRM_WINDOW_MS) {
-              escArmedAt = 0;
+
+          // 第一次 ESC：进入 EscPending 静默窗口。0.5s 内的第二次 ESC 不会被这条
+          // 分支拦——它由上面 `escFirstAt > 0` 命中。
+          escFirstAt = performance.now();
+          console.log("[recording] Esc #1 → pending", { state: s });
+          escPendingTimer = window.setTimeout(() => {
+            escPendingTimer = null;
+            // 0.5s 内没有第二次 ESC → 切到 EscPrompt：弹提示 + 黄闪。
+            console.log("[recording] Esc pending timeout → prompt");
+            notifyOverlay("warning", i18n.t("overlay:toast.esc_arm.title"), {
+              durationMs: ESC_PROMPT_MS,
+            });
+            void emitTo("overlay", "openspeech://esc-armed", null);
+            escPromptTimer = window.setTimeout(() => {
+              escPromptTimer = null;
+              escFirstAt = 0;
               void emitTo("overlay", "openspeech://esc-disarmed", null);
-            }
-          }, ESC_CONFIRM_WINDOW_MS + 50);
+              console.log("[recording] Esc prompt timeout → disarmed");
+            }, ESC_PROMPT_MS);
+          }, ESC_PENDING_MS);
         },
       );
 
@@ -930,6 +994,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       console.log(
         "[recording] listeners attached (hotkey + register-failed + audio-level + asr-*)",
       );
+      // 主窗自身 listeners 全部就绪后也广播一次 overlay-ready ——overlay 已经
+      // 在更早时间发过的话，主窗那时还没挂 ur 听不到；这里反向重补一次让 overlay
+      // 也能从主窗触发的握手得到首份快照（互相兜底，至少一边会收到）。
+      void emit("openspeech://overlay-ready");
     },
 
     syncBindings: async (bindings) => {

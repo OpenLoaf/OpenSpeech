@@ -14,6 +14,7 @@ use tauri::{
     },
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_store::StoreExt;
 
 #[cfg(target_os = "macos")]
@@ -29,7 +30,6 @@ mod permissions;
 mod secrets;
 mod stt;
 mod transcribe;
-mod update_channel;
 
 // 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
 // close-requested: 关闭当前窗口的请求（红叉 / Cmd+W）。Onboarding 阶段会忽略，
@@ -42,9 +42,10 @@ const QUIT_REQUESTED_EVENT: &str = "openspeech://quit-requested";
 const TRAY_OPEN_HOME_EVENT: &str = "openspeech://tray-open-home";
 const TRAY_OPEN_SETTINGS_EVENT: &str = "openspeech://tray-open-settings";
 const TRAY_OPEN_DICTIONARY_EVENT: &str = "openspeech://tray-open-dictionary";
-const TRAY_OPEN_FEEDBACK_EVENT: &str = "openspeech://tray-open-feedback";
 const TRAY_CHECK_UPDATE_EVENT: &str = "openspeech://tray-check-update";
 const TRAY_SELECT_MIC_EVENT: &str = "openspeech://tray-select-mic";
+// 反馈入口 MVP 走邮件，未来迁到网站可改常量。
+const FEEDBACK_URL: &str = "mailto:feedback@openspeech.app";
 
 // 托盘菜单文案：Rust 不嵌 i18n，文案完全由前端按当前语言推过来。bootPromise 完成后
 // 前端 syncI18nFromSettings 会调用 update_tray_labels 一次；之后切语言再推。空槽位
@@ -419,6 +420,14 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init());
 
+    // MCP Bridge：dev-only，启 WebSocket :9223 让 Claude Code 等 AI 助手控制 webview。
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .bind_address("127.0.0.1")
+            .build(),
+    );
+
     // macOS 权限 plugin：暴露 request_microphone_permission /
     // request_accessibility_permission 等命令。crate 本身在 Cargo.toml 是
     // `[target.'cfg(target_os = "macos")'.dependencies]`，Linux / Windows
@@ -552,8 +561,7 @@ pub fn run() {
                     }
                     match id {
                         "tray::feedback" => {
-                            show_main_window(app);
-                            let _ = app.emit(TRAY_OPEN_FEEDBACK_EVENT, ());
+                            let _ = app.opener().open_url(FEEDBACK_URL, None::<&str>);
                         }
                         "tray::open_home" => {
                             show_main_window(app);
@@ -599,21 +607,12 @@ pub fn run() {
                 disable_macos_fullscreen(&window);
 
                 let app_handle = app.handle().clone();
-                window.on_window_event(move |event| match event {
-                    WindowEvent::CloseRequested { api, .. } => {
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
                         // 红叉 / Cmd+W（Window → Close）走这里；Cmd+Q 走 App Menu 的 quit_app。
                         api.prevent_close();
                         let _ = app_handle.emit(CLOSE_REQUESTED_EVENT, ());
                     }
-                    // 主窗口 focus 变化驱动悬浮录音条的物理显隐：录音流程进行中
-                    // （`overlay::DESIRED_VISIBLE == true`）下，主窗失焦才真正 show
-                    // overlay；主窗回到前台则 hide overlay，由 Home 的 Live 面板展示。
-                    WindowEvent::Focused(focused) => {
-                        if let Err(e) = overlay::on_main_focus_changed(&app_handle, *focused) {
-                            log::warn!("[overlay] focus handler failed: {e:?}");
-                        }
-                    }
-                    _ => {}
                 });
             }
 
@@ -671,9 +670,6 @@ pub fn run() {
             permissions::permission_open_settings,
             permissions::permission_reset_tcc,
             permissions::permission_reset_tcc_one,
-            update_channel::get_update_channel,
-            update_channel::set_update_channel,
-            update_channel::check_for_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

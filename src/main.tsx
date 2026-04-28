@@ -35,6 +35,12 @@ const WINDOW_LABEL = getCurrentWebviewWindow().label;
 const IS_OVERLAY = WINDOW_LABEL === "overlay";
 console.log("[boot] window label =", WINDOW_LABEL, "isOverlay =", IS_OVERLAY);
 
+// overlay 窗口本体 transparent，需要让 html/body 也是透明背景；否则 wry/webkit 默认
+// 白底会盖住 NSWindow 的透明属性。胶囊本体的 bg-te-bg 在 OverlayPage 内部容器上。
+if (IS_OVERLAY) {
+  document.documentElement.classList.add("overlay-window");
+}
+
 // 把 Rust 端 `log::info!/warn!/error!/debug!` 转发到 webview devtools console。
 // Rust 那侧已开启 Webview target；这里再 attach 一次让前端进程接收 + 渲染。
 // fire-and-forget，失败只是没日志，不影响业务。
@@ -52,12 +58,14 @@ const bootPromise = (async () => {
     // overlay 是独立 JS runtime —— i18n 初始语言走 navigator.language，常常跟用户
     // 在主窗设置里选的 interfaceLang 不一致（导致悬浮窗显示英文 / 主窗显示中文）。
     // 拉一次 settings 把语言对齐主窗，但不 init 其他重的 store。
-    console.log("[boot overlay] attaching listeners + syncing i18n");
+    // overlay 的状态机 / 监听器 / 波形数据流全部由 OverlayPage 自己（state.ts /
+    // listeners.ts / Waveform.tsx）在 mount 时挂载——main.tsx 这里不再调用
+    // useRecordingStore.initListeners()，避免重复订阅与时机错乱。
+    console.log("[boot overlay] syncing i18n only");
     await useSettingsStore.getState().init();
     void syncI18nFromSettings(
       useSettingsStore.getState().general.interfaceLang,
     );
-    await useRecordingStore.getState().initListeners();
     console.log("[boot overlay] ready");
     return;
   }

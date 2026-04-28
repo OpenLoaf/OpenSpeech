@@ -33,10 +33,37 @@ use crate::hotkey::{BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload};
 /// （macOS 上 Fn 键不会产生 DOM 事件，所以 DOM 监听器录不到）。
 pub const HOTKEY_RECORDING_EVENT: &str = "openspeech://hotkey-recording";
 
-/// 无条件的按键预览通道。**每次** rdev 收到 press/release 都会 emit，不参与 binding
-/// 匹配、不受录入模式影响。用途：让前端（Home 页）给 Fn 等 DOM 拿不到的键也能做
-/// 视觉反馈（按下时 Kbd 亮一下）。payload 与 RECORDING 事件同形。
+/// 按键预览通道——仅修饰键（Ctrl/Alt/Shift/Meta/Fn）和 Esc 会跨 IPC 边界。
+///
+/// **隐私收紧**（2026-04 改）：原先无条件 emit 每一次 press/release，意味着用户在
+/// 任何 app 里输入的字母 / 数字 / 中文都会经过 Rust → JS 的 IPC 序列化——尽管
+/// 我们没有写盘 / 上传，对隐私敏感用户和第三方审计来说这个 surface 不可接受。
+///
+/// 现在只 emit 我们真的会用的两类键：
+///   - 修饰键 + Fn：HotkeyPreview 给 DOM 拿不到的 Fn 键做视觉反馈
+///   - Esc：recording.ts 的双击确认取消 + overlay toast 关闭
+/// 字母 / 数字 / 标点 / 方向键 / 功能键等**不再越过进程边界**，rdev 回调里直接
+/// 丢弃。HotkeyField 录入模式仍走独立的 HOTKEY_RECORDING_EVENT（用户主动开启
+/// 时才全量），不受此过滤影响。
 pub const KEY_PREVIEW_EVENT: &str = "openspeech://key-preview";
+
+/// 决定一个 rdev key 是否可以越过 IPC。修饰键 + Fn + Esc 之外一律丢弃。
+fn should_emit_preview(key: Key) -> bool {
+    use Key::*;
+    matches!(
+        key,
+        ControlLeft
+            | ControlRight
+            | ShiftLeft
+            | ShiftRight
+            | Alt
+            | AltGr
+            | MetaLeft
+            | MetaRight
+            | Function
+            | Escape
+    )
+}
 
 /// 全局标志：前端进入录入态时 set true，退出时 set false。listen 线程每次
 /// callback 读一次（Relaxed 足够，无多线程一致性要求）。开启时 callback 只
@@ -52,6 +79,17 @@ pub fn set_recording(enabled: bool) {
 struct RecordingEvent {
     code: String,
     phase: &'static str, // "pressed" | "released"
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyPreviewEvent {
+    code: String,
+    phase: &'static str,
+    // macOS Esc 等非修饰键有 auto-repeat（~30ms 间隔），第二次 KeyPress 没有 release
+    // 介于其间。前端 ESC 双击窗口仅 500/1500ms，长按必触发误判。is_repeat=true 让前端
+    // 状态机直接丢弃 repeat 事件。修饰键无 auto-repeat，is_repeat 始终 false。
+    is_repeat: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -238,6 +276,10 @@ fn parse_binding_id(s: &str) -> Option<BindingId> {
 /// 后续重复触发（HMR / 用户操作）必须 short-circuit。
 static LISTEN_STARTED: AtomicBool = AtomicBool::new(false);
 
+/// Esc 当前是否处于物理 pressed 状态。macOS 长按 Esc 会触发连续 KeyPress（无 release
+/// 介于其间），靠这个标志计算 is_repeat 让前端能丢弃 auto-repeat 帧。
+static ESC_PRESSED: AtomicBool = AtomicBool::new(false);
+
 /// 创建空的 `SharedModifierOnlyState`，**不启动** rdev::listen 线程。在 setup
 /// 阶段调用，把空 state 注册到 Tauri Manager 让后续 `apply_bindings` 能安全
 /// no-op。真正的 listen 启动由 `start_listener` 做。
@@ -322,21 +364,41 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 }
             }
 
-            // 预览通道：无条件向前端发送每一个 press/release，让 Home 页给 Fn 等
-            // DOM 拿不到的键也能做视觉反馈。与录入 / binding 匹配完全独立。
-            let preview = RecordingEvent {
-                code: rdev_key_to_code(key),
-                phase: if is_press { "pressed" } else { "released" },
-            };
-            let _ = app_clone.emit(KEY_PREVIEW_EVENT, preview.clone());
-
             // 录入模式：额外 pass-through 给录入 UI（HotkeyField 用的），同时
             // short-circuit binding 匹配——否则录入时按下 Fn 会顺带触发原 dictate_ptt。
-            if RECORDING_ACTIVE.load(Ordering::Relaxed) {
-                if let Err(e) = app_clone.emit(HOTKEY_RECORDING_EVENT, preview) {
+            // 录入是用户主动开启的有限窗口，需要全量按键以让用户能为任意键设绑定，
+            // 所以这条通道不做过滤；KEY_PREVIEW 走过滤后的版本。
+            let recording = RECORDING_ACTIVE.load(Ordering::Relaxed);
+            if recording {
+                let evt = RecordingEvent {
+                    code: rdev_key_to_code(key),
+                    phase: if is_press { "pressed" } else { "released" },
+                };
+                if let Err(e) = app_clone.emit(HOTKEY_RECORDING_EVENT, evt) {
                     log::warn!("[modifier_only] emit recording failed: {e:?}");
                 }
                 return;
+            }
+
+            // 预览通道：仅修饰键 / Fn / Esc 跨 IPC，其余按键**不离开 Rust**。
+            // 见 KEY_PREVIEW_EVENT 注释（隐私收紧）。
+            if should_emit_preview(key) {
+                let is_repeat = if key == Key::Escape {
+                    if is_press {
+                        ESC_PRESSED.swap(true, Ordering::SeqCst)
+                    } else {
+                        ESC_PRESSED.store(false, Ordering::SeqCst);
+                        false
+                    }
+                } else {
+                    false
+                };
+                let preview = KeyPreviewEvent {
+                    code: rdev_key_to_code(key),
+                    phase: if is_press { "pressed" } else { "released" },
+                    is_repeat,
+                };
+                let _ = app_clone.emit(KEY_PREVIEW_EVENT, preview);
             }
 
             let Some(m) = rdev_key_to_mod(key) else {

@@ -185,6 +185,26 @@
     /* 桌面应用级外层严格不滚动，滚动由内部容器各自声明；避免窗口收窄时出现浏览器级滚动条 */
     overflow: hidden;
   }
+  /* overlay 窗口（label="overlay"，main.tsx 给 html 加 .overlay-window）：
+     透明背景必须从 NSWindow 一路传到 root 元素，胶囊 / 提示条之外的区域保持透明，
+     避免 hide 与 React 卸载时序错乱时露出实心矩形。 */
+  html.overlay-window,
+  html.overlay-window body,
+  html.overlay-window #root {
+    background: transparent !important;
+  }
+  /* Promo 公网页面：解锁桌面壳的 overflow:hidden + height:100%，恢复常规网页滚动。 */
+  html.promo-window,
+  html.promo-window body,
+  html.promo-window #root {
+    overflow: visible;
+    height: auto;
+    overscroll-behavior: auto;
+  }
+  html.promo-window body {
+    -webkit-user-select: text;
+    user-select: text;
+  }
   /* 全局禁用文本选择（桌面应用风格）；input/textarea/contenteditable 显式豁免 */
   body {
     -webkit-user-select: none;
