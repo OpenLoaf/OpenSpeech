@@ -10,9 +10,11 @@
 //   6. handle_login_callback：exchange token（SDK 自动 persist 到注入的 KeyringAuthStorage）→ emit 事件
 //   7. 前端通过 listen(event) 得到最终结果
 //
-// 持久化全部走 SDK 0.3.2 的 `AuthStorage` 抽象（见 `storage.rs`），keychain 命名采用
-// SDK 0.3.2 推荐的 service `"ai.openloaf.saas"` / account `"default"` —— 跟 OpenLoaf 自家
-// 其他桌面 App 共享同一空间，启动时若已有 family_token 直接 SSO。
+// 持久化全部走 SDK 0.3.2 的 `AuthStorage` 抽象（见 `storage.rs`）：
+//   - release：keychain，service `"ai.openloaf.saas"` / account `"default"` —— 跟 OpenLoaf
+//     自家其他桌面 App 共享同一空间，启动时若已有 family_token 直接 SSO。
+//   - debug：普通文件 `$HOME/.openspeech/dev-auth.json`，避开 macOS Keychain 在 dev
+//     binary cdhash 频繁变化下反复弹密码框的问题。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -30,7 +32,7 @@ mod dev_session;
 pub mod feedback;
 mod storage;
 use dev_session::{clear_dev_session, dump_dev_session};
-use storage::KeyringAuthStorage;
+use storage::{cleanup_legacy_keychain, new_storage, AuthStorageImpl};
 
 // OpenLoaf SaaS REST 基址。构建期常量，按 build profile 分岔：
 //   - debug（`cargo run` / `cargo build`）  → localhost:5180 本地开发服务
@@ -122,7 +124,7 @@ pub struct OpenLoafState {
     client: SaaSClient,
     /// SDK 内部对同一个 `Arc<dyn AuthStorage>` 也持有一份 —— 这里多保留一个 owned 句柄
     /// 是为了在不走 SDK auth 路径时（例如 401 主动清场 / 一次性诊断）也能直接 `clear()`。
-    storage: Arc<KeyringAuthStorage>,
+    storage: Arc<AuthStorageImpl>,
     user: Mutex<Option<PublicUser>>,
     pending: Mutex<HashMap<String, PendingLogin>>,
     callback_port: OnceLock<u16>,
@@ -134,7 +136,7 @@ pub type SharedOpenLoaf = Arc<OpenLoafState>;
 
 impl OpenLoafState {
     pub fn new() -> Self {
-        let storage = KeyringAuthStorage::new();
+        let storage = new_storage();
         let client = SaaSClient::new(SaaSClientConfig {
             base_url: DEFAULT_BASE_URL.into(),
             locale: Some("zh-CN".into()),
@@ -167,7 +169,7 @@ impl OpenLoafState {
     }
 
     /// 返回 SaaSClient 克隆（无论是否登录）。供"网络健康探针"等公开端点调用复用。
-    /// 不强制登录态，因为 `payment().list_plans()` 等公开端点本身不需要 token。
+    /// 不强制登录态，因为 `system().health()` 等公开端点本身不需要 token。
     pub fn client_clone(&self) -> SaaSClient {
         self.client.clone()
     }
@@ -469,11 +471,11 @@ pub fn openloaf_current_user(state: State<'_, SharedOpenLoaf>) -> Option<PublicU
     state.current_user()
 }
 
-/// 网络健康探针：调用 SDK 的 `payment().list_plans()` —— 它对应公开端点
-/// `GET /api/public/plans`，不需要 access token。能拿到响应即视为
-/// "网络通且 SaaS 可达"。任何错误（DNS 失败 / connect refused / 5xx / 解析失败）
-/// 都返回 false，恰好覆盖"完全没网"以及"链路通但服务不可用"两类情况——
-/// 比 `navigator.onLine` 更可靠（后者只检系统层链路）。
+/// 网络健康探针：调用 SDK 的 `system().health()` —— 对应公开端点
+/// `GET /api/public/health`，不需要 access token，返回轻量 `{status, sdkVersion}`。
+/// 能拿到响应即视为"网络通且 SaaS 可达"。任何错误（DNS 失败 / connect refused /
+/// 5xx / 解析失败）都返回 false，恰好覆盖"完全没网"以及"链路通但服务不可用"两类
+/// 情况——比 `navigator.onLine` 更可靠（后者只检系统层链路）。
 ///
 /// 该调用是 SDK 的同步阻塞调用，包在 `spawn_blocking` 里 + 5s tokio timeout
 /// 兜底，避免 health 检测自己卡住影响快捷键响应。
@@ -481,11 +483,11 @@ pub fn openloaf_current_user(state: State<'_, SharedOpenLoaf>) -> Option<PublicU
 pub async fn openloaf_health_check(state: State<'_, SharedOpenLoaf>) -> Result<bool, String> {
     use std::time::Duration;
     let client = state.client_clone();
-    let task = tokio::task::spawn_blocking(move || client.payment().list_plans());
+    let task = tokio::task::spawn_blocking(move || client.system().health());
     match tokio::time::timeout(Duration::from_secs(5), task).await {
         Ok(Ok(Ok(_resp))) => Ok(true),
         Ok(Ok(Err(e))) => {
-            log::warn!("[health] list_plans failed: {e:?}");
+            log::warn!("[health] health probe failed: {e:?}");
             Ok(false)
         }
         Ok(Err(join_err)) => {
@@ -762,7 +764,7 @@ pub async fn bootstrap(app: &AppHandle) {
     // 一次性清理老命名空间的 keychain 条目（v0.2.6 之前用的 `com.openspeech.app /
     // openloaf_refresh_token`）。0.3.2 起改用 SDK 推荐的 `ai.openloaf.saas / default`，
     // 老条目对新版本无意义，留着只是噪音。`NoEntry` 静默忽略。
-    KeyringAuthStorage::cleanup_legacy();
+    cleanup_legacy_keychain();
 
     // SDK 自身的 bootstrap：从注入的 storage 读 family/refresh token，
     // 命中 family → `/auth/family/exchange`（首选，跨 App SSO），

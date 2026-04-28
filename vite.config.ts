@@ -13,6 +13,15 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // 多入口：index.html 是 Tauri 桌面应用的入口，promo.html 是面向公网的宣传页（不依赖 Tauri）。
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        promo: path.resolve(__dirname, "promo.html"),
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

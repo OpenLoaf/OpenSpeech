@@ -1,42 +1,29 @@
 // OpenSpeech 悬浮录音条子窗口
 //
-// 独立于主窗口：transparent + alwaysOnTop + no-decorations + focus:false + skipTaskbar。
-// 用户不会拖它；位置固定屏幕底部中央，由状态机控制显隐。
+// 独立窗口：transparent + alwaysOnTop + no-decorations + focus:false + skipTaskbar。
+// 位置固定屏幕底部中央；显隐由前端状态机驱动，Rust 只做物理资源管理。
 //
-// 加载路径 /overlay；前端 router 识别到该路径后渲染 OverlayPage 而非 Layout。
-
-use std::sync::atomic::{AtomicBool, Ordering};
+// 加载路径 /overlay；前端按 window label 分流渲染 OverlayPage。
 
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
-    webview::Color,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
 const WIDTH: f64 = 200.0;
 const HEIGHT: f64 = 36.0;
 const BOTTOM_MARGIN: f64 = 32.0;
+// hide 时把窗口先挪到屏幕外——任何一帧 webview 没合成到位也看不到残影。
+const OFFSCREEN_POSITION: f64 = -10000.0;
 
-// "期望可见"状态——`show()` / `hide()` 是这个状态的入口。
-// 物理显隐再叠一层"主窗口聚焦时不显示"的策略：
-//   desired=true  + main focused   → 物理隐藏（Home 的 Live 面板已展示状态）
-//   desired=true  + main unfocused → 物理显示（用户在别的 app 里说话需要悬浮条）
-//   desired=false                  → 物理隐藏（无录音流程）
-// 主窗口 focus 变化由 `on_main_focus_changed` 钩入 lib.rs 的 WindowEvent。
-static DESIRED_VISIBLE: AtomicBool = AtomicBool::new(false);
-
-/// 启动时预创建（hidden），第一次触发快捷键时直接 show 即可，不再有首次渲染延迟。
+/// 启动时预创建（hidden），第一次触发快捷键直接 show。
 pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if app.get_webview_window(OVERLAY_LABEL).is_some() {
         return Ok(());
     }
 
-    // overlay 加载同一份 index.html；前端根据 window label 分流渲染 OverlayPage。
-    // Transparent 窗口在 Tauri 2 需要额外 Cargo feature + conf 配置；这里改用
-    // solid TE 黑底，窗口 280x56 就是内容尺寸，视觉上等同于浮条。
-    // background_color 把 NSWindow / wry webview 默认色都设成 te-bg 黑——否则
-    // window.show / 窗口尺寸变化的瞬间，webview 第一帧合成前会露出系统 NSWindow
-    // 默认背景（macOS light mode 下是白），表现为出现/消失时一闪白色。
+    // transparent(true) + tauri.conf.json 的 macOSPrivateApi 让窗口本体没有底色，
+    // 胶囊形状由前端 CSS 决定，hide / unmount 过程中露不出窗口背景。
     let builder =
         WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("index.html".into()))
             .inner_size(WIDTH, HEIGHT)
@@ -47,7 +34,7 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             .focused(false)
             .shadow(false)
             .visible(false)
-            .background_color(Color(0, 0, 0, 255))
+            .transparent(true)
             .title("OpenSpeech Overlay");
 
     #[cfg(target_os = "macos")]
@@ -57,7 +44,7 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     position_to_bottom_center(&window)?;
 
-    log::warn!("[overlay] window created (hidden)");
+    log::warn!("[overlay] window created (hidden, transparent)");
     Ok(())
 }
 
@@ -65,8 +52,7 @@ fn position_to_bottom_center<R: Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     position_to_bottom_center_with_height(window, HEIGHT)
 }
 
-// 把 overlay 窗口移动到屏幕底部中央，保持底部边距 BOTTOM_MARGIN 不变；
-// height 参数允许窗口纵向变高（错误条出现时），上沿向上扩展，胶囊本体位置不动。
+// 让 height 参数控制纵向扩展（错误条 ~96），上沿向上长，胶囊本体位置不动。
 fn position_to_bottom_center_with_height<R: Runtime>(
     window: &tauri::WebviewWindow<R>,
     height: f64,
@@ -75,9 +61,8 @@ fn position_to_bottom_center_with_height<R: Runtime>(
         return Ok(());
     };
     let scale = monitor.scale_factor();
-    let size = monitor.size(); // physical
-    let origin = monitor.position(); // physical
-    // 全部转 logical 再计算中点，避免高 DPI 误差。
+    let size = monitor.size();
+    let origin = monitor.position();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
     let origin_x = origin.x as f64 / scale;
@@ -85,40 +70,14 @@ fn position_to_bottom_center_with_height<R: Runtime>(
     let x = origin_x + (logical_w - WIDTH) / 2.0;
     let y = origin_y + logical_h - height - BOTTOM_MARGIN;
     window.set_position(LogicalPosition::new(x, y))?;
-    log::warn!("[overlay] positioned at logical ({x:.1}, {y:.1}) h={height:.1}");
     Ok(())
 }
 
 pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    // 期望可见：录音流程开始（快捷键按下）。先置位 desired，物理显隐再看
-    // 主窗口焦点。主窗口聚焦时不实际 show（Home 的 Live 面板已展示同等信息），
-    // 待 `on_main_focus_changed` 接到失焦事件再补偿。
-    DESIRED_VISIBLE.store(true, Ordering::Relaxed);
-    if let Some(main) = app.get_webview_window("main") {
-        if main.is_focused().unwrap_or(false) {
-            log::warn!("[overlay] desired=true, defer show (main focused)");
-            return Ok(());
-        }
-    }
-    show_now(app)
-}
-
-pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    DESIRED_VISIBLE.store(false, Ordering::Relaxed);
-    if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
-        w.hide()?;
-        log::warn!("[overlay] hide");
-    }
-    Ok(())
-}
-
-fn show_now<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     ensure_overlay(app)?;
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
-        // 强制把窗口尺寸复位到 PILL 高度——上一次 toast 把窗口扩到 EXPANDED_HEIGHT
-        // 后，前端 set_height 复位与 hide 的 IPC 谁先到 macOS 不保证；如果 hide 先到，
-        // 窗口会带着旧的 EXPANDED 尺寸进入下次 show，position_to_bottom_center 按
-        // PILL 算坐标 → 半个窗口卡在屏幕底外。每次 show 显式归位。
+        // hide 路径已做尺寸复位，这里是兜底——首次创建后 ensure_overlay 直接出来时
+        // 也能保证 200×36 一致状态。
         w.set_size(LogicalSize::new(WIDTH, HEIGHT))?;
         position_to_bottom_center(&w)?;
         w.show()?;
@@ -127,25 +86,14 @@ fn show_now<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 主窗口 focus 状态变化时调用（由 lib.rs 的 WindowEvent::Focused 转发）：
-/// - 失焦：若期望可见，立即物理 show（用户切到别的 app 里说话需要悬浮条）。
-/// - 获焦：若期望可见，物理 hide（让 Home 的 Live 面板接管展示，避免视觉重复）；
-///         desired 状态保持，等下一次失焦再补偿。
-/// 期望不可见（无录音流程）时 focus 变化无副作用。
-pub fn on_main_focus_changed<R: Runtime>(app: &AppHandle<R>, focused: bool) -> tauri::Result<()> {
-    if !DESIRED_VISIBLE.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-    if focused {
-        if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
-            if w.is_visible().unwrap_or(false) {
-                w.hide()?;
-                log::warn!("[overlay] main focused → hide (desired remains true)");
-            }
-        }
-    } else {
-        log::warn!("[overlay] main blurred → compensating show");
-        show_now(app)?;
+// hide 单 command：同一函数内串行完成"先移屏外 → 复位尺寸 → hide"，
+// 避免多条 IPC 顺序错乱导致下次 show 卡尺寸或残留矩形。
+pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
+        let _ = w.set_position(LogicalPosition::new(OFFSCREEN_POSITION, OFFSCREEN_POSITION));
+        let _ = w.set_size(LogicalSize::new(WIDTH, HEIGHT));
+        w.hide()?;
+        log::warn!("[overlay] hide");
     }
     Ok(())
 }

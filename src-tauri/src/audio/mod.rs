@@ -54,10 +54,10 @@ fn device_label<D: DeviceTrait>(d: &D) -> Option<String> {
 
 const AUDIO_LEVEL_EVENT: &str = "openspeech://audio-level";
 const TICK_MS: u64 = 50; // 20Hz emit
-const PEAK_GAIN: f32 = 1.6; // 轻度增益，普通说话音量下 bar 更明显
-// 噪声门：低于该幅值的窗口直接送 0，避免开车 / 风噪 / 空调底噪把波形拉满。
-// 取 0.04（约 -28 dBFS）刚好高于常见车厢底噪 (-34 ~ -30 dBFS)，又远低于人声基音。
-const NOISE_GATE: f32 = 0.04;
+const PEAK_GAIN: f32 = 2.8; // 普通对话音量（-25 dBFS 左右）就推到波形 60%+
+// 噪声门：低于该幅值的窗口直接送 0，避免空调 / 键盘底噪把波形顶起来。
+// 0.015 ≈ -36 dBFS，安静室内底噪刚好被压住，正常说话（哪怕轻声）能干净越过。
+const NOISE_GATE: f32 = 0.015;
 // WAV 输出：16-bit PCM。采样率 / 声道跟随采集配置，不做 resample / 下混——
 // 这两步留给 STT 集成阶段（大多数 STT 服务上传前自己会做）。
 const WAV_BITS_PER_SAMPLE: u16 = 16;
