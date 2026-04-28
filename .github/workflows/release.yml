@@ -243,18 +243,20 @@ jobs:
           if-no-files-found: error
           retention-days: 3
           # 各平台只取实际产出的文件类型；nullglob 行为由 actions/upload-artifact 自己处理。
+          # Tauri 2 updater 产物：
+          #   - macOS：bundle/macos/*.app.tar.gz + .sig（仍是 tarball）
+          #   - Linux：bundle/appimage/*.AppImage + .sig（直接对 AppImage 签名，不再走 tarball）
+          #   - Windows：bundle/nsis/*-setup.exe + .sig（直接对 NSIS exe 签名，不再走 .nsis.zip）
           path: |
             src-tauri/target/**/release/bundle/dmg/*.dmg
             src-tauri/target/**/release/bundle/macos/*.app.tar.gz
             src-tauri/target/**/release/bundle/macos/*.app.tar.gz.sig
             src-tauri/target/**/release/bundle/nsis/*-setup.exe
-            src-tauri/target/**/release/bundle/nsis/*-setup.nsis.zip
-            src-tauri/target/**/release/bundle/nsis/*-setup.nsis.zip.sig
+            src-tauri/target/**/release/bundle/nsis/*-setup.exe.sig
             src-tauri/target/**/release/bundle/deb/*.deb
             src-tauri/target/**/release/bundle/rpm/*.rpm
             src-tauri/target/**/release/bundle/appimage/*.AppImage
-            src-tauri/target/**/release/bundle/appimage/*.AppImage.tar.gz
-            src-tauri/target/**/release/bundle/appimage/*.AppImage.tar.gz.sig
+            src-tauri/target/**/release/bundle/appimage/*.AppImage.sig
 
   release:
     name: Publish draft release
@@ -273,9 +275,12 @@ jobs:
           pattern: bundle-*
 
       # staging/ 是即将上传到 Release 的扁平目录。**所有文件统一重命名为**
-      # `OpenSpeech-<version>-<platform>.<ext>`，包括 updater 链路（.app.tar.gz / .nsis.zip /
-      # .AppImage.tar.gz + .sig）。`matrix.artifact` 已经一次性表达 platform+arch（macOS-arm64 /
-      # Linux-x86_64 / Windows-arm64 等），不再保留 Tauri 默认名里的冗余 arch 段。
+      # `OpenSpeech-<version>-<platform>.<ext>`，包括 updater 链路：
+      #   - macOS：.app.tar.gz + .sig
+      #   - Linux：.AppImage + .sig（Tauri 2 直接签裸 AppImage）
+      #   - Windows：-setup.exe + .sig（Tauri 2 直接签 NSIS exe）
+      # `matrix.artifact` 已经一次性表达 platform+arch（macOS-arm64 / Linux-x86_64 / Windows-arm64
+      # 等），不再保留 Tauri 默认名里的冗余 arch 段。
       # 由于 `latest.json` 在下一个 step 里**自己生成**、url 字段直接拼新文件名，updater 客户端
       # 拉到的 url ↔ 实际 asset 仍然自洽。
       - name: Stage release files
@@ -294,18 +299,16 @@ jobs:
               [[ -f "$f" ]] || continue
               base="$(basename "$f")"
               case "$base" in
-                # 注意 `*.tar.gz` / `*.tar.gz.sig` 的匹配要放在 `*.gz` 之前；用具体扩展规避歧义
+                # 双扩展名 / 带 .sig 的必须排在裸扩展之前——case 顺序敏感，第一个匹上即停
                 *.app.tar.gz)            cp "$f" "staging/${base_name}.app.tar.gz" ;;
                 *.app.tar.gz.sig)        cp "$f" "staging/${base_name}.app.tar.gz.sig" ;;
-                *.AppImage.tar.gz)       cp "$f" "staging/${base_name}.AppImage.tar.gz" ;;
-                *.AppImage.tar.gz.sig)   cp "$f" "staging/${base_name}.AppImage.tar.gz.sig" ;;
-                *.nsis.zip)              cp "$f" "staging/${base_name}-setup.nsis.zip" ;;
-                *.nsis.zip.sig)          cp "$f" "staging/${base_name}-setup.nsis.zip.sig" ;;
-                *.dmg)                   cp "$f" "staging/${base_name}.dmg" ;;
+                *.AppImage.sig)          cp "$f" "staging/${base_name}.AppImage.sig" ;;
+                *.AppImage)              cp "$f" "staging/${base_name}.AppImage" ;;
+                *.exe.sig)               cp "$f" "staging/${base_name}-setup.exe.sig" ;;
                 *.exe)                   cp "$f" "staging/${base_name}-setup.exe" ;;
+                *.dmg)                   cp "$f" "staging/${base_name}.dmg" ;;
                 *.deb)                   cp "$f" "staging/${base_name}.deb" ;;
                 *.rpm)                   cp "$f" "staging/${base_name}.rpm" ;;
-                *.AppImage)              cp "$f" "staging/${base_name}.AppImage" ;;
                 *)
                   echo "::warning::unrecognized artifact, skipping: $f"
                   ;;
@@ -336,12 +339,12 @@ jobs:
             # stage step 已经把 platform 写进文件名（OpenSpeech-<version>-<platform>.<ext>），
             # 这里直接按 -<platform>. / -<platform>- 段匹配，比凑 arch 关键字稳。
             case "$base" in
-              OpenSpeech-*-macOS-arm64.app.tar.gz)         key="darwin-aarch64"  ;;
-              OpenSpeech-*-macOS-intel.app.tar.gz)         key="darwin-x86_64"   ;;
-              OpenSpeech-*-Linux-x86_64.AppImage.tar.gz)   key="linux-x86_64"    ;;
-              OpenSpeech-*-Linux-arm64.AppImage.tar.gz)    key="linux-aarch64"   ;;
-              OpenSpeech-*-Windows-x86_64-setup.nsis.zip)  key="windows-x86_64"  ;;
-              OpenSpeech-*-Windows-arm64-setup.nsis.zip)   key="windows-aarch64" ;;
+              OpenSpeech-*-macOS-arm64.app.tar.gz)     key="darwin-aarch64"  ;;
+              OpenSpeech-*-macOS-intel.app.tar.gz)     key="darwin-x86_64"   ;;
+              OpenSpeech-*-Linux-x86_64.AppImage)      key="linux-x86_64"    ;;
+              OpenSpeech-*-Linux-arm64.AppImage)       key="linux-aarch64"   ;;
+              OpenSpeech-*-Windows-x86_64-setup.exe)   key="windows-x86_64"  ;;
+              OpenSpeech-*-Windows-arm64-setup.exe)    key="windows-aarch64" ;;
               *)
                 echo "::warning::unknown sig pattern, skipping: $base"
                 continue

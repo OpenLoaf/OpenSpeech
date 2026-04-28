@@ -281,6 +281,12 @@ curl -sL https://github.com/OpenLoaf/OpenSpeech/releases/latest/download/latest.
 # 期望：["darwin-aarch64","darwin-x86_64","linux-aarch64","linux-x86_64","windows-aarch64","windows-x86_64"]
 ```
 
+> **Tauri 2 updater 产物格式**（影响 release.yml 与 latest.json 验证）：
+> - macOS：`.app.tar.gz` + `.sig`（仍是 tarball）
+> - Linux：直接对裸 `.AppImage` 签 `.sig`，**不再产 `.AppImage.tar.gz`**
+> - Windows：直接对 `-setup.exe` 签 `.sig`，**不再产 `-setup.nsis.zip`**
+> 如果哪天升级 Tauri 后产物格式变化，`.github/workflows/release.yml` 的 stage / latest.json case 必须同步改。
+
 返回 `Not Found` 说明 publish 没成功，回 §八 重做。
 
 ### 验证客户端能收到更新
