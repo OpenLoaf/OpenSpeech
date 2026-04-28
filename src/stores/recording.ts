@@ -665,10 +665,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             (cur.state === "recording" || cur.state === "preparing")
           ) {
             const duration = now - cur.lastPressAt;
-            if (duration < PREPARING_MS) {
+            if (duration < TOO_SHORT_TOTAL_MS) {
               console.log(
-                "[recording] toggle: quick double-tap < PREPARING_MS, discard",
-                { duration },
+                "[recording] toggle: too short → discard (no save / no transcribe)",
+                { duration, threshold: TOO_SHORT_TOTAL_MS },
               );
               discardRecording();
               stopMic();
@@ -1119,6 +1119,23 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     simulateFinalize: () => {
       const cur = get();
       if (cur.state !== "recording" && cur.state !== "preparing") return;
+      const duration = performance.now() - cur.lastPressAt;
+      if (duration < TOO_SHORT_TOTAL_MS) {
+        console.log(
+          "[recording] finalize: too short → discard (no save / no transcribe)",
+          { duration, threshold: TOO_SHORT_TOTAL_MS },
+        );
+        discardRecording();
+        stopMic();
+        set({
+          state: "idle",
+          activeId: null,
+          audioLevels: emptyLevels(),
+          recordingId: null,
+          liveTranscript: "",
+        });
+        return;
+      }
       stopMic();
       set({ state: "transcribing", audioLevels: emptyLevels() });
       void finalizeAndWriteHistory().finally(() => {
