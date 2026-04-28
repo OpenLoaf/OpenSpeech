@@ -35,8 +35,6 @@
   "general": {
     "interface_lang": "Interface language",
     "dictation_lang": "Dictation language",
-    "translation_target": "Translation target",
-    "lang_variant": "Language variant",
     "input_device": "Input device",
     "input_level": "Input level",
     "input_level_hint_listening": "Live level · listening on: {{name}}",
@@ -47,8 +45,6 @@
     "launch_startup": "Launch at login",
     "show_dock": "Show app in Dock",
     "show_dock_hint": "Show the OpenSpeech icon in the macOS Dock for quick access. When off, the app runs as a menu-bar-only app (you can still open the main window from the tray).",
-    "overlay_always_visible": "Always show floating recorder",
-    "overlay_always_visible_hint": "Keep the recorder bar floating on screen even when idle so you can always see status.",
     "close_to_tray": "Minimize to tray on close",
     "close_to_tray_hint": "When on, closing the main window hides it to the tray; otherwise a confirm dialog appears each time.",
     "auto_update": "Auto update",
@@ -123,6 +119,7 @@
     "update_channel": "Update channel",
     "update_channel_stable": "Stable",
     "update_channel_beta": "Beta (early access)",
-    "update_channel_hint": "Beta gets new features sooner but may be unstable. Switching back to Stable only delivers updates whose version is higher than the current beta."
+    "update_channel_hint": "Beta gets new features sooner but may be unstable. Switching back to Stable only delivers updates whose version is higher than the current beta.",
+    "open_log_dir": "Open log directory"
   }
 }

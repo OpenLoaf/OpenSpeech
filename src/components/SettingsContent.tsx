@@ -32,6 +32,7 @@ import {
   Cloud,
   Rocket,
   MessageSquare,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { syncAutostart } from "@/lib/autostart";
@@ -549,20 +550,6 @@ function GeneralTab() {
           ]}
         />
       </Row>
-      <Row label={t("general.translation_target")}>
-        <Select
-          value={general.translationTarget}
-          onChange={(v) => void setGeneral("translationTarget", v)}
-          options={["EN", "ZH", "JA"]}
-        />
-      </Row>
-      <Row label={t("general.lang_variant")}>
-        <Select
-          value={general.langVariant}
-          onChange={(v) => void setGeneral("langVariant", v)}
-          options={["EN-US", "EN-GB", "ZH-CN", "ZH-TW"]}
-        />
-      </Row>
 
       {/* Audio */}
       <SectionTitle>{t("section.audio")}</SectionTitle>
@@ -669,15 +656,6 @@ function GeneralTab() {
           />
         </Row>
       ) : null}
-      <Row
-        label={t("general.overlay_always_visible")}
-        hint={t("general.overlay_always_visible_hint")}
-      >
-        <Switch
-          checked={general.overlayAlwaysVisible}
-          onChange={(v) => void setGeneral("overlayAlwaysVisible", v)}
-        />
-      </Row>
       <Row
         label={t("general.close_to_tray")}
         hint={t("general.close_to_tray_hint")}
@@ -1090,6 +1068,14 @@ function AboutTab() {
         >
           <MessageSquare className="size-3.5" />
           {tFeedback("menu_label")}
+        </button>
+        <button
+          type="button"
+          onClick={() => void invoke("open_log_dir")}
+          className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+        >
+          <FolderOpen className="size-3.5" />
+          {t("about.open_log_dir")}
         </button>
       </div>
 

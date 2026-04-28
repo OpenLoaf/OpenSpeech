@@ -1,8 +1,6 @@
 {
   "binding": {
-    "dictate_ptt": "聽寫",
-    "ask_ai": "問 AI",
-    "translate": "翻譯"
+    "dictate_ptt": "聽寫"
   },
   "format": {
     "unbound": "未綁定",

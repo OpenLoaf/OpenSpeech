@@ -18,8 +18,6 @@
 ### 键盘快捷键
 
 - 听写 —— 默认 `Ctrl + Shift + Space`；默认 `mode=hold`（按住说话）。录入按钮**左侧的 Switch** 打开后切为 `mode=toggle`（单击切换：按一下开始、再按一下停止）——内部仍是同一个 `dictate_ptt` 绑定，仅 `binding.mode` 在 `hold` / `toggle` 之间翻转，不再维护独立的 `dictate_toggle` 绑定。
-- 问 AI —— 默认 `Ctrl + Shift + A`
-- 翻译 —— 默认 `Ctrl + Shift + T`
 
 每条支持：自定义录入、清除、↺ 恢复默认、▶ 测试诊断、冲突就地提示与 [替换] 一键切换。操作按钮 cluster（Reset / Test / Clear）显示在 label **左侧**并**常驻**——恢复默认按钮即使当前已是默认值也保留（灰色 disabled），Clear 按钮无值时 disabled。设置区域底部提供"全部恢复默认"。听写至少保留一个可用绑定：听写行 `canClear=false`，不提供 Clear。
 
@@ -31,8 +29,6 @@
 |---|---|
 | 界面语言 | UI 显示语言；默认跟随系统 |
 | 听写语种 | `自动检测`（默认）/ 指定语种 |
-| 翻译目标 | 翻译功能的目标语言 |
-| 语言变体 | 例如 en-US / en-GB、zh-CN / zh-TW |
 
 ### 音频
 
@@ -72,7 +68,6 @@
 |---|---|
 | 开机自启 | 开关 |
 | 在 Dock 中显示应用（macOS 独占） | 开关（持久化字段 `showDockIcon`，默认 on）。**仅 macOS 渲染**（其他平台无 Dock 概念）。on ⇒ `ActivationPolicy::Regular`，Dock 显示应用图标；off ⇒ `ActivationPolicy::Accessory`，应用变为纯菜单栏应用，仍可通过系统托盘打开主窗口。前端 onChange 持久化到 settings.json + `invoke("sync_dock_icon")` 让 Rust 立即重读并切 policy；`show_main_window` 也按本字段决定 policy（否则 `hide_main_window` 先切 Accessory 再 show 会把用户的 on 偏好洗掉）；setup 启动时调 `apply_dock_icon_policy` 同步一次，避免上次关过 Dock 图标而启动瞬间闪烁 |
-| 悬浮录音条常驻显示 | 开关（持久化字段 `overlayAlwaysVisible`，默认 off）。开启后悬浮录音条在未录音时也悬停在屏幕上；off 时只有录音期间才显示。Rust overlay 需读此字段决定启动时是否 show；目前 UI 与持久化已接，overlay 行为接入为后续任务 |
 | 关闭时最小化到托盘 | 开关。开启 ⇒ 关闭主窗口（红叉 / Cmd+Q / Alt+F4）直接隐藏到系统托盘；关闭 ⇒ 每次弹 CloseToBackgroundDialog 让用户选"继续后台"/"退出"。对话框里勾"不再提醒 + 继续后台"会把本开关置 on；勾"不再提醒 + 退出"会把内部 `closeBehavior` 设为 `QUIT`（开关显示为 off，再次 on → HIDE） |
 
 ## 个性化（Personalization）

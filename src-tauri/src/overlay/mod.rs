@@ -61,12 +61,11 @@ fn position_to_bottom_center_with_height<R: Runtime>(
         return Ok(());
     };
     let scale = monitor.scale_factor();
-    let size = monitor.size();
-    let origin = monitor.position();
-    let logical_w = size.width as f64 / scale;
-    let logical_h = size.height as f64 / scale;
-    let origin_x = origin.x as f64 / scale;
-    let origin_y = origin.y as f64 / scale;
+    let work_area = monitor.work_area();
+    let logical_w = work_area.size.width as f64 / scale;
+    let logical_h = work_area.size.height as f64 / scale;
+    let origin_x = work_area.position.x as f64 / scale;
+    let origin_y = work_area.position.y as f64 / scale;
     let x = origin_x + (logical_w - WIDTH) / 2.0;
     let y = origin_y + logical_h - height - BOTTOM_MARGIN;
     window.set_position(LogicalPosition::new(x, y))?;

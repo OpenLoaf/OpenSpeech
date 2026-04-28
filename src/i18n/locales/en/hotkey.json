@@ -1,8 +1,6 @@
 {
   "binding": {
-    "dictate_ptt": "Dictation",
-    "ask_ai": "Ask AI",
-    "translate": "Translate"
+    "dictate_ptt": "Dictation"
   },
   "format": {
     "unbound": "Unbound",

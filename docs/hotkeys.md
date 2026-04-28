@@ -13,20 +13,16 @@
 | 功能 | 默认组合（三端一致） | 模式 | 可否自定义 | 可否清空 |
 |---|---|---|---|---|
 | 听写 | 见上表 | `hold`（按住说话）；录入按钮左侧 Switch 打开后切到 `toggle`（单击切换） | ✅ | ❌（听写必须保留一个绑定） |
-| 问 AI（Ask AI） | `Ctrl + Shift + A` | 按住 | ✅ | ✅ |
-| 翻译（Translate） | `Ctrl + Shift + T` | 按住 | ✅ | ✅ |
 | 取消录音 | `Esc`（仅录音态生效，见下） | — | ❌ | ❌ |
 
 > 早期设计里听写有两个独立绑定（PTT / Toggle 各占一行），现合并为单一 `dictate_ptt` 绑定；模式通过 `binding.mode` 在 `hold` / `toggle` 间切换。持久化层的 `dictate_toggle` 旧字段由 `hotkeys` store 的 `sanitizeBindings` 读取时自动丢弃。
 
 > **听写为何用 modifier-only 而非 combo？** 因为 PTT 本质上是"按住一个键"的肌肉记忆——不想让用户同时按 `Ctrl + Shift + Space` 三个键才能说话。modifier-only 绑定（如 `Fn` 单按 / `Ctrl + Win` 组合按住）在三端主流语音输入产品里已成共识。
->
-> **Ask AI / Translate 为何保留 combo？** 这两个是"触发一次"的动作（toggle-once），combo 键更抗误触；且它们不需要长按节奏，用户肌肉记忆本来就接受 `Ctrl + Shift + 字母`。
 
 ## 通用规则
 
 1. 所有可自定义快捷键**必须支持全局捕获**：在任何前台应用下都能触发。
-2. 三个功能的快捷键**不允许重复**。录入时检测到重复，弹 Dialog 询问"是否替换"；确认后清空被占用的那一项，并提供撤销 Toast（8 秒，鼠标 hover 暂停倒计时）。
+2. 快捷键**不允许重复**。录入时检测到重复，弹 Dialog 询问"是否替换"；确认后清空被占用的那一项，并提供撤销 Toast（8 秒，鼠标 hover 暂停倒计时）。
 3. 快捷键支持三种形态（`BindingKind`）：
    - **`combo`** —— 1 修饰键 + 1 主键（如 `Ctrl + Shift + Space`）。所有平台通吃，最稳。
    - **`modifierOnly`** —— 1 到 N 个修饰键按住即触发（如 `Fn`、`Ctrl + Win`、`Right Alt`）。听写的默认形态。
@@ -65,8 +61,8 @@ Esc 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc
 
 录入时检测到组合与 OpenSpeech 其他功能重复：
 
-- 不静默覆盖。弹出 Dialog："此组合已被『翻译』使用。切换后『翻译』将清空。[替换] [取消]"
-- 替换 → 执行切换 + 底部 Toast 显示"『翻译』已清空 [撤销]"，8 秒窗口期内可恢复；鼠标 hover 暂停倒计时。
+- 不静默覆盖。弹出 Dialog："此组合已被使用。确认替换？[替换] [取消]"
+- 替换 → 执行切换 + 底部 Toast 显示"快捷键已替换 [撤销]"，8 秒窗口期内可恢复；鼠标 hover 暂停倒计时。
 - 取消 → 保持原绑定。
 - **撤销 buffer 落盘**：最近一次替换操作的 `{被替换项, 原值, 新值, 时间戳}` 写入 `store` 的 `undo_buffer`；应用重启后若时间戳距今 < 8 秒仍可撤销，Toast 在主窗口启动时重新显示剩余秒数。
 - Dialog 挂载后**延迟 250 ms 才启用按钮**并 swallow 这期间的 keydown——避免用户录入时仍按住的组合键误触发 Dialog 的 Enter/Space 默认按钮。
@@ -124,8 +120,6 @@ Esc 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc
     "dictate_ptt": { "kind": "modifierOnly", "mods": ["fn"],            "code": "",     "mode": "hold" },
     // Windows / Linux 默认：Ctrl + Win|Super 按住
     // "dictate_ptt": { "kind": "modifierOnly", "mods": ["ctrl", "meta"], "code": "",     "mode": "hold" },
-    "ask_ai":      { "kind": "combo",        "mods": ["ctrl", "shift"], "code": "KeyA", "mode": "hold" },
-    "translate":   { "kind": "combo",        "mods": ["ctrl", "shift"], "code": "KeyT", "mode": "hold" }
   },
   "distinguish_left_right": false,   // MVP 固定 false
   "allow_special_keys":     false    // 允许 Esc/Tab/Enter 作为键内容；MVP 默认 false

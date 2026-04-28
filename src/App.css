@@ -185,6 +185,29 @@
     /* 桌面应用级外层严格不滚动，滚动由内部容器各自声明；避免窗口收窄时出现浏览器级滚动条 */
     overflow: hidden;
   }
+
+  /* 统一跨平台滚动条样式 — TE 工业风：细条、方形、hover 时加深 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--te-gray) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--te-gray);
+    border: none;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--te-light-gray);
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
   /* overlay 窗口（label="overlay"，main.tsx 给 html 加 .overlay-window）：
      透明背景必须从 NSWindow 一路传到 root 元素，胶囊 / 提示条之外的区域保持透明，
      避免 hide 与 React 卸载时序错乱时露出实心矩形。 */

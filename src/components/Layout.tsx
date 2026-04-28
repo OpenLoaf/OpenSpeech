@@ -22,6 +22,7 @@ import { CloseToBackgroundDialog } from "@/components/CloseToBackgroundDialog";
 import { LoginDialog } from "@/components/LoginDialog";
 import { NoInternetDialog } from "@/components/NoInternetDialog";
 import { FeedbackDialog } from "@/components/FeedbackDialog";
+import { WindowControls } from "@/components/WindowControls";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
@@ -401,14 +402,14 @@ export default function Layout() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-te-bg text-te-fg">
       <aside className="flex h-screen w-60 shrink-0 flex-col overflow-hidden border-r border-te-gray bg-te-surface">
-        {/* 预留顶部 drag 区给 macOS 红绿灯（Overlay 模式会浮在此区左上角） */}
-        <div data-tauri-drag-region className="h-8 shrink-0" />
-
-        {/* Logo slot */}
-        <div className="flex items-center justify-between gap-2 border-b border-te-gray px-5 py-5">
+        {/* Logo slot — 顶部 drag 区，整个 logo 行可拖窗 */}
+        <div
+          data-tauri-drag-region
+          className="flex items-center justify-between gap-2 border-b border-te-gray px-5 py-5"
+        >
           <div className="flex items-center gap-2">
             <img
-              src="/logo-black.png"
+              src="/logo-write.png"
               alt=""
               aria-hidden
               className="size-5 shrink-0 select-none"
@@ -498,8 +499,12 @@ export default function Layout() {
       </aside>
 
       <main className="flex h-screen flex-1 flex-col overflow-hidden bg-te-bg">
-        {/* 顶部不再预留 32px drag 条——内容从 y=0 开始；拖窗从左侧 sidebar 顶部 drag 区进行 */}
-        {/* Outlet 容器不接管滚动，由每个 page 自行声明 h-full overflow-y-auto（或 overflow-hidden，如 Home） */}
+        <div
+          data-tauri-drag-region
+          className="flex h-8 shrink-0 items-center justify-end"
+        >
+          <WindowControls />
+        </div>
         <div className="min-h-0 flex-1 overflow-hidden">
           <Outlet />
         </div>

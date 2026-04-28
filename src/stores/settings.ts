@@ -26,9 +26,6 @@ export type AsrSegmentMode = "AUTO" | "MANUAL";
 export interface GeneralSettings {
   interfaceLang: LanguagePref;
   dictationLang: string;
-  dictationMode: DictationMode;
-  translationTarget: string;
-  langVariant: string;
   // 空串 = 跟随系统默认麦克风；非空 = cpal 枚举出的设备名
   inputDevice: string;
   cueSound: boolean;
@@ -42,8 +39,6 @@ export interface GeneralSettings {
   injectMethod: InjectMethod;
   restoreClipboard: boolean;
   launchStartup: boolean;
-  // 听写快捷键左侧的开关：开启后悬浮录音条常驻显示（即使 idle 态也在屏幕上）
-  overlayAlwaysVisible: boolean;
   // 仅 macOS：是否在 Dock 中显示应用图标。off ⇒ 应用变成纯菜单栏应用（Accessory
   // activation policy），仍可通过托盘打开主窗口。其他平台无效果。
   showDockIcon: boolean;
@@ -80,9 +75,6 @@ interface PersistShape {
 const DEFAULT_GENERAL: GeneralSettings = {
   interfaceLang: "system",
   dictationLang: "自动检测",
-  dictationMode: "AI",
-  translationTarget: "EN",
-  langVariant: "EN-US",
   inputDevice: "",
   cueSound: true,
   dictationSource: "SAAS",
@@ -93,7 +85,6 @@ const DEFAULT_GENERAL: GeneralSettings = {
   injectMethod: "CLIPBOARD + PASTE",
   restoreClipboard: true,
   launchStartup: false,
-  overlayAlwaysVisible: false,
   showDockIcon: true,
   autoUpdate: true,
   closeBehavior: "ASK",

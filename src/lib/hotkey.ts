@@ -30,7 +30,7 @@ export const MOD_ORDER: readonly HotkeyMod[] = [
 
 // 听写为单一 binding（id 名沿用 "dictate_ptt"，Rust 侧解析与历史 hotkeys.json
 // 都用此名）。统一为 toggle 行为：按一下开始、再按一下结束。
-export const BINDING_IDS = ["dictate_ptt", "ask_ai", "translate"] as const;
+export const BINDING_IDS = ["dictate_ptt"] as const;
 export type BindingId = (typeof BINDING_IDS)[number];
 
 /**
@@ -39,8 +39,6 @@ export type BindingId = (typeof BINDING_IDS)[number];
  *            上单 Fn 不可达 + 减少与系统 Fn 行为的歧义）
  * - Windows: PTT = `Ctrl + Win`（modifier-only，Win 键在内部抽象为 `meta`）
  * - Linux:   PTT = `Ctrl + Super`（modifier-only）
- *
- * Ask AI / Translate 继续使用跨平台安全的 `Ctrl + Shift + 字母` combo，冲突概率最低。
  */
 export function getDefaultBindings(
   platform: Platform,
@@ -52,8 +50,6 @@ export function getDefaultBindings(
 
   return {
     dictate_ptt: ptt,
-    ask_ai: { kind: "combo", mods: ["ctrl", "shift"], code: "KeyA" },
-    translate: { kind: "combo", mods: ["ctrl", "shift"], code: "KeyT" },
   };
 }
 

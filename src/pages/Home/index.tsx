@@ -157,12 +157,6 @@ export default function HomePage() {
         }}
       />
 
-      <div
-        data-tauri-drag-region
-        aria-hidden
-        className="relative z-10 h-8 shrink-0"
-      />
-
       <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden px-[clamp(1rem,4vw,2.5rem)] pt-[clamp(2rem,6vh,5rem)] pb-[clamp(1rem,3vw,2rem)]">
         <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
           {/* HERO */}

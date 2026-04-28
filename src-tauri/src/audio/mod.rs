@@ -414,15 +414,20 @@ const STREAM_READY_TIMEOUT: Duration = Duration::from_millis(1500);
 
 pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Result<(), String> {
     // 快速路径：已在运行且设备相同 → 只增引用计数（stream_info 已就绪，无需等待）
+    // 必须同时检查线程是否还活着——audio 线程可能因 cpal stream error / panic 已退出，
+    // 退出时清了 stream_info 但 MonitorState 的 thread/current_device 还残留，
+    // 不检查就会命中快速路径返回 Ok，后续 audio_recording_start 读到 stream_info=None
+    // 报 "audio stream not running"。
     {
         let mut guard = monitor().lock().expect("monitor mutex poisoned");
-        if guard.thread.is_some() && guard.current_device == device_name {
+        let alive = guard.thread.as_ref().is_some_and(|th| !th.is_finished());
+        if alive && guard.current_device == device_name {
             guard.ref_count += 1;
             return Ok(());
         }
     }
 
-    // 需要 (re)spawn。若 thread 已在（设备不同），先停掉旧线程，保持 ref_count 不变
+    // 需要 (re)spawn。若 thread 已在（设备不同 / 僵尸），先停掉旧线程，保持 ref_count 不变
     // 的前提下替换设备。
     let (old_tx, old_th) = {
         let mut guard = monitor().lock().expect("monitor mutex poisoned");

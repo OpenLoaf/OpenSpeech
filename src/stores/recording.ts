@@ -212,37 +212,48 @@ const handleAuthLost = () => {
   useUIStore.getState().openLogin();
 };
 
+const abortToIdle = (errorTitle: string, errorDesc: string) => {
+  if (!IS_MAIN_WINDOW) return;
+  discardRecording();
+  stopMic();
+  useRecordingStore.setState({
+    state: "idle",
+    activeId: null,
+    audioLevels: emptyLevels(),
+    recordingId: null,
+    liveTranscript: "",
+  });
+  notifyOverlay("error", errorTitle, { description: errorDesc });
+};
+
 const startRecordingSession = (id: string) => {
   if (!IS_MAIN_WINDOW) return;
-  void startRecordingToFile(id).then(() => {
-    // 录音 session 已建立（`audio_recording_start` 里读过 stream_info），
-    // 这时调 stt_start 最稳——Rust 侧也会再读一次 stream_info 拿 sampleRate/
-    // channels。stream 未就绪 / realtime connect 失败 → 不阻断本地录音，
-    // 用 toast 提示"本次仅本地录音"。401 单独处理：会话已失效，继续录音
-    // 没意义，直接 cancel + 弹登录框。
-    // 分句模式从设置读：AUTO → 服务端 VAD 切句 + 实时 partial；MANUAL → 整段
-    // 一句话，松手才出 Final。Onboarding TryIt 这类必须看到实时文字的场景
-    // 通过 segmentModeOverride 强制走 AUTO，不动用户的设置。
-    const segmentMode = getEffectiveSegmentMode();
-    const sttMode = segmentMode === "MANUAL" ? "manual" : "auto";
-    startSttSession({ mode: sttMode }).catch((e) => {
-      const raw = String(e ?? "");
-      if (isAuthError(raw)) {
-        handleAuthLost();
-        return;
-      }
-      const reason = humanizeSttError(e);
-      console.warn("[stt] start failed (fallback to local-only recording):", e);
-      notifyOverlay("error", i18n.t("overlay:toast.stt_start_failed.title"), {
-        description: i18n.t("overlay:toast.stt_start_failed.description", { reason }),
+  void startRecordingToFile(id)
+    .then(() => {
+      const segmentMode = getEffectiveSegmentMode();
+      const sttMode = segmentMode === "MANUAL" ? "manual" : "auto";
+      startSttSession({ mode: sttMode }).catch((e) => {
+        const raw = String(e ?? "");
+        if (isAuthError(raw)) {
+          handleAuthLost();
+          return;
+        }
+        console.warn("[stt] start failed → aborting recording:", e);
+        abortToIdle(
+          i18n.t("overlay:toast.stt_start_failed.title"),
+          i18n.t("overlay:toast.stt_start_failed.description", {
+            reason: humanizeSttError(e),
+          }),
+        );
       });
+    })
+    .catch((e) => {
+      console.error("[recording] start recording failed → aborting:", e);
+      abortToIdle(
+        i18n.t("overlay:toast.recording_start_failed.title"),
+        String(e),
+      );
     });
-  }).catch((e) => {
-    console.error("[recording] start recording failed:", e);
-    notifyOverlay("error", i18n.t("overlay:toast.recording_start_failed.title"), {
-      description: String(e),
-    });
-  });
 };
 
 // STT 失败 / 超时时 history.text 的占位——保留之前"待转写"语义，区分 success 与 failed

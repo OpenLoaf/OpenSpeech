@@ -1,6 +1,7 @@
-import { Fragment, useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { Command, Diamond } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
@@ -19,8 +20,8 @@ import { detectPlatform, type Platform } from "@/lib/platform";
 type KeyToken = { id: string; label: string };
 
 type HotkeyToken =
-  | { kind: "mod"; mod: HotkeyMod; label: string; icon: string | null }
-  | { kind: "main"; code: string; label: string; icon: string | null }
+  | { kind: "mod"; mod: HotkeyMod; label: string; icon: ReactNode | null }
+  | { kind: "main"; code: string; label: string; icon: ReactNode | null }
   | { kind: "prefix"; label: string };
 
 function modLabel(mod: HotkeyMod, platform: Platform): string {
@@ -33,17 +34,28 @@ function modLabel(mod: HotkeyMod, platform: Platform): string {
   return "Super";
 }
 
-function modIcon(mod: HotkeyMod, platform: Platform): string | null {
+function WinIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M1 3.5l5.5-.75v5.5H1V3.5z" />
+      <path d="M7.5 2.5L15 1v7H7.5V2.5z" />
+      <path d="M1 9h5.5v5.5L1 13.5V9z" />
+      <path d="M7.5 9H15v7l-7.5-1.5V9z" />
+    </svg>
+  );
+}
+
+function modIcon(mod: HotkeyMod, platform: Platform): ReactNode | null {
   if (mod === "fn") return null;
   if (mod === "ctrl") return "⌃";
   if (mod === "shift") return "⇧";
   if (mod === "alt") return "⌥";
-  if (platform === "macos") return "⌘";
-  if (platform === "windows") return "⊞";
-  return "◆";
+  if (platform === "macos") return <Command size={14} strokeWidth={2.5} />;
+  if (platform === "windows") return <WinIcon />;
+  return <Diamond size={12} strokeWidth={2.5} />;
 }
 
-const MAIN_ICON: Record<string, string> = {
+const MAIN_ICON: Record<string, ReactNode> = {
   Enter: "↵",
   Escape: "⎋",
   Tab: "⇥",
@@ -56,7 +68,7 @@ const MAIN_ICON: Record<string, string> = {
   ArrowRight: "→",
 };
 
-function mainIcon(code: string): string | null {
+function mainIcon(code: string): ReactNode | null {
   return MAIN_ICON[code] ?? null;
 }
 

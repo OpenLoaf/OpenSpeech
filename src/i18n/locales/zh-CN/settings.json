@@ -35,8 +35,6 @@
   "general": {
     "interface_lang": "界面语言",
     "dictation_lang": "听写语种",
-    "translation_target": "翻译目标",
-    "lang_variant": "语言变体",
     "input_device": "输入设备",
     "input_level": "输入声音",
     "input_level_hint_listening": "实时电平 · 正在监听：{{name}}",
@@ -47,8 +45,6 @@
     "launch_startup": "开机自启",
     "show_dock": "在 Dock 中显示应用",
     "show_dock_hint": "在 macOS Dock 中显示 OpenSpeech 图标，便于快速访问。关闭后应用作为纯菜单栏应用运行（仍可通过系统托盘打开主窗口）",
-    "overlay_always_visible": "悬浮录音条常驻显示",
-    "overlay_always_visible_hint": "开启后录音条始终悬浮在屏幕上（即使未录音），方便看到状态",
     "close_to_tray": "关闭时最小化到托盘",
     "close_to_tray_hint": "开启后关闭主窗口直接隐藏到托盘；关闭时每次弹确认对话框",
     "auto_update": "自动更新",
@@ -123,6 +119,7 @@
     "update_channel": "更新通道",
     "update_channel_stable": "正式版",
     "update_channel_beta": "Beta（抢先体验）",
-    "update_channel_hint": "Beta 通道更早收到新功能，但可能不稳定。关闭 Beta 后只会接收到版本号高于当前 Beta 的正式版。"
+    "update_channel_hint": "Beta 通道更早收到新功能，但可能不稳定。关闭 Beta 后只会接收到版本号高于当前 Beta 的正式版。",
+    "open_log_dir": "打开日志目录"
   }
 }
