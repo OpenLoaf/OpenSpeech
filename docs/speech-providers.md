@@ -74,55 +74,209 @@ Settings 早期预留了 `dictationSource: "SAAS" | "BYO"` 与 `endpoint` / `end
 
 ## 6. Capability 矩阵
 
-### 6.1 Capability 枚举
+> **本节是整个抽象的地基**。Capability 是闭集枚举，主流程的所有 feature gate / 降级 / 引导 / settings 预览都从这张表派生。命名 / 边界 / 取值一旦确定，后续新增 adapter 与新 feature 都按这张表对齐——错了一处会贯穿前后端。
 
-ASR Capability：
+### 6.0 设计原则（先于具体清单）
 
-| ID | 含义 |
+定义 Capability 之前，先固定 5 条原则。新增任何 capability 前对照检查，命中其中一条就要重新评估。
+
+1. **正交、最小、不可再分**：每个 capability 描述**一种独立的事实**。如果 capability A 的支持情况永远跟着 B 走（A 真 ⇒ B 真，反之亦然），那 A 就该并到 B 里，而不是再开一个。例：`asr.partial` 与 `asr.streaming` 在概念上有相关性，但确实存在"streaming 但只在结束时给一个 final"的实现（早期 batch over WebSocket），所以保留两个 capability。
+2. **必须能可靠探测 / 文档化**：一个 capability 必须能从 provider 官方文档明确确认，或通过握手 / 试探请求探测出真假。无法判别的能力（如"准确率高不高"）不进枚举。
+3. **粒度服务于决策，不服务于描述**：是否要拆出新 capability，问"这能影响 §8 决策树的输出吗 / 影响 settings 预览面板上某一行吗"。能 → 拆；不能 → 别拆。例：不要拆 `asr.cantonese` / `asr.japanese` 等"语种支持"——粒度太细，应统一用 `asr.language_set` 报告语种集合。
+4. **三态值，不是布尔**：每个 (provider × capability) 的取值是 `Supported | Limited | Unsupported`，**不是** boolean。`Limited` 必须附 `note`（一句话约束，例"仅普通话 + 英语"、"需用户额外开通"），UI 与决策器都要消费这个 note。
+5. **闭集 + 版本化**：枚举集合在仓库里是 `enum` 常量，**不是字符串**；adapter 只能从枚举里挑值，不能写自由字符串。每次扩枚举都同时改本文档 §6.1 + §6.2。
+
+### 6.1 Capability 数据结构
+
+```text
+enum CapabilityValue {
+    Supported,                        // 原生完整支持
+    Limited { note_i18n_key: String },// 受限，UI 必须显示 note
+    Unsupported,                      // 不支持
+    NotApplicable,                    // 该 capability 对此 adapter 没意义（如非流式 adapter 的 server_vad）
+}
+
+struct CapabilityReport {
+    asr: BTreeMap<AsrCapability, CapabilityValue>,
+    llm: BTreeMap<LlmCapability, CapabilityValue>,
+    /// 静态报告还是运行时报告：openloaf-cloud 后端可能动态切换 provider，
+    /// 报告由 SaaS 下发；其他 adapter 都是编译期 const。
+    is_dynamic: bool,
+}
+```
+
+> **为什么是三态而不是布尔**：很多 capability 的真实状态就是"半支持"。例：腾讯 ASR 支持热词但有"100 条 / 4 字符"上限；Azure 翻译能 inline，但仅在选了 `Speech Translation` 端点时；OpenLoaf 的说话人分离接口存在但 SaaS 当前未对外开放。布尔表达不出这些事实，决策器会要么过度乐观（用了崩）要么过度保守（用户说"明明能用"）。
+
+### 6.2 ASR Capability 详表
+
+每条 capability 都给出：**含义**（一句话）、**用户可见行为**（影响哪个用户场景）、**判定依据**（如何确定 provider 是否支持）、**默认缺失策略**（在 §8 决策树中走哪条分支）。
+
+#### `asr.streaming`
+- **含义**：通过持久连接（WebSocket/gRPC）边录边送音频帧，服务端不要求整段上传。
+- **用户可见行为**：长录音不阻塞 UI；松手后等待时间 ≤ 1s（finalize 拿尾巴）。无此能力 ⇒ 录音必须先全部落盘 → 整段 upload → 等待返回，松手到出字之间 1.5s + 网络。
+- **判定依据**：provider 文档是否提供 streaming endpoint。
+- **缺失策略**：核心能力。听写主流程要求此 capability；缺失 ⇒ §8 引导路径，**不**走 compose。`byo-rest` 例外（明确兜底走非流式整段上传）。
+
+#### `asr.partial`
+- **含义**：streaming 期间服务端持续推送中间结果（partial transcript），final 之前用户能看到字在变。
+- **用户可见行为**：录音时悬浮条 / Live 面板有"边说边出字"效果；AUTO 分段模式下还能边说边注入（[voice-input-flow.md](./voice-input-flow.md) 注入 §1）。
+- **判定依据**：streaming 协议是否定义 partial event。
+- **缺失策略**：静默降级。Live 面板从"流字"变为"finalize 后一次性出现"；recording.ts 的 `injectIncremental` 自动跳过。**不弹提示**——这只是体验差异不是错误。
+
+#### `asr.server_vad`
+- **含义**：服务端按停顿自动切句，一次 session 内可能产出多段 final（每段独立 sentence_id）。
+- **用户可见行为**：影响 settings → "听写分段模式"（AUTO / MANUAL）选项是否可用（详见 `src/stores/settings.ts` 的 `asrSegmentMode`）。无此能力 ⇒ 该选项强制 MANUAL 灰显。
+- **判定依据**：provider 文档是否提供 server-side VAD 配置；客户端是否能收到多段 final 事件。
+- **缺失策略**：静默降级到 MANUAL 模式 + settings 该项灰显并显示 tooltip "当前 provider 不支持自动切句"。
+
+#### `asr.word_timestamps`
+- **含义**：每个识别词附时间戳（开始 / 结束 ms）。
+- **用户可见行为**：未来字幕导出 / 历史回放对齐 / 编辑器精修——MVP 阶段无 UI 直接消费。
+- **判定依据**：协议事件中是否带 word-level offset。
+- **缺失策略**：能力级降级。即使支持的 provider 也只在用户开启对应 feature 时启用（数据量大）。MVP 阶段全部 adapter 报告均不影响行为。
+
+#### `asr.speaker_diarization`
+- **含义**：识别"有几个说话人"并给每段文字打 `speaker_id`（A / B / C…）。
+- **用户可见行为**：Live 面板 / 历史详情显示 `[A] xxx [B] yyy`；可能配合"会议模式" feature。MVP 阶段未上 feature，但 capability 必须先建模——否则 provider 切换 UI 没法显示这一行差异。
+- **判定依据**：provider 文档是否提供说话人分离参数 + 协议事件是否含 `speaker_id`。
+- **缺失策略**：§8 引导路径。不能由组合补齐（文本后处理无法还原说话人）。
+- **本期落地**：capability 进枚举、进矩阵、进 settings 预览面板（"✗ 说话人分离 — 当前 provider 不支持，支持的 provider: ..."），但**不绑任何用户 feature**。等 capability 先稳定，再上 feature。
+
+#### `asr.language_set`
+- **含义**：provider 支持的语种集合（取代之前简单的 `language_detect`）。值为 `Vec<BCP47>`，附一个 `auto_detect: bool` 标记是否支持自动检测。
+- **用户可见行为**：settings → "听写语种" 下拉的可选项 = 当前 active asr provider 的 `language_set`；auto_detect=false 时下拉强制必选。
+- **判定依据**：provider 文档列表 + 自动检测能力。
+- **缺失策略**：不可能"缺失"——所有 ASR 都至少支持一个语种。但语种**不在用户期望集合内**时（用户在 settings 选了 yue 而当前 provider 不支持），切 provider 时弹"当前语种不可用，将回退到 zh-CN"。
+- **特殊**：这是少数**带载荷**的 capability。不是简单 enum 值。CapabilityReport 里单独建模为 `language_set: LanguageSetReport`，不走 BTreeMap。
+
+#### `asr.custom_vocabulary`
+- **含义**：接受词典 hints 提升专名 / 行业术语准确率（详见 [dictionary.md](./dictionary.md)）。
+- **用户可见行为**：[词典页](./dictionary.md) 仍可正常增删查；hints 是否真的传给 provider 由此 capability 决定。
+- **判定依据**：provider 是否提供热词 / phrase hints / custom vocabulary 接口。
+- **特别注意**：各家 hints 上限差异大（OpenAI 不支持 / 阿里 100 / 腾讯 100×4 字符 / Azure 1000 / Google 5000）。`Limited { note: "上限 100 条" }` 表达。adapter 内部按上限截断，dictionary.md 的"100 条"硬上限改为"取 min(provider上限, 100)"。
+- **缺失策略**：静默降级（hints 不发，词典 UI 仍可填）+ settings 提示一行。
+
+#### `asr.punctuation`
+- **含义**：自动加标点。
+- **缺失策略**：静默降级。MVP 不为此再加二次后处理（text 后插标点的 LLM 调用得不偿失）。
+
+#### `asr.profanity_filter`
+- **含义**：服务端可配的脏话过滤（替换 / 屏蔽 / 标记）。
+- **缺失策略**：MVP 不暴露给用户；capability 先建模，feature 留待社区诉求。
+
+### 6.3 LLM Capability 详表
+
+#### `llm.translate`
+- **含义**：把任意文本翻译到指定目标语种。
+- **用户可见行为**：F9 翻译快捷键。
+- **判定依据**：provider 是否提供翻译接口（独立 endpoint 也算）。
+- **缺失策略**：§8 compose 路径——LLM provider 选 None ⇒ 翻译 feature 走 §8.3 引导。
+
+#### `llm.qa`
+- **含义**：自由文本 → 自由文本回答。
+- **用户可见行为**：F8 问 AI。
+- **缺失策略**：同上。
+
+#### `llm.polish`
+- **含义**：把识别文本润色（删除口误 / 填充词 / 改口）。
+- **用户可见行为**：F15 AI 自动润色。
+- **缺失策略**：静默降级（不润色直出）。
+
+#### `llm.context_style`
+- **含义**：接受上下文风格 prompt（"邮件" / "IM" / "代码注释"等）。
+- **用户可见行为**：F16 上下文风格。
+- **缺失策略**：静默降级（prompt 不发）。
+
+#### `llm.streaming`
+- **含义**：LLM 输出是否流式 token。
+- **用户可见行为**：翻译 / 问 AI 的"边出边写"。
+- **缺失策略**：静默降级（攒齐再注入）。
+
+### 6.4 不进枚举的"伪 capability"
+
+记录**评估过但决定不进枚举**的能力，避免后续 PR 反复讨论：
+
+| 想加的 | 不加的理由 |
 |---|---|
-| `asr.streaming` | 边录边出 partial / final，长录音不阻塞（区别于必须等整段上传后才出结果的批量识别） |
-| `asr.partial` | 服务端推流的中间结果（实现"边说边出字"必需） |
-| `asr.server_vad` | 服务端按停顿自动切句（多段 final）。无此能力 → 整段一句话 |
-| `asr.word_timestamps` | 词级时间戳（未来字幕 / 编辑场景用） |
-| `asr.speaker_diarization` | 说话人分离（识别"几个人说话"并打 speaker_id） |
-| `asr.language_detect` | 服务端自动检测语种（无此能力时必须用户在 settings 里指定） |
-| `asr.custom_vocabulary` | 接受热词 / 词典 hints 提升专名准确率（详见 [dictionary.md](./dictionary.md)） |
-| `asr.punctuation` | 自动标点 |
-| `asr.profanity_filter` | 服务端脏话过滤（部分 provider 可配） |
+| `asr.cantonese` / `asr.japanese` 等单语种 | 应该用 `asr.language_set` 统一表达，不要每语种一个枚举值 |
+| `asr.high_accuracy` / `asr.low_latency` | 不可观测，无法机器判定，属于"营销描述" |
+| `asr.long_form_friendly` | 模糊，应拆为 `asr.streaming` + 是否有时长上限两件事 |
+| `llm.code_friendly` | 模糊，所有现代 LLM 都"懂代码"；要做代码场景应做成上下文 prompt |
+| `provider.free_tier` | 跟用户决策有关（值不值得选）但跟主流程逻辑无关，应放 `docs/providers/<id>.md` 而不是 capability |
+| `provider.region_china` / `region_us` | 同上，落 `docs/providers/<id>.md` |
 
-LLM Capability：
+### 6.5 首批 Provider × Capability 映射
 
-| ID | 含义 |
-|---|---|
-| `llm.translate` | 文本翻译 |
-| `llm.qa` | 自由问答（"问 AI" 功能） |
-| `llm.polish` | 润色 / 删除口误填充词（[features.md](./features.md) F15） |
-| `llm.context_style` | 接收上下文风格 prompt（[features.md](./features.md) F16） |
-| `llm.streaming` | 流式输出（影响"问 AI" / "翻译"是否能边出边写） |
+> 取值：`✓` = `Supported`；`L:<note>` = `Limited`（note 简写）；`✗` = `Unsupported`；`–` = `NotApplicable`。**新 adapter PR 必改**。
 
-> 命名规则：`<engine>.<verb_or_noun>` 全小写下划线。本表是闭集，**新增 capability 必须在文档里登记 + 给出初始支持矩阵**，不允许 adapter 自创字符串。
-
-### 6.2 首批 Provider × Capability 映射
+#### ASR
 
 | Capability | openloaf-cloud | aliyun | tencent | azure | google | byo-rest |
 |---|---|---|---|---|---|---|
-| `asr.streaming` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `asr.partial` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `asr.server_vad` | ✅ | ✅ | ✅ | ✅ | ✅ | – |
-| `asr.word_timestamps` | ⚠️ 部分 | ✅ | ✅ | ✅ | ✅ | – |
-| `asr.speaker_diarization` | ⚠️ 不开放 | ❌ | ✅ | ✅ | ✅ | ❌ |
-| `asr.language_detect` | ✅ | ✅ | ⚠️ 限语种集 | ✅ | ✅ | – |
-| `asr.custom_vocabulary` | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️（按 endpoint 实现而定） |
-| `asr.punctuation` | ✅ | ✅ | ✅ | ✅ | ✅ | – |
-| `llm.translate` | ✅ | ✅（Qwen） | ✅（翻译君，独立 endpoint） | ✅ inline | ⚠️ 需 Cloud Translation 独配 | ❌ |
-| `llm.qa` | ✅ | ✅ | ✅ | ⚠️ 需独立 OpenAI on Azure | ✅（Gemini / Vertex） | ❌ |
-| `llm.polish` | ✅ | ✅ | ✅ | ⚠️ 同上 | ✅ | ❌ |
-| `llm.context_style` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `llm.streaming` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| `asr.streaming` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| `asr.partial` | ✓ | ✓ | ✓ | ✓ | ✓ | – |
+| `asr.server_vad` | ✓ | ✓ | ✓ | ✓ | ✓ | – |
+| `asr.word_timestamps` | L:动态 | ✓ | ✓ | ✓ | ✓ | – |
+| `asr.speaker_diarization` | L:不开放 | ✗ | ✓ | ✓ | ✓ | ✗ |
+| `asr.language_set` | 见 §6.6 | 见 §6.6 | 见 §6.6 | 见 §6.6 | 见 §6.6 | 见 §6.6 |
+| `asr.custom_vocabulary` | ✓ | L:100 条 | L:100×4字 | ✓ | ✓ | L:按 endpoint |
+| `asr.punctuation` | ✓ | ✓ | ✓ | ✓ | ✓ | L:按 endpoint |
+| `asr.profanity_filter` | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ |
 
-> ✅ = 计划首发即支持；⚠️ = 受限或需用户额外配置（adapter 应在 capability 报告里降级）；❌ = 不支持（feature 走降级或引导）；– = 不适用（如 byo-rest 没有 streaming 就谈不上 server_vad）。
->
-> 此表与 §5 一样，是**版本化文档**，每次新 adapter 入仓必须更新。
+#### LLM
+
+| Capability | openloaf-cloud | aliyun | tencent | azure | google | byo-rest |
+|---|---|---|---|---|---|---|
+| `llm.translate` | ✓ | ✓ | L:独立 endpoint | ✓ inline | L:Cloud Translation 独配 | ✗ |
+| `llm.qa` | ✓ | ✓ | ✓ | L:Azure OpenAI 独配 | ✓ | ✗ |
+| `llm.polish` | ✓ | ✓ | ✓ | L:同上 | ✓ | ✗ |
+| `llm.context_style` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| `llm.streaming` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+
+### 6.6 `language_set` 初始声明
+
+| Provider | 语种集合 | auto_detect |
+|---|---|---|
+| openloaf-cloud | zh / zh-TW / en / ja / ko / yue | ✓ |
+| aliyun | zh / zh-TW / en / ja / ko / yue | ✓ |
+| tencent | zh / en / yue（其余按模型变体）| ✓（限语种集）|
+| azure | 100+ BCP47 全集（按 region 变化）| ✓ |
+| google | 125+ BCP47 全集 | ✓ |
+| byo-rest | 由 endpoint 决定，adapter 配置里手填 | 按配置 |
+
+### 6.7 Feature → Capability 反向索引
+
+主流程的 feature 不直接绑 provider，而是绑 capability。一张反查表，写代码 / 加 feature 都查这里：
+
+| Feature | 必需 | 增强（缺失时静默降级） | 引导（缺失时弹 dialog） |
+|---|---|---|---|
+| 听写（基础） | `asr.streaming` (byo-rest 特例) | `asr.partial` / `asr.punctuation` | — |
+| 听写分段 AUTO | `asr.streaming` + `asr.server_vad` | — | `asr.server_vad` 缺失时灰显 settings 选项 |
+| 词典 hints | — | `asr.custom_vocabulary` | — |
+| 自动语种检测 | — | `asr.language_set.auto_detect` | — |
+| 翻译 | `asr.streaming` + `llm.translate` | `llm.streaming` | `llm.translate` 缺失（LLM 未配）|
+| 问 AI | `asr.streaming` + `llm.qa` | `llm.streaming` / `llm.context_style` | `llm.qa` 缺失 |
+| AI 润色 | `asr.streaming` | `llm.polish` | — |
+| 说话人分离（未来）| `asr.streaming` + `asr.speaker_diarization` | — | `asr.speaker_diarization` 缺失 |
+| 字幕导出（未来）| `asr.word_timestamps` | — | `asr.word_timestamps` 缺失 |
+
+### 6.8 演进规则（如何安全地加 / 改 capability）
+
+1. **新加 capability**：
+   - 加枚举值 + 本文档 §6.2 / §6.3 详条 + §6.5 矩阵补全（每个现有 adapter 都要给值，不能空）+ §6.7 反向索引。
+   - 同 PR 改所有 adapter 的 `capabilities()` 实现（编译器会强制，因为枚举是 exhaustive match）。
+   - 加 i18n key（settings 预览面板的 capability 名 + note）。
+2. **删 capability**：当且仅当从未真正落地到任何 feature。否则改为 `Deprecated` 阶段（仍枚举但所有 adapter 报 NotApplicable）一个版本，再删。
+3. **改 capability 语义**：禁止。要改语义 ⇒ 加新 capability + 老的标 Deprecated。
+4. **三态值的迁移**：发现 provider 的真实情况比之前判断更受限，把 `Supported` 改 `Limited { note }`——不算 breaking。从 `Limited` 改 `Unsupported` 是 breaking（用户原本能用的功能不能用了），需要 release note 显式提示。
+
+### 6.9 为什么这套设计现在不定好后面就难
+
+- **Capability 是 settings UI / 录音 Gate / 降级决策 / 历史 schema 的共同输入**——四处都按 capability 取真假。如果 capability 拆得不对，4 处都要重写。
+- **adapter PR 的契约就是 `capabilities()` 函数返回值**——枚举一旦发布就成了对外 API，社区的 adapter 都按这个写。后改要么破坏存量、要么需要长期 deprecation 窗口。
+- **feature → capability 的映射是闭环依赖**：feature 上线时需要明确"我依赖什么"；capability 上线时需要"哪些 feature 用我"。如果先上 feature 再补 capability，必然出现"feature 已经在 prod 上跑、provider 是否支持靠 if-else 判 provider 名"——回到没抽象前的状态。
+
+所以建议的稳妥次序是：**Phase 1 先把 §6 全枚举 + 静态矩阵全部落地，但 settings UI 先只接 CLOUD**。这样枚举是真的被用起来的（gate / 降级走它），但还没有真实 LOCAL provider 来"考验"枚举设计——可以低成本调整。等 Phase 2 上 aliyun 时再补真实 capability 报告，迭代成本最低。
 
 ## 7. Adapter 契约
 
