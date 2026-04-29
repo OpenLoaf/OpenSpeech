@@ -71,12 +71,12 @@ fn position_to_bottom_center_with_height<R: Runtime>(
     let x = origin_x + (logical_w - WIDTH) / 2.0;
     let y = origin_y + logical_h - height - BOTTOM_MARGIN;
     log::warn!(
-        "[overlay] target monitor name={:?} origin=({},{}) size=({}x{}) scale={} → logical_pos=({:.1},{:.1})",
+        "[overlay] target monitor name={:?} work_area_origin=({},{}) work_area_size=({}x{}) scale={} → logical_pos=({:.1},{:.1})",
         monitor.name(),
-        origin.x,
-        origin.y,
-        size.width,
-        size.height,
+        work_area.position.x,
+        work_area.position.y,
+        work_area.size.width,
+        work_area.size.height,
         scale,
         x,
         y,
