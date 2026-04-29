@@ -426,6 +426,7 @@ pub fn run() {
                 .level_for("hyper", tauri_plugin_log::log::LevelFilter::Info)
                 .level_for("reqwest", tauri_plugin_log::log::LevelFilter::Info)
                 .level_for("rustls", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("enigo", tauri_plugin_log::log::LevelFilter::Info)
                 // 走 webview 的 console.{log/info/warn/error}，前端 devtools 即可看 Rust 日志。
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Webview,
