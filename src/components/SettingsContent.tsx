@@ -564,24 +564,6 @@ function GeneralTab() {
 
       {/* Text injection */}
       <SectionTitle>{t("section.text_injection")}</SectionTitle>
-      <div className="py-3">
-        <RadioBlock
-          value={general.injectMethod}
-          onChange={(v) => void setGeneral("injectMethod", v)}
-          options={[
-            {
-              value: "CLIPBOARD + PASTE",
-              label: t("inject.clipboard_label"),
-              hint: t("inject.clipboard_hint"),
-            },
-            {
-              value: "SIMULATE KEYBOARD",
-              label: t("inject.keyboard_label"),
-              hint: t("inject.keyboard_hint"),
-            },
-          ]}
-        />
-      </div>
       <Row
         label={t("general.restore_clipboard")}
         hint={t("general.restore_clipboard_hint")}

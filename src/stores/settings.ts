@@ -6,10 +6,9 @@ import type { LanguagePref } from "@/i18n";
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
-export type InjectMethod = "CLIPBOARD + PASTE" | "SIMULATE KEYBOARD";
 export type Sensitivity = "LOW" | "NORMAL" | "HIGH";
 // 听写源：SAAS = OpenLoaf 云端（扣积分 / Pro+ 无限）；BYO = 用户自己的 REST 端点。
 // 详见 docs/subscription.md。
@@ -40,7 +39,6 @@ export interface GeneralSettings {
   modelName: string;
   timeout: string;
   audioFormat: string;
-  injectMethod: InjectMethod;
   restoreClipboard: boolean;
   launchStartup: boolean;
   // 仅 macOS：是否在 Dock 中显示应用图标。off ⇒ 应用变成纯菜单栏应用（Accessory
@@ -92,7 +90,6 @@ const DEFAULT_GENERAL: GeneralSettings = {
   modelName: "",
   timeout: "30",
   audioFormat: "WAV",
-  injectMethod: "CLIPBOARD + PASTE",
   restoreClipboard: true,
   launchStartup: false,
   showDockIcon: true,
@@ -199,6 +196,14 @@ function migrateV5(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
   return { ...(oldGeneral as Partial<GeneralSettings>), historyRetention: "forever" };
 }
 
+// v6 → v7：移除 injectMethod。后端始终走"剪贴板 + Cmd/Ctrl+V"，"模拟键盘"分支
+// 从未真正接入。直接丢弃旧字段，UI 只保留"粘贴后恢复剪贴板"开关。
+function migrateV6(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
+  const cleaned = { ...oldGeneral };
+  delete cleaned.injectMethod;
+  return cleaned as Partial<GeneralSettings>;
+}
+
 async function readPersisted(): Promise<PersistShape> {
   const s = await store();
   const raw = await s.get<unknown>("root");
@@ -210,16 +215,17 @@ async function readPersisted(): Promise<PersistShape> {
   if (!raw || typeof raw !== "object") return defaults;
   const r = raw as Partial<PersistShape> & { schemaVersion?: number };
 
-  // 迁移：v1 → v2 → v3 → v4 → v5 → v6 链式
+  // 迁移：v1 → v2 → v3 → v4 → v5 → v6 → v7 链式
   if (r.schemaVersion === 1) {
     const v2 = migrateV1((r.general ?? {}) as Record<string, unknown>);
     const v3 = migrateV2(v2 as Record<string, unknown>);
     const v4 = migrateV3(v3 as Record<string, unknown>);
     const v5 = migrateV4(v4 as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
+    const v7 = migrateV6(v6 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v6 },
+      general: { ...DEFAULT_GENERAL, ...v7 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -231,9 +237,10 @@ async function readPersisted(): Promise<PersistShape> {
     const v4 = migrateV3(v3 as Record<string, unknown>);
     const v5 = migrateV4(v4 as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
+    const v7 = migrateV6(v6 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v6 },
+      general: { ...DEFAULT_GENERAL, ...v7 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -244,9 +251,10 @@ async function readPersisted(): Promise<PersistShape> {
     const v4 = migrateV3((r.general ?? {}) as Record<string, unknown>);
     const v5 = migrateV4(v4 as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
+    const v7 = migrateV6(v6 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v6 },
+      general: { ...DEFAULT_GENERAL, ...v7 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -256,9 +264,10 @@ async function readPersisted(): Promise<PersistShape> {
   if (r.schemaVersion === 4) {
     const v5 = migrateV4((r.general ?? {}) as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
+    const v7 = migrateV6(v6 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v6 },
+      general: { ...DEFAULT_GENERAL, ...v7 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -267,9 +276,21 @@ async function readPersisted(): Promise<PersistShape> {
   }
   if (r.schemaVersion === 5) {
     const v6 = migrateV5((r.general ?? {}) as Record<string, unknown>);
+    const v7 = migrateV6(v6 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v6 },
+      general: { ...DEFAULT_GENERAL, ...v7 },
+      personalization: {
+        ...DEFAULT_PERSONALIZATION,
+        ...(r.personalization ?? {}),
+      },
+    };
+  }
+  if (r.schemaVersion === 6) {
+    const v7 = migrateV6((r.general ?? {}) as Record<string, unknown>);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...v7 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),

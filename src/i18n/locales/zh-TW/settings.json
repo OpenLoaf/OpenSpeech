@@ -76,12 +76,6 @@
     "ai_refine_label": "AI 優化（推薦）",
     "ai_refine_hint": "在「整句聽寫」基礎上再呼叫大型模型整理：去口頭禪、消重、識別自我修正、依序詞列表化；同語言不翻譯。"
   },
-  "inject": {
-    "clipboard_label": "剪貼簿 + 貼上",
-    "clipboard_hint": "預設方式，快速且穩定。",
-    "keyboard_label": "模擬鍵盤",
-    "keyboard_hint": "逐字元鍵入。"
-  },
   "model": {
     "byo_unavailable_tag": "// BYO-MODEL · 尚未實作",
     "byo_unavailable_body": "自訂 STT REST 端點（端點 URL／API Key／模型名稱／測試連線）尚未接入，目前所有聽寫均走 OpenLoaf SaaS。此入口開發中，下一版本將啟用。",

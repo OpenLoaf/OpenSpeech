@@ -76,12 +76,6 @@
     "ai_refine_label": "AI enhanced (recommended)",
     "ai_refine_hint": "On top of \"whole utterance\", run an extra LLM pass to remove fillers, dedupe, recognise self-corrections, and list sequenced steps. Same language — no translation."
   },
-  "inject": {
-    "clipboard_label": "Clipboard + paste",
-    "clipboard_hint": "Default method, fast and reliable.",
-    "keyboard_label": "Simulate keyboard",
-    "keyboard_hint": "Type one character at a time."
-  },
   "model": {
     "byo_unavailable_tag": "// BYO-MODEL · not yet available",
     "byo_unavailable_body": "Custom STT REST endpoints (endpoint URL / API Key / model name / test connection) aren't wired up yet. All dictation currently goes through OpenLoaf SaaS. This surface is under active development and will be enabled in the next release.",

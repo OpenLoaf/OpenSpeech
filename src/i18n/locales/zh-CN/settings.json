@@ -76,12 +76,6 @@
     "ai_refine_label": "AI 优化（推荐）",
     "ai_refine_hint": "在「整句听写」基础上额外调用大模型整理：去口头禅、消重、识别自我修正、按顺序词列表化；同语言不翻译。"
   },
-  "inject": {
-    "clipboard_label": "剪贴板 + 粘贴",
-    "clipboard_hint": "默认方式，快速且可靠。",
-    "keyboard_label": "模拟键盘",
-    "keyboard_hint": "逐字符键入。"
-  },
   "model": {
     "byo_unavailable_tag": "// BYO-MODEL · 暂未实现",
     "byo_unavailable_body": "自定义 STT REST 端点（端点 URL / API Key / 模型名 / 测试连接）尚未接入，当前所有听写均走 OpenLoaf SaaS。该入口正在开发中，下一版本会启用。",
