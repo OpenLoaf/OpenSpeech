@@ -21,9 +21,10 @@
     "shortcuts": "鍵盤快速鍵",
     "language": "語言",
     "audio": "音訊",
-    "asr_segment": "分句模式",
+    "asr_segment": "聽寫模式",
     "text_injection": "文字注入",
     "behavior": "行為",
+    "history": "歷史記錄",
     "model_rest": "大型模型（REST）",
     "ai_enhance": "AI 增強",
     "dictionary_learning": "詞典學習",
@@ -49,6 +50,15 @@
     "close_to_tray_hint": "開啟後關閉主視窗會直接隱藏至系統列；關閉時每次都會跳出確認對話框",
     "auto_update": "自動更新",
     "auto_update_hint": "啟動時靜默檢查並安裝新版本；關閉後僅能透過系統列「檢查更新」手動觸發",
+    "history_retention": "歷史保留時長",
+    "history_retention_hint": "控制本機資料庫中歷史記錄的保留時間；縮短時長只在下次啟動生效，不會立即刪除已有記錄",
+    "history_retention_options": {
+      "forever": "永遠",
+      "90d": "90 天",
+      "30d": "30 天",
+      "7d": "7 天",
+      "off": "不保存"
+    },
     "loading": "// loading settings…"
   },
   "device": {
@@ -59,10 +69,12 @@
     "disconnected": "{{name}} · 已中斷"
   },
   "asr_segment": {
-    "manual_label": "手動分句（推薦）",
-    "manual_hint": "整段錄音視為一次完整對話，放開按鍵後再回傳轉寫結果；模型擁有完整上下文，更準確且不易被停頓誤切。",
-    "auto_label": "自動分句",
-    "auto_hint": "伺服器端依停頓自動切句，錄音過程中即時回填；適合長時間會議字幕、直播轉寫等無人值守情境。"
+    "realtime_label": "即時轉換",
+    "realtime_hint": "伺服器端依停頓自動切句，錄音過程中即時回填；適合長時間會議字幕、直播轉寫等無人值守情境。",
+    "utterance_label": "整句聽寫",
+    "utterance_hint": "整段錄音視為一次完整對話，放開按鍵後再回傳轉寫結果；模型擁有完整上下文，更準確且不易被停頓誤切。",
+    "ai_refine_label": "AI 優化（推薦）",
+    "ai_refine_hint": "在「整句聽寫」基礎上再呼叫大型模型整理：去口頭禪、消重、識別自我修正、依序詞列表化；同語言不翻譯。"
   },
   "inject": {
     "clipboard_label": "剪貼簿 + 貼上",

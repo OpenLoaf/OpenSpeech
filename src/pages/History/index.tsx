@@ -4,7 +4,6 @@ import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
   Check,
-  ChevronDown,
   Copy,
   Download,
   Loader2,
@@ -41,9 +40,6 @@ import { usePlaybackStore } from "@/stores/playback";
 // ─────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────
-
-const RETENTION_VALUES = ["forever", "90d", "30d", "7d", "off"] as const;
-type RetentionValue = (typeof RETENTION_VALUES)[number];
 
 const FILTER_VALUES = ["all", "dictation", "ask", "translate"] as const;
 type FilterValue = (typeof FILTER_VALUES)[number];
@@ -86,6 +82,17 @@ function formatTime(ts: number): string {
   return `${hh}:${mm}`;
 }
 
+// 短时长用 0.8s / 12s，>=1min 用 m:ss，避免 0:03 这种看起来像分钟数的歧义。
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s";
+  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 function typeLabel(t: TFunction, type: HistoryType): string {
   return t(`pages:history.filters.${type}`);
 }
@@ -93,88 +100,6 @@ function typeLabel(t: TFunction, type: HistoryType): string {
 // ─────────────────────────────────────────────────────────────
 // Sub-components
 // ─────────────────────────────────────────────────────────────
-
-function RetentionBar({
-  value,
-  onChange,
-}: {
-  value: RetentionValue;
-  onChange: (v: RetentionValue) => void;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-
-  return (
-    <motion.div
-      data-tauri-drag-region="false"
-      className="relative z-20 mt-4 flex flex-col gap-4 border border-te-gray/40 bg-te-surface p-6 md:flex-row md:items-center md:justify-between"
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
-    >
-      <div>
-        <div className="font-mono text-xs uppercase tracking-[0.2em] text-te-accent">
-          {t("pages:history.retention.title")}
-        </div>
-        <div className="mt-2 text-sm text-te-light-gray">
-          {t("pages:history.retention.description")}
-        </div>
-      </div>
-
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="group inline-flex items-center gap-2 border border-te-gray/60 bg-te-bg px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
-        >
-          <span>{t(`pages:history.retention.options.${value}`)}</span>
-          <motion.span
-            animate={{ rotate: open ? 180 : 0 }}
-            transition={{ duration: 0.2 }}
-            className="inline-flex"
-          >
-            <ChevronDown className="size-3.5" />
-          </motion.span>
-        </button>
-
-        <AnimatePresence>
-          {open && (
-            <motion.ul
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.15 }}
-              className="absolute right-0 z-10 mt-2 min-w-[14rem] border border-te-gray/60 bg-te-bg py-1 shadow-none"
-            >
-              {RETENTION_VALUES.map((opt) => {
-                const active = opt === value;
-                return (
-                  <li key={opt}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onChange(opt);
-                        setOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] transition-colors ${
-                        active
-                          ? "bg-te-surface-hover text-te-accent"
-                          : "text-te-fg hover:bg-te-surface-hover hover:text-te-accent"
-                      }`}
-                    >
-                      <span>{t(`pages:history.retention.options.${opt}`)}</span>
-                      {active && <Check className="size-3.5" />}
-                    </button>
-                  </li>
-                );
-              })}
-            </motion.ul>
-          )}
-        </AnimatePresence>
-      </div>
-    </motion.div>
-  );
-}
 
 function FilterTabs({
   value,
@@ -246,8 +171,8 @@ function StatusBadge({ status }: { status: HistoryStatus }) {
   );
 }
 
-// 有录音文件的成功 / 取消记录展示此按钮：点击 = 播放原始 WAV；再次点击 = 暂停。
-// 切到别的行时，此行自动从 Pause 图标回落到 Play。
+// 有录音文件的成功 / 取消记录展示此按钮：点击 = 播放原始录音（OGG / 老库 WAV）；
+// 再次点击 = 暂停。切到别的行时，此行自动从 Pause 图标回落到 Play。
 function PlayButton({ id, audioPath }: { id: string; audioPath: string }) {
   const { t } = useTranslation();
   const playingId = usePlaybackStore((s) => s.playingId);
@@ -325,13 +250,18 @@ function RowActions({
 
   const handleExport = async () => {
     if (!audioPath) return;
-    // audio_path = "recordings/<id>.wav"。用 basename 作为系统 Save Dialog 的默认文件名。
-    const defaultName = audioPath.split("/").pop() || "openspeech-recording.wav";
+    // audio_path 形如 "recordings/<id>.ogg"（新版）或 ".wav"（迁移前老库）。
+    // 用 basename 作为 Save Dialog 默认文件名，filter 跟实际扩展名对齐。
+    const isOgg = audioPath.toLowerCase().endsWith(".ogg");
+    const defaultName =
+      audioPath.split("/").pop() || (isOgg ? "openspeech-recording.ogg" : "openspeech-recording.wav");
     let dest: string | null;
     try {
       dest = await saveFileDialog({
         defaultPath: defaultName,
-        filters: [{ name: "WAV", extensions: ["wav"] }],
+        filters: isOgg
+          ? [{ name: "OGG", extensions: ["ogg"] }]
+          : [{ name: "WAV", extensions: ["wav"] }],
       });
     } catch (e) {
       console.error("[history] save dialog failed:", e);
@@ -417,10 +347,16 @@ function RowActions({
       </button>
       <button
         type="button"
-        className={baseBtn}
-        title={t("pages:history.row.reinject")}
+        disabled={!canRetry}
+        onClick={onRetry}
+        className={`${baseBtn} disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-transparent disabled:hover:text-te-light-gray`}
+        title={retryTitle}
       >
-        <RotateCcw className="size-3.5" />
+        {retrying ? (
+          <Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
+        ) : (
+          <RotateCcw className="size-3.5" />
+        )}
       </button>
       {audioPath ? (
         <button
@@ -444,15 +380,58 @@ function RowActions({
   );
 }
 
+function RefinedToggle({
+  showRaw,
+  onToggle,
+}: {
+  showRaw: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const baseCls =
+    "rounded-sm px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest transition-colors";
+  const activeCls = "bg-te-fg text-te-bg";
+  const inactiveCls = "text-te-light-gray hover:text-te-fg";
+  return (
+    <div className="mt-1.5 inline-flex items-center gap-1 rounded-sm border border-te-gray/30 p-0.5">
+      <button
+        type="button"
+        className={`${baseCls} ${!showRaw ? activeCls : inactiveCls}`}
+        onClick={() => onToggle(false)}
+      >
+        {t("pages:history.row.view_refined")}
+      </button>
+      <button
+        type="button"
+        className={`${baseCls} ${showRaw ? activeCls : inactiveCls}`}
+        onClick={() => onToggle(true)}
+      >
+        {t("pages:history.row.view_raw")}
+      </button>
+    </div>
+  );
+}
+
 function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
   const { t } = useTranslation();
   const isFailed = item.status === "failed";
+  const isCancelled = item.status === "cancelled";
   const retry = useHistoryStore((s) => s.retry);
   const remove = useHistoryStore((s) => s.remove);
   const retrying = useHistoryStore((s) => s.retryingIds.has(item.id));
+  const hasRefined = !isFailed && !isCancelled && !!item.refined_text;
+  // 默认显示 refined（AI 优化后的书面化文本）；用户可切回原始 ASR 文本对照。
+  const [showRaw, setShowRaw] = useState(false);
   const displayText = isFailed
     ? t("pages:history.row.failed_placeholder")
-    : item.text;
+    : isCancelled
+      ? t("pages:history.row.cancelled_placeholder", {
+          duration: formatDuration(item.duration_ms),
+        })
+      : hasRefined && !showRaw
+        ? (item.refined_text as string)
+        : item.text;
+  const copyableText = displayText;
 
   const handleRetry = async () => {
     try {
@@ -515,6 +494,9 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
         >
           {displayText}
         </p>
+        {hasRefined && (
+          <RefinedToggle showRaw={showRaw} onToggle={setShowRaw} />
+        )}
         {!isFailed && item.target_app && (
           <div className="mt-1.5 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
             <span>
@@ -533,7 +515,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
         <RowActions
           status={item.status}
-          text={item.text}
+          text={copyableText}
           audioPath={item.audio_path}
           durationMs={item.duration_ms}
           retrying={retrying}
@@ -586,7 +568,6 @@ export default function HistoryPage() {
   const items = useHistoryStore((s) => s.items);
   const clearAllInDb = useHistoryStore((s) => s.clearAll);
   const [filter, setFilter] = useState<FilterValue>("all");
-  const [retention, setRetention] = useState<RetentionValue>("forever");
   const [query, setQuery] = useState("");
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
@@ -596,6 +577,7 @@ export default function HistoryPage() {
     if (!q) return base;
     return base.filter((it) => {
       if (it.text.toLowerCase().includes(q)) return true;
+      if (it.refined_text?.toLowerCase().includes(q)) return true;
       if (it.target_app?.toLowerCase().includes(q)) return true;
       if (it.error?.toLowerCase().includes(q)) return true;
       return false;
@@ -668,8 +650,6 @@ export default function HistoryPage() {
               disabled={items.length === 0}
             />
           </motion.div>
-
-          <RetentionBar value={retention} onChange={setRetention} />
         </div>
       </div>
 
@@ -678,11 +658,13 @@ export default function HistoryPage() {
         <div data-tauri-drag-region className="mx-auto max-w-5xl px-[4vw]">
           <div className="flex items-center justify-between gap-4 border-b border-te-gray/40">
             <FilterTabs value={filter} onChange={setFilter} />
-            <SearchBox
-              value={query}
-              onChange={setQuery}
-              placeholder={t("pages:history.search_placeholder")}
-            />
+            <div className="flex items-center gap-2">
+              <SearchBox
+                value={query}
+                onChange={setQuery}
+                placeholder={t("pages:history.search_placeholder")}
+              />
+            </div>
           </div>
         </div>
       </div>

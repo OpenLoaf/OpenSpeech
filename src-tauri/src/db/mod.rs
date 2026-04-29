@@ -2,9 +2,10 @@
 //
 // 职责：
 // 1. 声明 schema 迁移：history（转写记录） / dictionary（自定义词汇）。
-// 2. 暴露 `recordings_dir()` —— 每次真实录音（task #13）落盘的 WAV 目录。
-//    数据库里 history.audio_path 仅存 **相对路径**（如 `recordings/<id>.wav`），
-//    跨平台 / 备份还原更友好，运行时拼上 app_data_dir 即可。
+// 2. 暴露 `recordings_dir()` —— 每次真实录音（task #13）落盘的 OGG 目录。
+//    数据库里 history.audio_path 仅存 **相对路径**（如 `recordings/<id>.ogg`，
+//    迁移前老记录可能仍是 `.wav`），跨平台 / 备份还原更友好，运行时拼上
+//    app_data_dir 即可。
 //
 // DB 文件名：openspeech.db，由 tauri-plugin-sql 默认落在 app_data_dir 下。
 // 前端通过 `Database.load("sqlite:openspeech.db")` 使用（见 src/lib/db.ts）。
@@ -17,7 +18,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 /// 前端 `Database.load(DB_URL)` 的 URL —— 也用于 sql 插件的 capability 权限匹配。
 pub const DB_URL: &str = "sqlite:openspeech.db";
 
-/// 所有录音 WAV 文件所在目录（`app_data_dir/recordings/`）。
+/// 所有录音文件所在目录（`app_data_dir/recordings/`）。
 /// 调用方不保证此目录已创建——`ensure_recordings_dir` 会 mkdir_p。
 #[allow(dead_code)] // 被 task #13 的录音落盘路径用，当前仅 schema 留口
 pub fn recordings_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
@@ -37,10 +38,11 @@ pub fn ensure_recordings_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Pa
 }
 
 pub fn migrations() -> Vec<Migration> {
-    vec![Migration {
-        version: 1,
-        description: "create_history_and_dictionary",
-        sql: r#"
+    vec![
+        Migration {
+            version: 1,
+            description: "create_history_and_dictionary",
+            sql: r#"
 CREATE TABLE IF NOT EXISTS history (
     id           TEXT PRIMARY KEY,
     type         TEXT NOT NULL CHECK (type IN ('dictation', 'ask', 'translate')),
@@ -69,6 +71,15 @@ CREATE TABLE IF NOT EXISTS dictionary (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_dictionary_term_ci ON dictionary(LOWER(term));
 CREATE INDEX IF NOT EXISTS idx_dictionary_source ON dictionary(source);
 "#,
-        kind: MigrationKind::Up,
-    }]
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "history_add_refined_text",
+            sql: r#"
+ALTER TABLE history ADD COLUMN refined_text TEXT;
+"#,
+            kind: MigrationKind::Up,
+        },
+    ]
 }

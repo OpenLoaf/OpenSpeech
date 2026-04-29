@@ -22,7 +22,12 @@ import {
   startSttSession,
   finalizeSttSession,
   cancelSttSession,
+  refineSpeechTextStream,
 } from "@/lib/stt";
+import {
+  getHotwordsForRefine,
+  rememberHotwordsCacheId,
+} from "@/lib/hotwordsCache";
 import { newId } from "@/lib/ids";
 
 export type RecordingState =
@@ -50,8 +55,8 @@ interface RecordingStore {
   startedListening: boolean;
   audioLevels: number[];
   /**
-   * 当前会话的 history.id——pressed 时前端生成（`newId()`），同时作为 WAV
-   * 文件名（`recordings/<id>.wav`）。落盘 / 写 history / 取消都走同一个 id。
+   * 当前会话的 history.id——pressed 时前端生成（`newId()`），同时作为录音
+   * 文件名（`recordings/<id>.ogg`）。落盘 / 写 history / 取消都走同一个 id。
    * idle 态为 null。
    */
   recordingId: string | null;
@@ -231,7 +236,7 @@ const startRecordingSession = (id: string) => {
   void startRecordingToFile(id)
     .then(() => {
       const segmentMode = getEffectiveSegmentMode();
-      const sttMode = segmentMode === "MANUAL" ? "manual" : "auto";
+      const sttMode = segmentMode === "REALTIME" ? "auto" : "manual";
       startSttSession({ mode: sttMode }).catch((e) => {
         const raw = String(e ?? "");
         if (isAuthError(raw)) {
@@ -266,16 +271,15 @@ type FinalizeOutcome = {
 };
 
 /**
- * 主窗口独占：并行结束 Rust 录音 + ASR finalize，两者结果 merge 写 history。
- * 顺序无强依赖（音频已在 cpal 回调里实时流给 realtime；stop_recording 只是
- * flush WAV 文件），用 allSettled 让两边互不连累。
+ * 主窗口独占：先停 mic 再 finalize ASR，确保 cpal 回调里最后一批 PCM 已经全部
+ * 入 ctrl_tx，再让 IPC 线程发 Finish——否则 Finish 与尾部 audio 会在同一个 mpsc
+ * 通道上抢生产者顺序，服务端可能在拿到完整音频前就被 client_finish 关掉，
+ * 导致 0 段 Final + credits=0 的"假静音"。
  */
 const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   if (!IS_MAIN_WINDOW) return { rec: null, text: "" };
-  const [recSettled, sttSettled] = await Promise.allSettled([
-    stopRecordingAndSave(),
-    finalizeSttSession(),
-  ]);
+  const recSettled = await Promise.allSettled([stopRecordingAndSave()]).then((r) => r[0]);
+  const sttSettled = await Promise.allSettled([finalizeSttSession()]).then((r) => r[0]);
   const rec = recSettled.status === "fulfilled" ? recSettled.value : null;
   const text =
     sttSettled.status === "fulfilled" && sttSettled.value ? sttSettled.value : "";
@@ -291,9 +295,19 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       });
     }
   } else if (sttSettled.status === "fulfilled" && !sttSettled.value) {
-    // 全程静音 / 没说话 / send_finish 超时空串：直接静默关浮窗，不打扰用户。
-    // history 仍按 status=failed 落档便于事后查证。
+    // 0 段 Final：可能是真静音、也可能是服务端没识别成功。无论哪种用户都该
+    // 看到反馈，否则"按了快捷键啥都没发生"比错误提示更糟。toast 几秒自动消失。
     console.warn("[stt] no final transcript (silent or timeout)");
+    notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
+      description: i18n.t("overlay:toast.transcribe_failed.no_transcript"),
+      durationMs: 5000,
+    });
+  }
+
+  // 拿到 transcript 后切到 "injecting"——overlay 把"思考中"切成"输出中"，
+  // 反映真实进度（接下来要么走 AI_REFINE 流式逐字敲、要么末尾整段 paste）。
+  if (text && IS_MAIN_WINDOW && useRecordingStore.getState().state === "transcribing") {
+    useRecordingStore.setState({ state: "injecting" });
   }
   if (recSettled.status === "rejected") {
     console.error("[recording] stop failed:", recSettled.reason);
@@ -302,10 +316,62 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     });
   }
 
+  // AI_REFINE：拿到原始 transcript 后强制走流式 OL-TL-005，每个 Delta 通过
+  // injectIncremental 实时敲到光标位置（剪贴板 + Cmd/Ctrl+V 单字符段）。
+  // 流结束后把整段 refinedText 写回剪贴板，覆盖最后一段 delta，让用户后续
+  // Cmd+V / Cmd+C 都拿到完整内容。
+  //
+  // 热词：dictionary 派生 hotwords + 进程内缓存 cacheId（v0.3.6+）。后端优先
+  // 走 cacheId 命中路径，410 时自动回退明文重发，前端只需透传两者。
+  //
+  // 流式失败 / auth 异常时 refinedText 保持 null，最终 finalText = text，
+  // 走原 UTTERANCE 路径整段贴到光标。
+  const segmentMode = getEffectiveSegmentMode();
+  let refinedText: string | null = null;
+  if (text && segmentMode === "AI_REFINE") {
+    const { hotwords, hotwordsCacheId } = getHotwordsForRefine();
+    resetIncrementalInject();
+    let streamedSoFar = "";
+    try {
+      const r = await refineSpeechTextStream(
+        { text, hotwords: hotwords || undefined, hotwordsCacheId },
+        (chunk) => {
+          streamedSoFar += chunk;
+          injectIncremental(streamedSoFar);
+        },
+      );
+      refinedText = r.refinedText;
+      rememberHotwordsCacheId(hotwords, r.hotwordsCacheId);
+      try {
+        await injectChain;
+      } catch {}
+      try {
+        await writeClipboard(refinedText);
+      } catch (e) {
+        console.warn("[clipboard] post-refine writeText failed:", e);
+      }
+    } catch (e) {
+      const raw = String(e ?? "");
+      if (isAuthError(raw)) {
+        handleAuthLost();
+      } else {
+        console.warn("[stt] refine stream failed, falling back to raw transcript:", e);
+        notifyOverlay(
+          "warning",
+          i18n.t("overlay:toast.transcribe_failed.title"),
+          { description: humanizeSttError(e) },
+        );
+      }
+    }
+    void streamedSoFar;
+  }
+  const finalText = refinedText ?? text;
+
   if (rec) {
     await useHistoryStore.getState().add({
       type: "dictation",
       text: text || transcriptPlaceholder(),
+      refined_text: refinedText,
       status: text ? "success" : "failed",
       error: text ? undefined : "no final transcript",
       duration_ms: rec.duration_ms,
@@ -313,46 +379,60 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     });
   }
 
-  // 结束阶段：把最终文字写到系统剪贴板，再通过 enigo 模拟 Cmd/Ctrl+V 粘贴
-  // 到松开 PTT 时焦点所在的输入框。剪贴板写失败 / 注入失败都不致命——文字
-  // 仍可在历史里查到，用户也可手动粘贴。空串跳过整段。
+  // 末尾兜底：把"还没敲到光标的剩余部分"补完。三种模式统一走 lastInjectedText
+  // diff，不再以"流过任何一段"作为整段 paste 的开关——AI_REFINE 流式中途抛错
+  // 或 startsWith 短路（前缀被纠错）会让 lastInjectedText 落后于真实 finalText，
+  // 之前用 aiRefineStreamed 一刀切跳过 paste 会导致"前半敲到了、后半凭空丢失"，
+  // 而历史 / 剪贴板里仍是完整文本——这正是用户报告的"另一半没了"根因。
   //
-  // AUTO（VAD）模式下，asr-final 已经把若干段增量贴下去了——这里要等增量链
-  // 清空，再只补 lastInjectedText 之后的尾巴；否则会把整段又贴一次造成重复。
-  if (text) {
+  // 前缀对不上（catch 后 finalText 退回原始 transcript，与已敲下的 refined 不一致）
+  // → 不强行接尾，避免拼成半 refined 半 raw 的串，把整段 finalText 写剪贴板让
+  // 用户手动 Cmd/Ctrl+V 拿到完整结果。
+  if (finalText) {
     try {
       await injectChain;
     } catch {}
-    const segmentMode = getEffectiveSegmentMode();
-    const remaining =
-      segmentMode === "AUTO" && text.startsWith(lastInjectedText)
-        ? text.slice(lastInjectedText.length)
-        : text;
-    if (remaining) {
-      let clipboardOk = false;
-      try {
-        await writeClipboard(remaining);
-        clipboardOk = true;
-      } catch (e) {
-        console.warn("[clipboard] writeText failed:", e);
-        notifyOverlay("warning", i18n.t("overlay:toast.clipboard_failed.title"), {
-          description: String(e),
-        });
-      }
-      if (clipboardOk) {
+    if (finalText.startsWith(lastInjectedText)) {
+      const remaining = finalText.slice(lastInjectedText.length);
+      if (remaining) {
+        let clipboardOk = false;
         try {
-          await invoke("inject_paste");
+          await writeClipboard(remaining);
+          clipboardOk = true;
         } catch (e) {
-          console.warn("[inject] paste failed:", e);
-          notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
-            description: i18n.t("overlay:toast.paste_failed.description"),
+          console.warn("[clipboard] writeText failed:", e);
+          notifyOverlay("warning", i18n.t("overlay:toast.clipboard_failed.title"), {
+            description: String(e),
           });
         }
+        if (clipboardOk) {
+          try {
+            await invoke("inject_paste");
+          } catch (e) {
+            console.warn("[inject] paste failed:", e);
+            notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
+              description: i18n.t("overlay:toast.paste_failed.description"),
+            });
+          }
+        }
       }
+    } else {
+      console.warn(
+        "[stt] finalText prefix mismatch with injected text → fallback to clipboard-only",
+        { injected: lastInjectedText.length, final: finalText.length },
+      );
+      try {
+        await writeClipboard(finalText);
+      } catch (e) {
+        console.warn("[clipboard] writeText failed:", e);
+      }
+      notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
+        description: i18n.t("overlay:toast.paste_failed.description"),
+      });
     }
     resetIncrementalInject();
   }
-  return { rec, text };
+  return { rec, text: finalText };
 };
 
 // AUTO（VAD）模式下的增量注入状态：每次服务端 Final 到达，asr-final payload 是
@@ -458,10 +538,8 @@ const abortAndSaveHistory = async (): Promise<void> => {
   });
 };
 
-// 听写开始 / 结束的提示音——Web Audio 即时合成，零素材依赖。
-// 开始：上行双音（880→1320Hz），结束：单声中音（660Hz）。
-// AudioContext lazy 初始化；macOS WKWebView / Windows WebView2 在桌面壳内
-// 不需要 user gesture 就能 resume（与浏览器策略不同）。
+// 听写提示音：Web Audio 即时合成，零素材依赖。
+// 桌面壳 WebView 内不需 user gesture 即可 resume（与浏览器策略不同）。
 let audioCtx: AudioContext | null = null;
 const ensureAudioCtx = () => {
   if (!IS_MAIN_WINDOW) return null;
@@ -477,35 +555,50 @@ const ensureAudioCtx = () => {
   return audioCtx;
 };
 
-const beep = (freq: number, durationMs: number, delayMs = 0, gain = 0.08) => {
+// 柔和"叮咚"：sine 基频 + 一点八度泛音，串 lowpass 软化高频；30ms attack + 指数衰减，避免敲击的硬边缘
+const ding = (
+  freq: number,
+  durationMs: number,
+  delayMs = 0,
+  peakGain = 0.09,
+) => {
   const ctx = ensureAudioCtx();
   if (!ctx) return;
   const t0 = ctx.currentTime + delayMs / 1000;
   const t1 = t0 + durationMs / 1000;
-  const osc = ctx.createOscillator();
-  const g = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.value = freq;
-  // 5ms attack / 10ms release，避免 click 噪声
-  g.gain.setValueAtTime(0, t0);
-  g.gain.linearRampToValueAtTime(gain, t0 + 0.005);
-  g.gain.setValueAtTime(gain, t1 - 0.01);
-  g.gain.linearRampToValueAtTime(0, t1);
-  osc.connect(g).connect(ctx.destination);
-  osc.start(t0);
-  osc.stop(t1 + 0.02);
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = freq * 2.2;
+  filter.Q.value = 0.4;
+  filter.connect(ctx.destination);
+  const partials = [
+    { ratio: 1, gain: 1 },
+    { ratio: 2, gain: 0.18 },
+  ] as const;
+  for (const p of partials) {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq * p.ratio;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(peakGain * p.gain, t0 + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t1);
+    osc.connect(g).connect(filter);
+    osc.start(t0);
+    osc.stop(t1 + 0.05);
+  }
 };
 
 const playStartCue = () => {
-  beep(880, 70, 0);
-  beep(1320, 70, 90);
+  ding(440, 280, 0); // A4
+  ding(659.25, 420, 160); // E5，上行纯五度，温暖的"叮咚"
 };
 const playStopCue = () => {
-  beep(660, 110, 0);
+  ding(523.25, 460, 0); // C5 单音，柔和收尾
 };
 const playCancelCue = () => {
-  beep(660, 70, 0);
-  beep(440, 90, 90);
+  ding(659.25, 260, 0); // E5
+  ding(440, 460, 160); // A4，下行表撤回
 };
 
 export const useRecordingStore = create<RecordingStore>((set, get) => {
@@ -700,9 +793,23 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             // 多一帧空白 state 没意义，直接跳过。
             stopMic();
             set({ state: "transcribing", audioLevels: emptyLevels() });
-            void finalizeAndWriteHistory().finally(() => {
+            void finalizeAndWriteHistory().then((outcome) => {
+              // 转写没拿到任何文字（0 段 Final / 超时 / 异常）：进入 error 态，
+              // 让 PTT 在 ERROR_AUTO_DISMISS_MS（4s）内被忽略，避免用户看到失败
+              // toast 之前又触发一次新的录音、连环失败。
+              if (!outcome.text) {
+                set({
+                  state: "error",
+                  activeId: null,
+                  recordingId: null,
+                  liveTranscript: "",
+                  errorMessage: i18n.t("overlay:toast.transcribe_failed.title"),
+                });
+                return;
+              }
               window.setTimeout(() => {
-                if (get().state !== "transcribing") return;
+                const cur = get().state;
+                if (cur !== "transcribing" && cur !== "injecting") return;
                 set({
                   state: "idle",
                   activeId: null,
@@ -714,8 +821,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             return;
           }
 
-          // Transcribing / injecting 等中间态忽略新的触发（见 voice-input-flow.md）
-          if (cur.state !== "idle" && cur.state !== "error") {
+          // 中间态 / error 态都忽略新的 PTT 触发：
+          // - transcribing / injecting / preparing：流程未完成，避免抢资源；
+          // - error：刚失败的 toast 还在显示（ERROR_AUTO_DISMISS_MS=4s 后自动回 idle），
+          //   立刻让用户再录一遍多半是同样的失败，反而盖过提示信息。
+          if (cur.state !== "idle") {
             console.warn(
               "[recording] press IGNORED: state not idle/error and activeId mismatch",
               {
@@ -930,7 +1040,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         // 实现"边说边出字"。MANUAL 只会出一段 Final 且与 finalize 几乎同时到达，
         // 走原 finalize 的整段粘贴更省事，这里跳过。
         const mode = getEffectiveSegmentMode();
-        if (mode === "AUTO") {
+        if (mode === "REALTIME") {
           injectIncremental(text);
         }
       });
@@ -1149,7 +1259,17 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       }
       stopMic();
       set({ state: "transcribing", audioLevels: emptyLevels() });
-      void finalizeAndWriteHistory().finally(() => {
+      void finalizeAndWriteHistory().then((outcome) => {
+        if (!outcome.text) {
+          set({
+            state: "error",
+            activeId: null,
+            recordingId: null,
+            liveTranscript: "",
+            errorMessage: i18n.t("overlay:toast.transcribe_failed.title"),
+          });
+          return;
+        }
         window.setTimeout(() => {
           if (get().state !== "transcribing") return;
           set({

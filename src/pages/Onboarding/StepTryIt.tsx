@@ -35,12 +35,12 @@ export function StepTryIt({
   const realLevels = useRecordingStore((s) => s.audioLevels);
   const realTranscript = useRecordingStore((s) => s.liveTranscript);
 
-  // 此步要让用户看到「实时出字」效果，必须走 AUTO（服务端 VAD + partial 回填）。
-  // 用户默认设置是 MANUAL，只在松手才出 Final，会让人误以为实时输出坏了。
+  // 此步要让用户看到「实时出字」效果，必须走 REALTIME（服务端 VAD + partial 回填）。
+  // 用户默认走 AI_REFINE / UTTERANCE，只在松手才出 Final，会让人误以为实时输出坏了。
   // 仅在 Onboarding 这一步内覆盖，组件卸载即恢复用户原始偏好。
   useEffect(() => {
     const setOverride = useRecordingStore.getState().setSegmentModeOverride;
-    setOverride("AUTO");
+    setOverride("REALTIME");
     return () => setOverride(null);
   }, []);
 

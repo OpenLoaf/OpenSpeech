@@ -6,7 +6,8 @@
   },
   "status": {
     "error_fallback": "Error",
-    "transcribing": "Thinking…"
+    "transcribing": "Thinking…",
+    "injecting": "Inserting…"
   },
   "panel": {
     "tag": {
@@ -47,7 +48,8 @@
       "title": "Failed to start recording"
     },
     "transcribe_failed": {
-      "title": "Transcription failed"
+      "title": "Transcription failed",
+      "no_transcript": "Nothing was recognized — retry from History"
     },
     "recording_save_failed": {
       "title": "Failed to save recording"

@@ -21,9 +21,10 @@
     "shortcuts": "Keyboard shortcuts",
     "language": "Language",
     "audio": "Audio",
-    "asr_segment": "Segmentation",
+    "asr_segment": "Dictation mode",
     "text_injection": "Text injection",
     "behavior": "Behavior",
+    "history": "History",
     "model_rest": "Large model (REST)",
     "ai_enhance": "AI enhancement",
     "dictionary_learning": "Dictionary learning",
@@ -49,6 +50,15 @@
     "close_to_tray_hint": "When on, closing the main window hides it to the tray; otherwise a confirm dialog appears each time.",
     "auto_update": "Auto update",
     "auto_update_hint": "Silently check and install new versions on launch. When off, you can only check manually from the tray.",
+    "history_retention": "History retention",
+    "history_retention_hint": "How long history records are kept in the local database. Shortening the window takes effect on next launch and does not delete existing records immediately.",
+    "history_retention_options": {
+      "forever": "Forever",
+      "90d": "90 days",
+      "30d": "30 days",
+      "7d": "7 days",
+      "off": "Don't save"
+    },
     "loading": "// loading settings…"
   },
   "device": {
@@ -59,10 +69,12 @@
     "disconnected": "{{name}} · disconnected"
   },
   "asr_segment": {
-    "manual_label": "Manual segmentation (recommended)",
-    "manual_hint": "Treat the whole recording as a single utterance and return the transcript only after you release the key. The model gets full context — more accurate and won't be split by pauses.",
-    "auto_label": "Auto segmentation",
-    "auto_hint": "Server splits at pauses and streams partials in real time. Best for long meeting captions, live transcription and other unattended scenarios."
+    "realtime_label": "Realtime",
+    "realtime_hint": "Server splits at pauses and streams partials in real time. Best for long meeting captions, live transcription and other unattended scenarios.",
+    "utterance_label": "Whole utterance",
+    "utterance_hint": "Treat the whole recording as a single utterance and return the transcript only after you release the key. The model gets full context — more accurate and won't be split by pauses.",
+    "ai_refine_label": "AI enhanced (recommended)",
+    "ai_refine_hint": "On top of \"whole utterance\", run an extra LLM pass to remove fillers, dedupe, recognise self-corrections, and list sequenced steps. Same language — no translation."
   },
   "inject": {
     "clipboard_label": "Clipboard + paste",

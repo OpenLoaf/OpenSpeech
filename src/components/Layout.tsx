@@ -83,6 +83,8 @@ export default function Layout() {
   const [accountOpen, setAccountOpen] = useState<boolean>(false);
   const [closePromptOpen, setClosePromptOpen] = useState<boolean>(false);
   const navigate = useNavigate();
+  // macOS 红绿灯垂直中心约在 y=14，logo slot 需顶部留空避免被覆盖。
+  const isMacPlatform = detectPlatform() === "macos";
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
   const profile = useAuthStore((s) => s.profile);
@@ -334,6 +336,19 @@ export default function Layout() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [openSettings]);
 
+  // Ctrl+W 强制最小化到托盘：忽略 closeBehavior 偏好，直接 hide。
+  // macOS Cmd+W 仍由 Window 菜单走 close-requested → 按设置走 HIDE/QUIT/PROMPT。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.code !== "KeyW" && e.key !== "w" && e.key !== "W") return;
+      e.preventDefault();
+      void invoke("hide_to_tray");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   // 设置页等处改 inputDevice 后通知 Rust 重建托盘菜单，让"选择麦克风"的 ✓
   // 跟随最新选择。空依赖 + subscribe 自带首次调用豁免（prev === next）。
   useEffect(() => {
@@ -426,7 +441,10 @@ export default function Layout() {
         {/* Logo slot — 顶部 drag 区，整个 logo 行可拖窗 */}
         <div
           data-tauri-drag-region
-          className="flex items-center justify-between gap-2 border-b border-te-gray px-5 py-5"
+          className={cn(
+            "flex items-center justify-between gap-2 border-b border-te-gray px-5",
+            isMacPlatform ? "pt-10 pb-5" : "py-5",
+          )}
         >
           <div className="flex items-center gap-2">
             <img

@@ -45,38 +45,43 @@ function DialogContent({
   return (
     <DialogPortal>
       <DialogOverlay />
-      {/* Dialog 打开期间顶部保留 32px drag 区，z 高于 overlay 保证可拖窗；popup 居中显示通常不会进入此区域 */}
+      {/* Dialog 打开期间顶部保留 32px drag 区，z 高于 popup 保证可拖窗 */}
       <div
         data-tauri-drag-region
         aria-hidden
-        className="pointer-events-auto fixed inset-x-0 top-0 z-[60] h-8"
+        className="pointer-events-auto fixed inset-x-0 top-0 z-[70] h-8"
       />
-      <DialogPrimitive.Popup
-        data-slot="dialog-content"
-        className={cn(
-          "te-dialog-popup grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 sm:max-w-sm",
-          className
-        )}
-        {...props}
-      >
-        {children}
-        {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            render={
-              <Button
-                variant="ghost"
-                className="absolute top-2 right-2"
-                size="icon-sm"
-              />
-            }
-          >
-            <XIcon
-            />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
-        )}
-      </DialogPrimitive.Popup>
+      {/* Viewport 是 base-ui 官方提供的全屏定位容器（role=presentation），
+          关闭时 pointer-events 自动 none。popup 作为它的 flex 子节点，
+          自身不再持 position:fixed/translate，避开 WKWebView 上 fixed+transform
+          强制提升合成层 + 半像素 transform 导致文字双线性发糊的问题。 */}
+      <DialogPrimitive.Viewport className="te-dialog-viewport fixed inset-0 z-[60] flex items-center justify-center">
+        <DialogPrimitive.Popup
+          data-slot="dialog-content"
+          className={cn(
+            "te-dialog-popup relative grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 sm:max-w-sm",
+            className
+          )}
+          {...props}
+        >
+          {children}
+          {showCloseButton && (
+            <DialogPrimitive.Close
+              data-slot="dialog-close"
+              render={
+                <Button
+                  variant="ghost"
+                  className="absolute top-2 right-2"
+                  size="icon-sm"
+                />
+              }
+            >
+              <XIcon />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          )}
+        </DialogPrimitive.Popup>
+      </DialogPrimitive.Viewport>
     </DialogPortal>
   )
 }

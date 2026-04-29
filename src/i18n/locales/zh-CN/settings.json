@@ -21,9 +21,10 @@
     "shortcuts": "键盘快捷键",
     "language": "语言",
     "audio": "音频",
-    "asr_segment": "分句模式",
+    "asr_segment": "听写模式",
     "text_injection": "文本注入",
     "behavior": "行为",
+    "history": "历史记录",
     "model_rest": "大模型（REST）",
     "ai_enhance": "AI 增强",
     "dictionary_learning": "词典学习",
@@ -49,6 +50,15 @@
     "close_to_tray_hint": "开启后关闭主窗口直接隐藏到托盘；关闭时每次弹确认对话框",
     "auto_update": "自动更新",
     "auto_update_hint": "启动时静默检查并安装新版本；关闭后只能通过托盘「检查更新」手动触发",
+    "history_retention": "历史保留时长",
+    "history_retention_hint": "控制本机数据库中的历史记录保留时间；缩短只在下次启动生效，不即时删除已有记录",
+    "history_retention_options": {
+      "forever": "永远",
+      "90d": "90 天",
+      "30d": "30 天",
+      "7d": "7 天",
+      "off": "不保存"
+    },
     "loading": "// loading settings…"
   },
   "device": {
@@ -59,10 +69,12 @@
     "disconnected": "{{name}} · 已断开"
   },
   "asr_segment": {
-    "manual_label": "手动分句（推荐）",
-    "manual_hint": "整段录音视为一次完整对话，松开按键后再返回转写结果；模型有完整上下文，更准、更不易被停顿误切。",
-    "auto_label": "自动分句",
-    "auto_hint": "服务端按停顿自动切句、录音过程中实时回填；适合长会议字幕、直播转写等无人值守场景。"
+    "realtime_label": "实时转换",
+    "realtime_hint": "服务端按停顿自动切句、录音过程中实时回填；适合长会议字幕、直播转写等无人值守场景。",
+    "utterance_label": "整句听写",
+    "utterance_hint": "整段录音视为一次完整对话，松开按键后再返回转写结果；模型有完整上下文，更准、更不易被停顿误切。",
+    "ai_refine_label": "AI 优化（推荐）",
+    "ai_refine_hint": "在「整句听写」基础上额外调用大模型整理：去口头禅、消重、识别自我修正、按顺序词列表化；同语言不翻译。"
   },
   "inject": {
     "clipboard_label": "剪贴板 + 粘贴",

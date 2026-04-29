@@ -22,8 +22,13 @@ import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { syncAutostart } from "@/lib/autostart";
+import { resolveLang } from "@/i18n";
 import "./i18n";
-import { syncI18nFromSettings } from "@/lib/i18n-sync";
+import {
+  applyLang,
+  listenLangChanged,
+  syncI18nFromSettings,
+} from "@/lib/i18n-sync";
 import "./App.css";
 
 // 禁用 WebView 的默认右键菜单（"后退 / 刷新"等），桌面应用不需要浏览器级菜单。
@@ -62,19 +67,31 @@ const bootPromise = (async () => {
     // listeners.ts / Waveform.tsx）在 mount 时挂载——main.tsx 这里不再调用
     // useRecordingStore.initListeners()，避免重复订阅与时机错乱。
     console.log("[boot overlay] syncing i18n only");
-    await useSettingsStore.getState().init();
-    void syncI18nFromSettings(
-      useSettingsStore.getState().general.interfaceLang,
-    );
+    // overlay capabilities 历史上缺 store:default，init 会 reject——整段 await
+    // 抛出会让 lang listener 永远注册不上。包一层兜底：哪怕 store 不可读，
+    // 监听器照旧挂上，主窗一切语言广播就能立刻应用到悬浮条。
+    try {
+      await useSettingsStore.getState().init();
+      // overlay 不调 syncI18nFromSettings——那条路会推托盘、广播给 overlay 自己，
+      // 这里只切本窗 i18n + 订阅主窗后续的语言变更广播即可。
+      await applyLang(
+        resolveLang(useSettingsStore.getState().general.interfaceLang),
+      );
+    } catch (e) {
+      console.warn("[boot overlay] settings init failed, falling back:", e);
+    }
+    void listenLangChanged();
     console.log("[boot overlay] ready");
     return;
   }
 
   console.log("[boot] starting store init...");
   try {
+    // settings 必须在 history 之前 ready：history.init 会读 historyRetention 决定
+    // 启动期 sweep 删多少。其它 store 与之无依赖，并行即可。
+    await useSettingsStore.getState().init();
     await Promise.all([
       useHotkeysStore.getState().init(),
-      useSettingsStore.getState().init(),
       useAuthStore.getState().init(),
       useHistoryStore.getState().init(),
       useDictionaryStore.getState().init(),
@@ -84,6 +101,9 @@ const bootPromise = (async () => {
     // 用户偏好语言一旦从 settings 读出来就同步给 i18n + 托盘菜单；之后 settings store
     // 写 interfaceLang 时也要走同一条函数（见 settings.ts 的 setGeneral）。
     void syncI18nFromSettings(useSettingsStore.getState().general.interfaceLang);
+    // 主窗也订阅一次：自己 emit 出去的事件本窗也会收到，applyLang 同语言会跳过，
+    // 不会回环；额外的好处是任何第三方窗口（promo / future）也能联动。
+    void listenLangChanged();
 
     // 开机自启：以 settings.launchStartup 为期望值同步到 OS（macOS LaunchAgent /
     // Windows HKCU Run / Linux .desktop）。空操作的判断在 syncAutostart 内做，失败

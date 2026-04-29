@@ -13,7 +13,6 @@ import {
 import i18next from "i18next";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
-import { SECRET_STT_API_KEY, getSecret, setSecret } from "@/lib/secrets";
 import {
   listInputDevices,
   startAudioLevel,
@@ -22,14 +21,11 @@ import {
 } from "@/lib/audio";
 import {
   ChevronDown,
-  Eye,
-  EyeOff,
   ExternalLink,
   User2,
   Sliders,
   Sparkles,
   Info,
-  Cloud,
   Rocket,
   MessageSquare,
   FolderOpen,
@@ -75,7 +71,6 @@ function useTabs(): TabDef[] {
   return [
     { id: "ACCOUNT", label: t("tabs.account"), icon: User2 },
     { id: "GENERAL", label: t("tabs.general"), icon: Sliders },
-    { id: "MODEL", label: t("tabs.model"), icon: Cloud },
     { id: "PERSONALIZATION", label: t("tabs.personalization"), icon: Sparkles },
     { id: "ABOUT", label: t("tabs.about"), icon: Info },
   ];
@@ -187,43 +182,6 @@ function Select<T extends string>({
         ))}
       </select>
       <ChevronDown className="pointer-events-none absolute right-2 size-3.5 text-te-light-gray" />
-    </div>
-  );
-}
-
-function TextInput({
-  value,
-  onChange,
-  onBlur,
-  type = "text",
-  placeholder,
-  className,
-  rightSlot,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onBlur?: () => void;
-  type?: string;
-  placeholder?: string;
-  className?: string;
-  rightSlot?: React.ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        "relative flex items-center border border-te-gray/40 bg-te-surface transition-colors focus-within:border-te-accent",
-        className,
-      )}
-    >
-      <input
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onBlur}
-        className="w-full bg-transparent px-3 py-2 font-mono text-sm text-te-fg placeholder:text-te-light-gray/60 focus:outline-none"
-      />
-      {rightSlot ? <div className="pr-2">{rightSlot}</div> : null}
     </div>
   );
 }
@@ -578,7 +536,7 @@ function GeneralTab() {
         />
       </Row>
 
-      {/* ASR segmentation */}
+      {/* Dictation mode */}
       <SectionTitle>{t("section.asr_segment")}</SectionTitle>
       <div className="py-3">
         <RadioBlock
@@ -586,14 +544,19 @@ function GeneralTab() {
           onChange={(v) => void setGeneral("asrSegmentMode", v)}
           options={[
             {
-              value: "MANUAL",
-              label: t("asr_segment.manual_label"),
-              hint: t("asr_segment.manual_hint"),
+              value: "REALTIME",
+              label: t("asr_segment.realtime_label"),
+              hint: t("asr_segment.realtime_hint"),
             },
             {
-              value: "AUTO",
-              label: t("asr_segment.auto_label"),
-              hint: t("asr_segment.auto_hint"),
+              value: "UTTERANCE",
+              label: t("asr_segment.utterance_label"),
+              hint: t("asr_segment.utterance_hint"),
+            },
+            {
+              value: "AI_REFINE",
+              label: t("asr_segment.ai_refine_label"),
+              hint: t("asr_segment.ai_refine_hint"),
             },
           ]}
         />
@@ -676,147 +639,30 @@ function GeneralTab() {
           onChange={(v) => void setGeneral("autoUpdate", v)}
         />
       </Row>
+
+      {/* History */}
+      <SectionTitle>{t("section.history")}</SectionTitle>
+      <Row
+        label={t("general.history_retention")}
+        hint={t("general.history_retention_hint")}
+      >
+        <Select
+          value={general.historyRetention}
+          onChange={(v) => void setGeneral("historyRetention", v)}
+          options={[
+            { value: "forever", label: t("general.history_retention_options.forever") },
+            { value: "90d", label: t("general.history_retention_options.90d") },
+            { value: "30d", label: t("general.history_retention_options.30d") },
+            { value: "7d", label: t("general.history_retention_options.7d") },
+            { value: "off", label: t("general.history_retention_options.off") },
+          ]}
+        />
+      </Row>
       {!loaded ? (
         <div className="mt-6 font-mono text-xs text-te-light-gray/70">
           {t("general.loading")}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function ModelTab() {
-  const { t } = useTranslation("settings");
-  const general = useSettingsStore((s) => s.general);
-  const setGeneral = useSettingsStore((s) => s.setGeneral);
-
-  // API Key 不进 Zustand / plugin-store：读一次进本地 state 显示，blur / 改动时写回 keyring。
-  const [apiKey, setApiKey] = useState<string>("");
-  const [showKey, setShowKey] = useState(false);
-  const apiKeyInitial = useRef<string>("");
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const v = await getSecret(SECRET_STT_API_KEY);
-        const initial = v ?? "";
-        apiKeyInitial.current = initial;
-        setApiKey(initial);
-      } catch (e) {
-        console.warn("getSecret failed", e);
-      }
-    })();
-  }, []);
-
-  const flushApiKey = async () => {
-    if (apiKey === apiKeyInitial.current) return;
-    try {
-      await setSecret(SECRET_STT_API_KEY, apiKey);
-      apiKeyInitial.current = apiKey;
-      toast.success(t("model.key_saved_toast"));
-    } catch (e) {
-      toast.error(t("model.key_save_failed_toast", { error: String(e) }));
-    }
-  };
-
-  return (
-    <div>
-      <SectionTitle>{t("section.model_rest")}</SectionTitle>
-      <div className="mb-3 border border-te-gray/40 bg-te-surface/60 px-4 py-3">
-        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-accent">
-          {t("model.byo_unavailable_tag")}
-        </div>
-        <div className="mt-1.5 font-sans text-xs leading-relaxed text-te-light-gray">
-          {t("model.byo_unavailable_body")}
-        </div>
-      </div>
-
-      <div className="pointer-events-none space-y-3 py-2 opacity-50" aria-disabled="true">
-        <div>
-          <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-            {t("model.endpoint")}
-          </div>
-          <TextInput
-            value={general.endpoint}
-            onChange={(v) => void setGeneral("endpoint", v)}
-            className="w-full"
-            placeholder="https://..."
-          />
-        </div>
-        <div>
-          <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-            {t("model.api_key")}
-            <span className="ml-2 text-[10px] tracking-normal text-te-light-gray/70 normal-case">
-              {t("model.api_key_hint")}
-            </span>
-          </div>
-          <TextInput
-            value={apiKey}
-            onChange={setApiKey}
-            onBlur={() => void flushApiKey()}
-            type={showKey ? "text" : "password"}
-            className="w-full"
-            placeholder="sk-..."
-            rightSlot={
-              <button
-                type="button"
-                onClick={() => setShowKey((s) => !s)}
-                className="flex size-7 items-center justify-center text-te-light-gray transition-colors hover:text-te-accent"
-                aria-label={showKey ? t("model.hide_key") : t("model.show_key")}
-              >
-                {showKey ? (
-                  <EyeOff className="size-4" />
-                ) : (
-                  <Eye className="size-4" />
-                )}
-              </button>
-            }
-          />
-        </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div>
-            <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-              {t("model.model_name")}
-            </div>
-            <TextInput
-              value={general.modelName}
-              onChange={(v) => void setGeneral("modelName", v)}
-              className="w-full"
-            />
-          </div>
-          <div>
-            <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-              {t("model.timeout_seconds")}
-            </div>
-            <TextInput
-              value={general.timeout}
-              onChange={(v) => void setGeneral("timeout", v)}
-              type="number"
-              className="w-full"
-            />
-          </div>
-        </div>
-        <div>
-          <div className="mb-1.5 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray">
-            {t("model.audio_format")}
-          </div>
-          <Select
-            value={general.audioFormat}
-            onChange={(v) => void setGeneral("audioFormat", v)}
-            options={["WAV", "OPUS"]}
-          />
-        </div>
-        <div className="pt-2">
-          <button
-            type="button"
-            disabled
-            className="group inline-flex cursor-not-allowed items-center gap-2 border border-te-gray/50 bg-te-gray/30 px-5 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray"
-          >
-            <span className="size-1.5 bg-te-light-gray" />
-            {t("model.test_connection_disabled")}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1190,7 +1036,6 @@ export default function SettingsContent({
         transition={{ duration: 0.3 }}
       >
         {tab === "GENERAL" && <GeneralTab />}
-        {tab === "MODEL" && <ModelTab />}
         {tab === "PERSONALIZATION" && <PersonalizationTab />}
         {tab === "ACCOUNT" && <AccountTab />}
         {tab === "ABOUT" && <AboutTab />}

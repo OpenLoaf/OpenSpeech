@@ -6,7 +6,7 @@ import type { LanguagePref } from "@/i18n";
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 6;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
 export type InjectMethod = "CLIPBOARD + PASTE" | "SIMULATE KEYBOARD";
@@ -18,10 +18,14 @@ export type DictationSource = "SAAS" | "BYO";
 //   REALTIME — 实时听写，ASR partial 直接落文本（所见即所得，边说边出）
 //   AI       — AI 听写（默认），松开后取 final 文本，再经 LLM 自动润色/总结后一次性注入
 export type DictationMode = "REALTIME" | "AI";
-// 分句模式（V4 OL-TL-RT-002 的 vadMode 透传，UI 用人类语义）：
-//   AUTO   — 自动分句（默认 / 服务端 VAD）：按停顿自动切句，UI 实时回填 partial
-//   MANUAL — 手动分句：整段录音视为一句话，松开按键后才出转写
-export type AsrSegmentMode = "AUTO" | "MANUAL";
+// 听写模式：
+//   REALTIME   — 实时转换：服务端 VAD 按停顿切句，partial 实时回填
+//   UTTERANCE  — 整句听写：整段录音视为一句话，松开按键后才出转写
+//   AI_REFINE  — AI 优化（默认）：UTTERANCE 流程结束后再调 OL-TL-005 整理书面化
+export type AsrSegmentMode = "REALTIME" | "UTTERANCE" | "AI_REFINE";
+// 历史记录保留时长。off = 不写入数据库（仅当前会话内存可见）；其它按天数清理。
+// 真正的清理任务由后端启动期 sweeper 执行（见 docs/history.md，TODO 实现）。
+export type HistoryRetention = "forever" | "90d" | "30d" | "7d" | "off";
 
 export interface GeneralSettings {
   interfaceLang: LanguagePref;
@@ -62,6 +66,8 @@ export interface GeneralSettings {
   // 按 sentenceId 累积）；MANUAL = 整段视为一句话，松开按键后服务端才返回唯一
   // 一段 Final（中途没有 partial 回填）。
   asrSegmentMode: AsrSegmentMode;
+  // 历史记录保留时长。'off' 不写入 DB；其它按天清理。
+  historyRetention: HistoryRetention;
 }
 
 export interface PersonalizationSettings {
@@ -94,11 +100,12 @@ const DEFAULT_GENERAL: GeneralSettings = {
   skippedUpdateVersion: "",
   closeBehavior: "ASK",
   onboardingCompleted: false,
-  // 默认 MANUAL（vadMode=none）：push-to-talk 听写场景下，文档明确给出"更准、
-  // 更便宜、不被 VAD 错切"。AUTO（server_vad）留给会议字幕 / 直播 / 同传等需要
-  // 按句独立 transcript 的无人值守场景。详见
-  // ~/.agents/skills/openloaf-saas-sdk/tools/OL-TL-RT-002-realtime-asr-llm.md
-  asrSegmentMode: "MANUAL",
+  // 默认 AI_REFINE：UTTERANCE 流程拿到 final transcript 后再调 OL-TL-005 整理。
+  // UTTERANCE（vadMode=none）作为基底：push-to-talk 听写文档推荐——更准、
+  // 更便宜、不被 VAD 错切。REALTIME（server_vad）留给会议字幕 / 直播 / 同传
+  // 等需要按句独立 transcript 的无人值守场景。
+  asrSegmentMode: "AI_REFINE",
+  historyRetention: "forever",
 };
 
 const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
@@ -161,7 +168,7 @@ function migrateV1(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
 // 老用户不论之前是默认填的 AUTO 还是主动选过 AUTO，都一并搬到 MANUAL——主动想用
 // AUTO 的用户在升级后还能在设置里再切回去（v3 之后 schemaVersion 不再覆盖）。
 function migrateV2(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
-  return { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: "MANUAL" };
+  return { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: "UTTERANCE" };
 }
 
 // v3 → v4：interfaceLang 由 UI 文案字符串改为稳定 code（system / zh-CN / zh-TW / en）。
@@ -172,6 +179,24 @@ function migrateV3(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
   else if (lang === "繁體中文" || lang === "繁体中文" || lang === "zh-TW") next = "zh-TW";
   else if (lang === "English" || lang === "en") next = "en";
   return { ...(oldGeneral as Partial<GeneralSettings>), interfaceLang: next };
+}
+
+// v4 → v5：AsrSegmentMode 重命名 + 加 AI_REFINE。AUTO→REALTIME, MANUAL→UTTERANCE；
+// 老用户的选择保持等价语义，不强行改成 AI_REFINE（避免突然开始扣额外积分）；
+// 想用 AI_REFINE 的用户自己去设置里切。
+function migrateV4(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
+  const old = oldGeneral.asrSegmentMode;
+  let mode: AsrSegmentMode = "AI_REFINE";
+  if (old === "AUTO" || old === "REALTIME") mode = "REALTIME";
+  else if (old === "MANUAL" || old === "UTTERANCE") mode = "UTTERANCE";
+  else if (old === "AI_REFINE") mode = "AI_REFINE";
+  return { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: mode };
+}
+
+// v5 → v6：把"历史记录保留时长"从 History 页本地 state 升级为持久化设置。
+// 老用户没存过这个字段，直接补默认 forever。
+function migrateV5(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
+  return { ...(oldGeneral as Partial<GeneralSettings>), historyRetention: "forever" };
 }
 
 async function readPersisted(): Promise<PersistShape> {
@@ -185,14 +210,16 @@ async function readPersisted(): Promise<PersistShape> {
   if (!raw || typeof raw !== "object") return defaults;
   const r = raw as Partial<PersistShape> & { schemaVersion?: number };
 
-  // 迁移：v1 → v2 → v3 → v4 链式
+  // 迁移：v1 → v2 → v3 → v4 → v5 → v6 链式
   if (r.schemaVersion === 1) {
     const v2 = migrateV1((r.general ?? {}) as Record<string, unknown>);
     const v3 = migrateV2(v2 as Record<string, unknown>);
     const v4 = migrateV3(v3 as Record<string, unknown>);
+    const v5 = migrateV4(v4 as Record<string, unknown>);
+    const v6 = migrateV5(v5 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v4 },
+      general: { ...DEFAULT_GENERAL, ...v6 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -202,9 +229,11 @@ async function readPersisted(): Promise<PersistShape> {
   if (r.schemaVersion === 2) {
     const v3 = migrateV2((r.general ?? {}) as Record<string, unknown>);
     const v4 = migrateV3(v3 as Record<string, unknown>);
+    const v5 = migrateV4(v4 as Record<string, unknown>);
+    const v6 = migrateV5(v5 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v4 },
+      general: { ...DEFAULT_GENERAL, ...v6 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -213,9 +242,34 @@ async function readPersisted(): Promise<PersistShape> {
   }
   if (r.schemaVersion === 3) {
     const v4 = migrateV3((r.general ?? {}) as Record<string, unknown>);
+    const v5 = migrateV4(v4 as Record<string, unknown>);
+    const v6 = migrateV5(v5 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v4 },
+      general: { ...DEFAULT_GENERAL, ...v6 },
+      personalization: {
+        ...DEFAULT_PERSONALIZATION,
+        ...(r.personalization ?? {}),
+      },
+    };
+  }
+  if (r.schemaVersion === 4) {
+    const v5 = migrateV4((r.general ?? {}) as Record<string, unknown>);
+    const v6 = migrateV5(v5 as Record<string, unknown>);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...v6 },
+      personalization: {
+        ...DEFAULT_PERSONALIZATION,
+        ...(r.personalization ?? {}),
+      },
+    };
+  }
+  if (r.schemaVersion === 5) {
+    const v6 = migrateV5((r.general ?? {}) as Record<string, unknown>);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...v6 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),

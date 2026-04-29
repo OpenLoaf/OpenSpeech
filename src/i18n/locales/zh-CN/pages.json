@@ -29,17 +29,6 @@
     "more": "更多",
     "export": "导出",
     "delete_all": "删除全部历史",
-    "retention": {
-      "title": "RETENTION POLICY",
-      "description": "历史保留时长 — 控制本机数据库中的记录留存时间。",
-      "options": {
-        "forever": "永远",
-        "90d": "90 天",
-        "30d": "30 天",
-        "7d": "7 天",
-        "off": "不保存"
-      }
-    },
     "filters": {
       "all": "全部",
       "dictation": "听写",
@@ -72,7 +61,10 @@
       "retry_too_long": "暂不支持超过 5 分钟的录音重试",
       "retry_in_progress": "重试中…",
       "retry_tooltip": "重试转录",
-      "failed_placeholder": "您的转录被中断。但 OpenSpeech 仍可以为您重试。"
+      "failed_placeholder": "您的转录被中断。但 OpenSpeech 仍可以为您重试。",
+      "cancelled_placeholder": "{{duration}} 录音已取消，未转录 · 可重新转录",
+      "view_refined": "AI 优化",
+      "view_raw": "原始文本"
     },
     "toast": {
       "copy_success": "已复制到剪贴板",

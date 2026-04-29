@@ -244,21 +244,18 @@
   }
 }
 
-/* base-ui Dialog 动画：用 CSS transition + base-ui 原生 data-starting/ending-style，
-   而不是 keyframe。理由：
-   - keyframe 默认 animation-fill-mode:none，结束反弹引发关闭瞬间一帧"闪屏"；
-   - 用 animation-fill-mode:forwards 又会让带 transform 的终态保持 GPU 合成层不释放，
-     多次开关后 composite 时间单调上涨（trace 实测 56% 时间在 composite）。
-   transition 天然 forwards 且 transition-end 后浏览器自动回收合成层。
-   transform 拆成独立的 translate / scale 属性，互不污染——避免居中位移与缩放共写
-   一个 transform 引发的"打开后元素被 scale<1 持久拉伸 → 文字模糊"。 */
+/* base-ui Dialog：overlay 与 popup 都只 fade opacity，不带任何 transform。
+   居中靠外层 Viewport (fixed inset-0 + flex center) 完成，popup 是它的 flex 子节点，
+   自身不再 position:fixed / translate。WKWebView 下 fixed+transform 才会强制把元素
+   钉到合成层并以半像素渲染（文字进入双线性插值发糊），单纯 opacity 动画 transition
+   结束后浏览器会释放合成层，文字回到像素栅格。 */
 .te-dialog-overlay {
   position: fixed;
   inset: 0;
   z-index: 50;
   background-color: var(--te-overlay);
   opacity: 1;
-  transition: opacity 200ms ease-out;
+  transition: opacity 180ms ease-out;
 }
 .te-dialog-overlay[data-starting-style],
 .te-dialog-overlay[data-ending-style] {
@@ -266,18 +263,11 @@
 }
 
 .te-dialog-popup {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  z-index: 50;
   outline: none;
-  translate: -50% -50%;
-  scale: 1;
   opacity: 1;
-  transition: opacity 200ms ease-out, scale 200ms ease-out;
+  transition: opacity 180ms ease-out;
 }
 .te-dialog-popup[data-starting-style],
 .te-dialog-popup[data-ending-style] {
   opacity: 0;
-  scale: 0.95;
 }

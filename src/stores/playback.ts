@@ -63,7 +63,10 @@ export const usePlaybackStore = create<PlaybackStore>((set, get) => {
 
       try {
         const buf = await loadRecordingBytes(audioPath);
-        const blob = new Blob([buf], { type: "audio/wav" });
+        const mime = audioPath.toLowerCase().endsWith(".ogg")
+          ? "audio/ogg"
+          : "audio/wav";
+        const blob = new Blob([buf], { type: mime });
         currentUrl = URL.createObjectURL(blob);
         const el = ensureAudio();
         el.src = currentUrl;

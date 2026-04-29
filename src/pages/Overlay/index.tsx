@@ -4,6 +4,9 @@ import { AlertTriangle, Check, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
+import i18n, { resolveLang, SUPPORTED_LANGS, type SupportedLang } from "@/i18n";
+import { applyLang } from "@/lib/i18n-sync";
+import { useSettingsStore } from "@/stores/settings";
 import { cn } from "@/lib/utils";
 import { useOverlayMachine, type ToastActionKey } from "./state";
 import { useOverlayListeners } from "./listeners";
@@ -18,8 +21,25 @@ const EXPANDED_HEIGHT = TOAST_HEIGHT + TOAST_GAP + PILL_HEIGHT;
 
 export default function OverlayPage() {
   const { t } = useTranslation();
+  const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
   const { state, showToast, dismissToast, setEscArmed, applyFsm } =
     useOverlayMachine();
+
+  // boot IIFE 跑 applyLang 是 race 路径——overlay 第一次拿到 settings 之前可能就
+  // 已经渲染过 t()。这里把 i18n 语言绑死到 settings.interfaceLang：mount + 主窗
+  // 切语言（settings store 持久化后 loaded 触发）都会重新对齐一次，避免悬浮条
+  // 卡在初始 navigator.language 上。
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    const lang = resolveLang(interfaceLang);
+    if ((SUPPORTED_LANGS as readonly string[]).includes(lang)) {
+      void applyLang(lang as SupportedLang);
+    }
+    if (i18n.language !== lang) {
+      void i18n.changeLanguage(lang);
+    }
+  }, [interfaceLang, settingsLoaded]);
 
   useOverlayListeners({
     onFsm: (p) => applyFsm(p.state, p.errorMessage, p.liveTranscript),
@@ -105,17 +125,17 @@ export default function OverlayPage() {
         {state.toast && (
           <motion.div
             key={state.toast.id}
-            initial={{ opacity: 0, y: -6 }}
+            initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
+            exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.15 }}
             className={cn(
-              "flex items-start gap-1.5 border bg-te-bg px-2 py-1",
+              "flex items-center gap-1.5 border bg-te-bg px-2 py-1",
               toastAccent,
             )}
             style={{ height: TOAST_HEIGHT, marginBottom: TOAST_GAP }}
           >
-            <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+            <AlertTriangle className="size-3 shrink-0" />
             <div className="min-w-0 flex-1">
               <div className="truncate font-mono text-[10px] uppercase tracking-[0.15em]">
                 {state.toast.title}
@@ -131,7 +151,7 @@ export default function OverlayPage() {
                 type="button"
                 onClick={() => runToastAction(state.toast!.action!.key)}
                 className={cn(
-                  "shrink-0 self-center border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em]",
+                  "shrink-0 border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em]",
                   "hover:bg-te-accent hover:text-te-accent-fg",
                   toastAccent,
                 )}
@@ -177,10 +197,29 @@ export default function OverlayPage() {
               transition={{ duration: 0.12 }}
               className="flex h-full w-full items-center justify-center"
             >
-              {centerKey === "transcribing" && (
-                <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg">
-                  {t("overlay:status.transcribing")}
-                </span>
+              {(centerKey === "transcribing" || centerKey === "injecting") && (
+                <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-2">
+                  <span className="max-w-full truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg">
+                    {t(
+                      centerKey === "injecting"
+                        ? "overlay:status.injecting"
+                        : "overlay:status.transcribing",
+                    )}
+                  </span>
+                  <div className="relative h-px w-20 overflow-hidden bg-te-gray/40">
+                    <motion.span
+                      className="absolute inset-y-0 bg-te-accent"
+                      style={{ width: "33%" }}
+                      initial={{ left: "-33%" }}
+                      animate={{ left: "100%" }}
+                      transition={{
+                        duration: 1.1,
+                        repeat: Infinity,
+                        ease: "linear",
+                      }}
+                    />
+                  </div>
+                </div>
               )}
               {centerKey === "error" && (
                 <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">

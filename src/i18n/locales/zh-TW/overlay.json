@@ -6,7 +6,8 @@
   },
   "status": {
     "error_fallback": "錯誤",
-    "transcribing": "思考中…"
+    "transcribing": "正在思考中…",
+    "injecting": "正在輸出中…"
   },
   "panel": {
     "tag": {
@@ -47,7 +48,8 @@
       "title": "錄音啟動失敗"
     },
     "transcribe_failed": {
-      "title": "轉寫失敗"
+      "title": "轉寫失敗",
+      "no_transcript": "未辨識到內容，可在歷史裡點重試"
     },
     "recording_save_failed": {
       "title": "錄音儲存失敗"

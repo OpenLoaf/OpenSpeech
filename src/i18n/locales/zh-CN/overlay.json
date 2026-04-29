@@ -6,7 +6,8 @@
   },
   "status": {
     "error_fallback": "错误",
-    "transcribing": "思考中…"
+    "transcribing": "正在思考中…",
+    "injecting": "正在输出中…"
   },
   "panel": {
     "tag": {
@@ -47,7 +48,8 @@
       "title": "录音启动失败"
     },
     "transcribe_failed": {
-      "title": "转写失败"
+      "title": "转写失败",
+      "no_transcript": "未识别到内容，可在历史里点重试"
     },
     "recording_save_failed": {
       "title": "录音保存失败"

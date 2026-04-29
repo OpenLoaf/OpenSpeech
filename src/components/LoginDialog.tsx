@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, Loader2, RotateCcw, ServerCog } from "lucide-react";
+import { ChevronDown, Loader2, RotateCcw } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,6 @@ import {
 import { cn } from "@/lib/utils";
 import { isKnownBackendErrorCode, translateBackendError } from "@/lib/errors";
 import { useAuthStore, type LoginProvider } from "@/stores/auth";
-import { useUIStore } from "@/stores/ui";
 
 type Props = {
   open: boolean;
@@ -177,39 +176,6 @@ export function LoginDialog({ open, onOpenChange }: Props) {
                 </button>
               );
             })}
-          </div>
-
-          {/* BYO STT 入口 */}
-          <div className="flex items-center gap-2">
-            <span className="h-px flex-1 bg-te-gray/40" />
-            <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-              {t("dialogs:login.or")}
-            </span>
-            <span className="h-px flex-1 bg-te-gray/40" />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <button
-              type="button"
-              disabled={isBusy || isAuthenticated}
-              onClick={() => {
-                onOpenChange(false);
-                useUIStore.getState().openSettings("MODEL");
-              }}
-              className={cn(
-                "inline-flex w-full items-center justify-center gap-3 border border-te-gray/60 px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors",
-                !isBusy && !isAuthenticated
-                  ? "hover:border-te-accent hover:text-te-accent"
-                  : "cursor-not-allowed opacity-50",
-              )}
-            >
-              <ServerCog className="size-4" />
-              {t("dialogs:login.byo_button")}
-            </button>
-            {!isBusy ? (
-              <p className="font-sans text-xs leading-relaxed text-te-light-gray">
-                {t("dialogs:login.byo_hint")}
-              </p>
-            ) : null}
           </div>
 
           {isBusy || isError || isAuthenticated ? (

@@ -29,17 +29,6 @@
     "more": "More",
     "export": "Export",
     "delete_all": "Delete all history",
-    "retention": {
-      "title": "RETENTION POLICY",
-      "description": "Retention period — controls how long records live in the local database.",
-      "options": {
-        "forever": "Forever",
-        "90d": "90 days",
-        "30d": "30 days",
-        "7d": "7 days",
-        "off": "Don't keep"
-      }
-    },
     "filters": {
       "all": "All",
       "dictation": "Dictation",
@@ -72,7 +61,10 @@
       "retry_too_long": "Retry isn't supported for recordings over 5 minutes",
       "retry_in_progress": "Retrying…",
       "retry_tooltip": "Retry transcription",
-      "failed_placeholder": "Your transcription was interrupted. OpenSpeech can still retry it for you."
+      "failed_placeholder": "Your transcription was interrupted. OpenSpeech can still retry it for you.",
+      "cancelled_placeholder": "{{duration}} recording cancelled · not transcribed · retry available",
+      "view_refined": "AI enhanced",
+      "view_raw": "Raw text"
     },
     "toast": {
       "copy_success": "Copied to clipboard",

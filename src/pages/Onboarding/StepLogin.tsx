@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FC } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, Loader2, Sparkles, ServerCog } from "lucide-react";
+import { ArrowRight, Loader2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore, type LoginProvider } from "@/stores/auth";
-import { useUIStore } from "@/stores/ui";
 
 // Step 3：调用真实 OpenLoaf 登录流程（useAuthStore.startLogin）。
 // startLogin → 拉起浏览器 → 用户授权 → Rust emit success → isAuthenticated=true
@@ -80,7 +79,6 @@ export function StepLogin({
   const cancelLogin = useAuthStore((s) => s.cancelLogin);
 
   const [pending, setPending] = useState<LoginProvider | null>(null);
-  const [advanced, setAdvanced] = useState(false);
 
   const methods = useMemo<LoginMethod[]>(
     () => [
@@ -260,36 +258,6 @@ export function StepLogin({
           ) : null}
         </div>
 
-        <div className="flex items-center justify-end">
-          <button
-            type="button"
-            onClick={() => setAdvanced((v) => !v)}
-            className="px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray underline-offset-4 transition-colors hover:text-te-fg hover:underline"
-          >
-            {advanced
-              ? t("onboarding:login.advanced_collapse")
-              : t("onboarding:login.advanced_expand")}
-          </button>
-        </div>
-
-        {advanced ? (
-          <div className="flex flex-col gap-2 border border-te-gray/60 bg-te-surface p-3">
-            <p className="font-sans text-xs leading-snug text-te-light-gray">
-              {t("onboarding:login.advanced_desc")}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                useUIStore.getState().openSettings("MODEL");
-                onNext();
-              }}
-              className="inline-flex items-center gap-2 self-start border border-te-gray px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
-            >
-              <ServerCog className="size-3" />{" "}
-              {t("onboarding:login.advanced_cta")}
-            </button>
-          </div>
-        ) : null}
       </motion.div>
     </div>
   );

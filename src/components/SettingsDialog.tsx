@@ -31,14 +31,8 @@ export function SettingsDialog({ open, onOpenChange, initialTab = "GENERAL" }: P
             {t("page.dialog_sr")}
           </DialogDescription>
         </DialogHeader>
-        {/* key 含 open：每次 false→true 重建子树，让 SettingsContent 的 useState(initialTab) 重新生效，避免上次手动切的 tab 残留。 */}
         <div className="flex min-h-0 flex-1">
-          {open ? (
-            <SettingsContent
-              key={`${initialTab}:${open}`}
-              initialTab={initialTab}
-            />
-          ) : null}
+          {open ? <SettingsContent initialTab={initialTab} /> : null}
         </div>
       </DialogContent>
     </Dialog>
