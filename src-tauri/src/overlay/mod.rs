@@ -6,7 +6,8 @@
 // 加载路径 /overlay；前端按 window label 分流渲染 OverlayPage。
 
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, Runtime, WebviewUrl,
+    WebviewWindowBuilder,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
@@ -57,7 +58,8 @@ fn position_to_bottom_center_with_height<R: Runtime>(
     window: &tauri::WebviewWindow<R>,
     height: f64,
 ) -> tauri::Result<()> {
-    let Some(monitor) = window.primary_monitor()? else {
+    let app = window.app_handle();
+    let Some(monitor) = active_monitor(app)? else {
         return Ok(());
     };
     let scale = monitor.scale_factor();
@@ -68,8 +70,47 @@ fn position_to_bottom_center_with_height<R: Runtime>(
     let origin_y = work_area.position.y as f64 / scale;
     let x = origin_x + (logical_w - WIDTH) / 2.0;
     let y = origin_y + logical_h - height - BOTTOM_MARGIN;
+    log::warn!(
+        "[overlay] target monitor name={:?} origin=({},{}) size=({}x{}) scale={} → logical_pos=({:.1},{:.1})",
+        monitor.name(),
+        origin.x,
+        origin.y,
+        size.width,
+        size.height,
+        scale,
+        x,
+        y,
+    );
     window.set_position(LogicalPosition::new(x, y))?;
     Ok(())
+}
+
+// 鼠标命中的屏 → primary → 第一块。走 AppHandle 拿全局光标，避免 hidden window 上读不到。
+fn active_monitor<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Option<Monitor>> {
+    let monitors = app.available_monitors()?;
+    if let Ok(cursor) = app.cursor_position() {
+        let cx = cursor.x;
+        let cy = cursor.y;
+        log::warn!("[overlay] cursor physical=({cx},{cy})");
+        for m in &monitors {
+            let pos = m.position();
+            let sz = m.size();
+            let x0 = pos.x as f64;
+            let y0 = pos.y as f64;
+            let x1 = x0 + sz.width as f64;
+            let y1 = y0 + sz.height as f64;
+            if cx >= x0 && cx < x1 && cy >= y0 && cy < y1 {
+                return Ok(Some(m.clone()));
+            }
+        }
+        log::warn!("[overlay] cursor outside all monitors, fall back to primary");
+    } else {
+        log::warn!("[overlay] cursor_position failed, fall back to primary");
+    }
+    if let Some(m) = app.primary_monitor()? {
+        return Ok(Some(m));
+    }
+    Ok(monitors.into_iter().next())
 }
 
 pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
