@@ -427,11 +427,11 @@ pub fn run() {
                 .level_for("reqwest", tauri_plugin_log::log::LevelFilter::Info)
                 .level_for("rustls", tauri_plugin_log::log::LevelFilter::Info)
                 .level_for("enigo", tauri_plugin_log::log::LevelFilter::Info)
-                // 走 webview 的 console.{log/info/warn/error}，前端 devtools 即可看 Rust 日志。
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::Webview,
-                ))
-                // 同时保留终端输出（dev 启动时）。
+                // UCKeyTranslate -25340 是非 ASCII 字符落到 Unicode CGEvent fallback，对功能无影响。
+                .level_for(
+                    "enigo::platform::macos_impl",
+                    tauri_plugin_log::log::LevelFilter::Off,
+                )
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Stdout,
                 ))
@@ -486,6 +486,12 @@ pub fn run() {
             // work area 缩小，留出任务栏和边距。只影响首次启动，用户手动调大小后
             // 由系统记住。
             if let Some(window) = app.get_webview_window("main") {
+                // macOS 保留原生 decorations：titleBarStyle:Overlay + hiddenTitle 让红绿灯叠在内容上；
+                // Win/Linux 关掉 decorations，由前端 WindowControls 接管。
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window.set_decorations(false);
+                }
                 if let Some(monitor) = window.primary_monitor().ok().flatten() {
                     let scale = monitor.scale_factor();
                     let wa = monitor.work_area();
@@ -721,9 +727,12 @@ pub fn run() {
             audio::audio_recording_cancel,
             audio::audio_recording_load,
             audio::audio_recording_export,
+            audio::audio_recording_delete,
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,
+            stt::refine_speech_text,
+            stt::refine_speech_text_stream,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
             inject::inject_paste,

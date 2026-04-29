@@ -1,12 +1,13 @@
-// 文件转写：把已落盘的 WAV 录音通过 V4 工具接口重新转成文字。
+// 文件转写：把已落盘的录音（OGG / WAV）通过 V4 工具接口重新转成文字。
 //
 // 接口分流（按时长自动选择，与前端 history 重试流程对接）：
 // - ≤ 5 分钟 ⇒ `OL-TL-003` (asrShort)：同步 HTTP，base64 直传，秒级返回。
-// - > 5 分钟 ⇒ `OL-TL-004` (asrLong)：上游只接受公网 URL，本地 WAV 走不通；
+// - > 5 分钟 ⇒ `OL-TL-004` (asrLong)：上游只接受公网 URL，本地音频走不通；
 //   暂不支持，返回明确错误让 UI 提示用户。后续若加上传服务再接通查询轮询路径。
 //
 // 路径安全：复用 audio::audio_recording_load 的同款校验——只接受
-// `recordings/<id>.wav` 形式，拒绝绝对路径 / 多级目录 / `..`，防任意文件读取。
+// `recordings/<id>.ogg`（新版）或 `recordings/<id>.wav`（老库），
+// 拒绝绝对路径 / 多级目录 / `..`，防任意文件读取。
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -55,9 +56,22 @@ fn read_recording_bytes<R: Runtime>(
     {
         return Err("invalid filename in audio_path".into());
     }
+    let lower = filename.to_ascii_lowercase();
+    if !(lower.ends_with(".ogg") || lower.ends_with(".wav")) {
+        return Err("audio_path must end with .ogg or .wav".into());
+    }
     let dir = db::recordings_dir(app)?;
     let abs = dir.join(filename);
     std::fs::read(&abs).map_err(|e| format!("read {}: {e}", abs.display()))
+}
+
+/// 根据 audio_path 后缀决定 base64 上传时的 media_type。
+fn media_type_for(audio_path: &str) -> &'static str {
+    if audio_path.to_ascii_lowercase().ends_with(".ogg") {
+        "audio/ogg"
+    } else {
+        "audio/wav"
+    }
 }
 
 fn parse_lang(lang: Option<String>) -> Option<String> {
@@ -103,7 +117,7 @@ fn transcribe_recording_file_impl<R: Runtime>(
     if duration_ms <= SHORT_AUDIO_LIMIT_MS {
         let bytes = read_recording_bytes(&app, &audio_path)?;
         let b64 = B64.encode(&bytes);
-        let input = AsrShortOlTl003Input::from_base64(b64, "audio/wav");
+        let input = AsrShortOlTl003Input::from_base64(b64, media_type_for(&audio_path));
         let params = AsrShortOlTl003Params {
             language: lang_param,
             enable_itn: None,
@@ -126,7 +140,7 @@ fn transcribe_recording_file_impl<R: Runtime>(
             credits_consumed: r.credits_consumed,
         })
     } else {
-        // 长音频：服务端只接受公网 URL，本地 WAV 没有可访问的 URL。
+        // 长音频：服务端只接受公网 URL，本地音频没有可访问的 URL。
         // 给出明确错误让 UI 提示，避免用户以为是转写失败。
         Err(
             "long audio retry needs a public URL; local recording cannot be uploaded yet (>5min)"

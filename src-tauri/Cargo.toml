@@ -34,12 +34,13 @@ tauri-plugin-log = "2"
 log = "0.4"
 cpal = "0.17.3"
 hound = "3.5.1"
+vorbis_rs = "0.5.5"
 zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "http2", "json", "multipart", "stream"] }
 enigo = "0.6.1"
-openloaf-saas = "0.3.2"
+openloaf-saas = "0.3.6"
 base64 = "0.22"
 tiny_http = "0.12"
 uuid = { version = "1", features = ["v4"] }
