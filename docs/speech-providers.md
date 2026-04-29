@@ -207,42 +207,71 @@ struct CapabilityReport {
 
 ### 6.5 首批 Provider × Capability 映射
 
-> 取值：`✓` = `Supported`；`L:<note>` = `Limited`（note 简写）；`✗` = `Unsupported`；`–` = `NotApplicable`。**新 adapter PR 必改**。
+> **数据来源**：基于 [`docs/providers/_research/`](./providers/_research/) 中各 vendor 官方文档调研的 capability-summary 反向汇总。Tencent / Azure 数据为 WebFetch 直读官方页（**高可信度**）；Google / OpenAI 数据来自官方 SERP 摘要（**中可信度**，待在能直访的环境里复核）。
+>
+> **取值**：`✓` = Supported；`L:<note>` = Limited（note 简写）；`✗` = Unsupported；`–` = NotApplicable。
+>
+> **重要**：同一 provider 不同协议路径 capability 差异巨大（如 Tencent 实时 vs 录音文件），下表按 OpenSpeech **实时听写主用例**口径写。详细按路径拆解见各 vendor 的 `capability-summary.md`。
 
-#### ASR
+#### ASR（按"实时听写"主用例）
 
 | Capability | openloaf-cloud | aliyun | tencent | azure | google | byo-rest |
 |---|---|---|---|---|---|---|
-| `asr.streaming` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
-| `asr.partial` | ✓ | ✓ | ✓ | ✓ | ✓ | – |
-| `asr.server_vad` | ✓ | ✓ | ✓ | ✓ | ✓ | – |
-| `asr.word_timestamps` | L:动态 | ✓ | ✓ | ✓ | ✓ | – |
-| `asr.speaker_diarization` | L:不开放 | ✗ | ✓ | ✓ | ✓ | ✗ |
+| `asr.streaming` | ✓ WebSocket | ✓ WebSocket | ✓ WebSocket | ✓ SDK / WS | L:单流≤5min | L:见 §6.5.1 |
+| `asr.partial` | ✓ | ✓ | ✓ `slice_type` | ✓ recognizing 事件 | ✓ interim_results | L:仅 gpt-4o-transcribe |
+| `asr.server_vad` | ✓ | ✓ | L:`needvad`，`vad_silence_time` 仅 `8k_zh` | L:仅少数 property | ✓ enable_voice_activity_events | L:chunking_strategy=auto |
+| `asr.word_timestamps` | L:动态 | ✓ | ✓ 全产品 | ✓ Detailed 全路径 | L:仅 is_final 段 | L:仅 whisper-1 |
+| `asr.speaker_diarization` | L:不开放 | ✗ | **✗ 实时不支持**（仅录音文件） | L:`ConversationTranscriber`，session ≤240min | L:模型相关，chirp 兼容性官方未明示 | **✗ Realtime 路径**（gpt-4o-transcribe-diarize 仅非流式） |
 | `asr.language_set` | 见 §6.6 | 见 §6.6 | 见 §6.6 | 见 §6.6 | 见 §6.6 | 见 §6.6 |
-| `asr.custom_vocabulary` | ✓ | L:100 条 | L:100×4字 | ✓ | ✓ | L:按 endpoint |
-| `asr.punctuation` | ✓ | ✓ | ✓ | ✓ | ✓ | L:按 endpoint |
-| `asr.profanity_filter` | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ |
+| `asr.custom_vocabulary` | ✓ | L:100 条 | L:128/请求或预创建 1000/表 | L:**500 phrases**（Batch 不支持） | L:PhraseSet boost 0-20 | L:**无持久化词典**，仅 prompt（whisper-1 末 224 token） |
+| `asr.punctuation` | ✓ | ✓ | ✓ `filter_punc` | ✓ 默认开 | ✓ enable_automatic_punctuation | ✓ 默认 |
+| `asr.profanity_filter` | ✗ | ✗ | ✓ `filter_dirty` 三档 | ✓ masked/removed/raw（Fast/Batch 多 Tags） | ✓ 首字母+`*` | ✗ 两路径均无 |
 
 #### LLM
 
 | Capability | openloaf-cloud | aliyun | tencent | azure | google | byo-rest |
 |---|---|---|---|---|---|---|
-| `llm.translate` | ✓ | ✓ | L:独立 endpoint | ✓ inline | L:Cloud Translation 独配 | ✗ |
-| `llm.qa` | ✓ | ✓ | ✓ | L:Azure OpenAI 独配 | ✓ | ✗ |
-| `llm.polish` | ✓ | ✓ | ✓ | L:同上 | ✓ | ✗ |
-| `llm.context_style` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
-| `llm.streaming` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| `llm.translate` | ✓ | ✓ Qwen | L:TMT 18 语种，6000 字符/次 | ✓ Translator + **Speech Translation 唯一 inline** | L:Cloud Translation v3 / 或走 Gemini | ⚠️ 走 Chat prompt |
+| `llm.qa` | ✓ | ✓ | ✓ | L:需 Azure OpenAI 独配 | ✓ Gemini | ✓ Chat |
+| `llm.polish` | ✓ | ✓ | ✓ | L:同上 | ✓ Gemini | ✓ Chat |
+| `llm.context_style` | ✓ | ✓ | ✓ | ✓ | ✓ systemInstruction | ✓ system msg（o1 系列例外） |
+| `llm.streaming` | ✓ | ✓ | ✗ TMT 仅同步 | ✓ Azure OpenAI SSE | ✓ Gemini SSE | ✓ SSE |
+
+#### 6.5.1 关于 byo-rest 的二次说明
+
+`byo-rest` 在原始设计里被定为"放弃 streaming 的非流式兜底"。OpenAI 文档抓回来后发现：
+- `whisper-1`：仍只支持整段上传同步返回（符合原设计）
+- `gpt-4o-transcribe` / `gpt-4o-mini-transcribe`：已支持 `stream=true` → SSE delta
+- `gpt-4o-transcribe-diarize`：支持说话人分离（仅非流式路径）
+
+**待决**：是把 `byo-rest` 拆成 `byo-rest-batch`（Whisper 风）+ `byo-openai-stream`（gpt-4o-transcribe 风）两个 adapter，还是同 adapter 内按用户配置的 `model` 字段**动态报告 capability**。倾向后者——与 §6.0 "三态非布尔" 精神一致；adapter 实现时 `capabilities()` 接受 `&Config` 参数，根据 model name 切 capability set。
+
+#### 6.5.2 同 provider 跨路径的 capability 差异（关键）
+
+> 调研中浮出的反直觉事实：**同一 provider 的 capability 不是常量，依赖具体协议路径**。这影响 §7.1 trait 设计。
+
+| Provider | 实时路径 | 异步 / 批量路径 | 差异点 |
+|---|---|---|---|
+| Tencent | 无 diarization | 全 diarization（含声纹锚定） | speaker_diarization |
+| Azure | `ConversationTranscriber` 限 240min | Batch 全功能但不支持 phrase list | speaker_diarization / custom_vocabulary |
+| Google | streaming 5min 上限 | Batch 无此限 | streaming session 长度 |
+| OpenAI | Realtime 无 diarization、无 word_timestamps | gpt-4o-transcribe-diarize / whisper-1 word_ts | speaker_diarization / word_timestamps |
+
+**架构含义**：CapabilityReport 的粒度从原本的 `(provider) → CapabilitySet` 升级为 `(provider × path_kind) → CapabilitySet`，其中 `path_kind ∈ {Realtime, Sync, Batch}`。listening 主流程只问 Realtime 路径的 capability，未来"会议模式"等异步 feature 才查 Batch 路径。这一改动直接影响 §6.1 数据结构与 §7.1 trait——见后续 PR。
 
 ### 6.6 `language_set` 初始声明
 
-| Provider | 语种集合 | auto_detect |
-|---|---|---|
-| openloaf-cloud | zh / zh-TW / en / ja / ko / yue | ✓ |
-| aliyun | zh / zh-TW / en / ja / ko / yue | ✓ |
-| tencent | zh / en / yue（其余按模型变体）| ✓（限语种集）|
-| azure | 100+ BCP47 全集（按 region 变化）| ✓ |
-| google | 125+ BCP47 全集 | ✓ |
-| byo-rest | 由 endpoint 决定，adapter 配置里手填 | 按配置 |
+> 数据来源：基于各 vendor capability-summary 中 language_set 段的真实数据。
+
+| Provider | 语种集合 | auto_detect | 备注 |
+|---|---|---|---|
+| openloaf-cloud | zh / zh-TW / en / ja / ko / yue | ✓ | 跟随 SaaS 后端策略 |
+| aliyun | zh / zh-TW / en / ja / ko / yue | ✓ | 待补 _research/aliyun/ |
+| tencent | zh + 28 中文方言 / en / yue / 单独 ja/ko/th/vi/id/ms/fil/pt/tr/ar/es/hi/fr/de；`16k_multi_lang` 一步混说 15 语种 | ✓ 限语种集 | 中文方言覆盖最广；无两步式 detect |
+| azure | **100+ BCP47 locales**；`Fast transcription` 仅 13 + multi-lingual；LLM speech 仅 9 语言族 | ✓ at-start ≤4，continuous ≤10 | 同 base language 不能给两个变体 |
+| google | `chirp_3` **85+ locales**；`chirp_2` 各方法范围不同；`latest_long`/`latest_short` 沿用 V1 | ✓ 部分模型 | Rust 无 SDK，自实现 tonic + proto |
+| openai | Whisper 训练 99 语种；guide 列 50+ 通过 WER<50% 阈值 | ✓ | `language` 参数接 ISO-639-1 |
+| byo-rest | 由 endpoint 决定，adapter 配置里手填 | 按配置 | 见 §6.5.1 |
 
 ### 6.7 Feature → Capability 反向索引
 
