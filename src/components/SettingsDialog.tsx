@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -19,28 +18,10 @@ type Props = {
 
 export function SettingsDialog({ open, onOpenChange, initialTab = "GENERAL" }: Props) {
   const { t } = useTranslation("settings");
-  // 关闭时不要立刻卸载 SettingsContent，否则 dialog 还在 fade-out 期间内容就空了，
-  // popup 突然失重 + portal 卸载会让主界面闪一下。等 base-ui 的 exit 动画跑完再卸载。
-  const [renderContent, setRenderContent] = useState(open);
-  useEffect(() => {
-    if (open) setRenderContent(true);
-  }, [open]);
-  // 每次 open 翻 false→true 时换 key，让 SettingsContent 内部 useState(initialTab) 重新生效，
-  // 避免"上次手动切到的 tab"残留；用 mount 计数代替原先把 open 拼进 key 的写法。
-  const [openCount, setOpenCount] = useState(0);
-  useEffect(() => {
-    if (open) setOpenCount((c) => c + 1);
-  }, [open]);
   return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      onOpenChangeComplete={(o) => {
-        if (!o) setRenderContent(false);
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex h-[82vh] w-[92vw] max-w-6xl flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 duration-200 data-open:zoom-in-90 data-open:slide-in-from-bottom-2 data-closed:zoom-out-90 data-closed:slide-out-to-bottom-2 sm:max-w-6xl"
+        className="flex h-[82vh] w-[92vw] max-w-6xl flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 sm:max-w-6xl"
       >
         <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-4 py-3">
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
@@ -50,10 +31,11 @@ export function SettingsDialog({ open, onOpenChange, initialTab = "GENERAL" }: P
             {t("page.dialog_sr")}
           </DialogDescription>
         </DialogHeader>
+        {/* key 含 open：每次 false→true 重建子树，让 SettingsContent 的 useState(initialTab) 重新生效，避免上次手动切的 tab 残留。 */}
         <div className="flex min-h-0 flex-1">
-          {renderContent ? (
+          {open ? (
             <SettingsContent
-              key={`${initialTab}:${openCount}`}
+              key={`${initialTab}:${open}`}
               initialTab={initialTab}
             />
           ) : null}
