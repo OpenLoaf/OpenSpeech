@@ -111,6 +111,7 @@
     "check_update": "Check for updates",
     "rerun_onboarding": "Re-run first-launch onboarding",
     "install_now": "Install now",
+    "skip_version": "Skip this version",
     "install_in_progress": "Downloading and installing update…",
     "install_progress": "{{version}} · {{percent}}% · {{downloaded}} / {{total}}",
     "install_starting": "{{version}} · {{downloaded}} downloaded",

@@ -46,6 +46,10 @@ export interface GeneralSettings {
   // 触发一次 relaunch，用户感知 ≈ 启动时多了一小段"升级中"。off 则完全不检查，
   // 只能手动通过托盘"检查更新"触发。
   autoUpdate: boolean;
+  // 用户在自动检测到新版的 toast 上点了"跳过此版本"——记下版本号，下次启动 check
+  // 命中同一版本时静默掉提示。空串 = 未跳过任何版本；用户主动点托盘 / 关于页的
+  // "检查更新"时不消费这个值，仍会正常提示。
+  skippedUpdateVersion: string;
   // 关闭行为（Cmd+Q / 红叉）：
   //   ASK  — 每次弹 CloseToBackgroundDialog
   //   HIDE — 直接隐藏到托盘（= 原"关闭时最小化到托盘"打开）
@@ -87,6 +91,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   launchStartup: false,
   showDockIcon: true,
   autoUpdate: true,
+  skippedUpdateVersion: "",
   closeBehavior: "ASK",
   onboardingCompleted: false,
   // 默认 MANUAL（vadMode=none）：push-to-talk 听写场景下，文档明确给出"更准、

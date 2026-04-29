@@ -109,8 +109,9 @@ export default function Layout() {
   useEffect(() => {
     if (!pendingUpdate) return;
     const upd = pendingUpdate.update;
+    const version = pendingUpdate.version;
     const id = toast.message(i18next.t("pages:layout.tray.update_found_title"), {
-      description: pendingUpdate.version,
+      description: version,
       duration: Infinity,
       action: {
         label: i18next.t("settings:about.install_now"),
@@ -121,6 +122,26 @@ export default function Layout() {
               await installUpdateWithProgress(upd, "boot-prompt");
             } catch {
               // helper 已 toast + log，这里只负责把 pendingUpdate 清掉
+            } finally {
+              setPendingUpdate(null);
+            }
+          })();
+        },
+      },
+      // sonner 的 cancel 渲染成次要按钮：写入 skippedUpdateVersion 后下次启动 check
+      // 命中同一版本静默；用户仍可通过托盘 / 关于页"检查更新"重新触发提示并安装。
+      cancel: {
+        label: i18next.t("settings:about.skip_version"),
+        onClick: () => {
+          void (async () => {
+            toast.dismiss(id);
+            try {
+              await useSettingsStore
+                .getState()
+                .setGeneral("skippedUpdateVersion", version);
+              void logInfo(
+                `[updater] user skipped version ${version}; will not prompt again on boot`,
+              );
             } finally {
               setPendingUpdate(null);
             }

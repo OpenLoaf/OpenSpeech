@@ -111,10 +111,20 @@ const bootPromise = (async () => {
             ),
           ]);
           if (upd) {
-            void logInfo(
-              `[updater] update available: ${upd.version}, prompting user (no auto-install)`,
-            );
-            useUIStore.getState().setPendingUpdate({ version: upd.version, update: upd });
+            const skipped =
+              useSettingsStore.getState().general.skippedUpdateVersion;
+            if (skipped && skipped === upd.version) {
+              void logInfo(
+                `[updater] update ${upd.version} matches skippedUpdateVersion, suppressing prompt`,
+              );
+            } else {
+              void logInfo(
+                `[updater] update available: ${upd.version}, prompting user (no auto-install)`,
+              );
+              useUIStore
+                .getState()
+                .setPendingUpdate({ version: upd.version, update: upd });
+            }
           } else {
             void logInfo("[updater] no update available");
           }

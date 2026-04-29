@@ -111,6 +111,7 @@
     "check_update": "檢查更新",
     "rerun_onboarding": "重新執行首次導覽",
     "install_now": "立即安裝",
+    "skip_version": "略過此版本",
     "install_in_progress": "正在下載並安裝更新…",
     "install_progress": "{{version}} · {{percent}}% · {{downloaded}} / {{total}}",
     "install_starting": "{{version}} · 已下載 {{downloaded}}",
