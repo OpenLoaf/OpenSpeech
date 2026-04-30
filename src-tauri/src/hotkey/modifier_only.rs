@@ -420,16 +420,17 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 //   1) ghost release（release 但 pressed 不含此键）—— 漏了 press。
                 //   2) ghost press（press 但 pressed 已含此键）—— 漏了 release。
                 //
-                // 一旦检测到任意 ghost，强行 reset：清空 pressed（甩掉 phantom
-                // modifier，例如 enigo 注入 Cmd-V 后没回收的 Cmd），仅保留本次事件的
-                // 键。然后按 subset 匹配 bindings——任意 mods ⊆ pressed 的 binding
-                // 都算命中，避免"用户按 Fn 但 pressed=={Meta,Fn} 因 phantom 卡死"
-                // 这类完全相等比较的失败。
+                // 旧实现见 git blame：检测到任意 ghost 就 `pressed.clear()` +
+                // `active_ids.clear()`。这会把用户**实际还按着的其他 modifier** 一并
+                // 抹掉，让状态机永远凑不齐多 modifier binding。日志重现：用户按 Ctrl+Fn
+                // 但 Ctrl press 被 rdev 漏，状态变成 pressed={Fn}；松开 Ctrl 时 ghost
+                // release 把 Fn 也清了 → pressed={Ctrl} → subset 不命中 binding
+                // {Ctrl,Fn} → 0 press；用户感知为"第一次按完全没反应、得再按一次"。
                 //
-                // ghost release 还会额外合成"丢失的 press"：先 insert(m)、按 subset
-                // 算 virtual_matching、把还没 active 的 binding 写进 active_ids 当作
-                // newly_pressed 发出去；然后走正常 release 路径让 active_ids 收尾发
-                // newly_released。一次 ghost release 等价一次完整 tap。
+                // 新实现：ghost 检测后**不重置 pressed/active_ids**，只在 ghost release
+                // 时 synthesize 一次 tap（press + release），让 release 时刻能补一次
+                // 完整 binding 触发；ghost press 直接走下面的正常路径（insert 是 no-op，
+                // 不改变集合）。其他真实按着的 modifier 状态不丢。
                 let mut newly_pressed: Vec<(BindingId, String)> = Vec::new();
                 let mut newly_released: Vec<(BindingId, String)> = Vec::new();
 
@@ -439,19 +440,18 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
 
                 if is_ghost {
                     log::warn!(
-                        "[modifier_only] ghost {phase} on {key:?} → reset pressed/active \
-                         (was pressed={:?}, active={:?})",
+                        "[modifier_only] ghost {phase} on {key:?} \
+                         (pressed={:?}, active={:?}) — preserving state",
                         s.pressed,
                         s.active_ids,
                         phase = if ghost_press { "press" } else { "release" },
                     );
-                    s.pressed.clear();
-                    s.active_ids.clear();
                 }
 
                 if ghost_release {
-                    // 合成"丢失的 press"：临时把 m 当作刚刚按下，按 subset 匹配
-                    // bindings，把命中的 id 都算 newly_pressed。
+                    // 合成"丢失的 press"：临时把 m insert 进 pressed，subset 匹配
+                    // bindings——任何 mods ⊆ pressed 的 binding 都算命中。pressed 里
+                    // 已有的其他真实 modifier 留着，让多键 binding 能正确命中。
                     s.pressed.insert(m);
                     let virtual_matching: HashSet<BindingId> = s
                         .bindings

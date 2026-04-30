@@ -54,12 +54,11 @@ webrtc-vad = "0.4.0"
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
-# RustDesk fork —— 修了 crates.io 0.5.3 在 macOS 上的致命 bug（子线程跑 listen
-# 遇到第一个 key event 就让进程静默 abort；Handy 项目切 fork 的真正原因）。
-# 按 commit 精确 pin，cargo 只查本地 `~/.cargo/git/db/rdev-*/`，不走网络——
-# 国内直连 GitHub 不稳时这点很关键。新环境首次 clone 项目若 db 里没此 commit
-# 才需要联网拉一次（或走代理 / 本地 clone 后改 path = "..."）。
-rdev = { git = "https://github.com/rustdesk-org/rdev", rev = "a90dbe11" }
+# OpenLoaf fork（github.com/OpenLoaf/rdev → crates.io openloaf-rdev）—— 在 macOS
+# event tap 路径上加 kCGEventTapDisabledByTimeout / ByUserInput 自愈，解决"按下
+# 第一次没反应、得再按一次"的偶发 bug。crate 改名是因为上游 `rdev` 名字被 Narsil
+# 占着；用 `package = "..."` 重命名后业务代码里的 `use rdev::...` 不用动。
+rdev = { package = "openloaf-rdev", version = "0.5.1" }
 
 # Examples-only：rustls 0.23 默认不再 auto-install crypto provider，主进程
 # 是 reqwest 启动时间接 install 的；独立 example binary 没有这条链路，需要

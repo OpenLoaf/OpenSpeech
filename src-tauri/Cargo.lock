@@ -3732,6 +3732,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "openloaf-rdev"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de77706e4960cd22a2c72db7f187adfedc2936ff42a19467ca86931f279977c0"
+dependencies = [
+ "cocoa",
+ "core-foundation 0.9.4",
+ "core-foundation-sys",
+ "core-graphics 0.22.3",
+ "dispatch",
+ "enum-map",
+ "epoll",
+ "inotify",
+ "lazy_static",
+ "libc",
+ "log",
+ "mio 0.8.11",
+ "strum",
+ "strum_macros",
+ "widestring",
+ "winapi",
+ "x11",
+]
+
+[[package]]
 name = "openloaf-saas"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3747,7 +3772,7 @@ dependencies = [
 
 [[package]]
 name = "openspeech"
-version = "0.2.26-beta.6"
+version = "0.2.26"
 dependencies = [
  "base64 0.22.1",
  "cpal",
@@ -3756,8 +3781,8 @@ dependencies = [
  "keyring",
  "log",
  "objc",
+ "openloaf-rdev",
  "openloaf-saas",
- "rdev",
  "reqwest",
  "rustls",
  "serde",
@@ -4553,30 +4578,6 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
-
-[[package]]
-name = "rdev"
-version = "0.5.0-2"
-source = "git+https://github.com/rustdesk-org/rdev?rev=a90dbe11#a90dbe1172f8832f54c97c62e823c5a34af5fdfe"
-dependencies = [
- "cocoa",
- "core-foundation 0.9.4",
- "core-foundation-sys",
- "core-graphics 0.22.3",
- "dispatch",
- "enum-map",
- "epoll",
- "inotify",
- "lazy_static",
- "libc",
- "log",
- "mio 0.8.11",
- "strum",
- "strum_macros",
- "widestring",
- "winapi",
- "x11",
-]
 
 [[package]]
 name = "redox_syscall"
