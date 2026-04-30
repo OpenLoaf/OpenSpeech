@@ -48,6 +48,16 @@ OpenSpeech 是一款跨平台的桌面端语音输入工具：在任何应用、
   <img src="docs/images/chinese.png" alt="OpenSpeech 中文界面" width="640" />
 </p>
 
+## 安装
+
+前往 [Releases](https://github.com/OpenLoaf/OpenSpeech/releases/latest) 下载对应平台安装包：
+
+- **macOS**：`OpenSpeech_x.y.z_universal.dmg`（macOS 10.15+）
+- **Windows**：`OpenSpeech_x.y.z_x64-setup.exe`
+- **Linux**：`.AppImage` / `.deb` / `.rpm`
+
+首次启动需授予麦克风权限；macOS 还需要辅助功能（Accessibility）权限。
+
 ## 路线图（To-Do）
 
 ### 已实现
@@ -71,16 +81,6 @@ OpenSpeech 是一款跨平台的桌面端语音输入工具：在任何应用、
 - [ ] OpenAI Whisper API
 - [ ] Deepgram
 - [ ] AssemblyAI
-
-## 安装
-
-前往 [Releases](https://github.com/OpenLoaf/OpenSpeech/releases/latest) 下载对应平台安装包：
-
-- **macOS**：`OpenSpeech_x.y.z_universal.dmg`（macOS 10.15+）
-- **Windows**：`OpenSpeech_x.y.z_x64-setup.exe`
-- **Linux**：`.AppImage` / `.deb` / `.rpm`
-
-首次启动需授予麦克风权限；macOS 还需要辅助功能（Accessibility）权限。
 
 ## 快速开始
 
