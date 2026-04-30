@@ -162,34 +162,14 @@ fn open_log_dir(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("failed to resolve log dir: {e:?}"))?;
     std::fs::create_dir_all(&log_dir).ok();
 
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        Command::new("open")
-            .arg(&log_dir)
-            .spawn()
-            .map_err(|e| format!("open failed: {e:?}"))?;
-    }
+    let path = log_dir
+        .to_str()
+        .ok_or_else(|| format!("log dir contains non-utf8 chars: {log_dir:?}"))?
+        .to_string();
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-        Command::new("explorer")
-            .arg(&log_dir)
-            .spawn()
-            .map_err(|e| format!("explorer failed: {e:?}"))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        use std::process::Command;
-        Command::new("xdg-open")
-            .arg(&log_dir)
-            .spawn()
-            .map_err(|e| format!("xdg-open failed: {e:?}"))?;
-    }
-
-    Ok(())
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| format!("open_path failed: {e:?}"))
 }
 
 #[tauri::command]

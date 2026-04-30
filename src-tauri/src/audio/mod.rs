@@ -34,7 +34,7 @@ use std::{
     num::{NonZeroU32, NonZeroU8},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         mpsc,
     },
     thread::{self, JoinHandle},
@@ -57,6 +57,9 @@ fn device_label<D: DeviceTrait>(d: &D) -> Option<String> {
 }
 
 const AUDIO_LEVEL_EVENT: &str = "openspeech://audio-level";
+// cpal 运行时发出致命错误（设备拔出 / 被独占 / OS 抢占）时广播到前端：
+// 录音 store 监听后会 cancel 当前会话 + stopMic，避免 ref_count 残留。
+const AUDIO_STREAM_ERROR_EVENT: &str = "openspeech://audio-stream-error";
 const TICK_MS: u64 = 50; // 20Hz emit
 const PEAK_GAIN: f32 = 2.8; // 普通对话音量（-25 dBFS 左右）就推到波形 60%+
 // 噪声门：低于该幅值的窗口直接送 0，避免空调 / 键盘底噪把波形顶起来。
@@ -436,6 +439,12 @@ fn spawn_monitor_thread<R: Runtime>(
     // VAD 决策的最近 voice 时间戳（自 stream_start 起的毫秒数）；0 表示从未检测到。
     let voice_marker = Arc::new(AtomicU64::new(0));
     let voice_marker_tick = voice_marker.clone();
+    // cpal 运行时致命错误位：err_fn（CoreAudio HAL 线程）置位，audio tick 线程
+    // 每 TICK_MS 检查一次并退出循环。本身不减 ref_count——前端收到
+    // AUDIO_STREAM_ERROR_EVENT 后调 audio_level_stop，由那条路径平衡 ref_count。
+    let stream_fatal = Arc::new(AtomicBool::new(false));
+    let stream_fatal_cb = stream_fatal.clone();
+    let stream_fatal_tick = stream_fatal.clone();
     // VAD callback 与 emit tick 共享同一时间参考。在 spawn 闭包入口取一次。
     let stream_start = Instant::now();
 
@@ -483,7 +492,23 @@ fn spawn_monitor_thread<R: Runtime>(
             let cb_channels = stream_config.channels;
             let cb_sample_rate = stream_config.sample_rate;
 
-            let err_fn = |e: cpal::StreamError| log::warn!("[audio] stream error: {e}");
+            // cpal 运行时致命错误（设备拔出 / 被独占 / OS 抢占）：原本只 log，
+            // 导致 stream 实际死了但 audio thread 仍空转、ref_count 不减、前端不知情。
+            // 现在置 stream_fatal 让 tick 循环退出，并 emit 给前端做收尾（cancel
+            // 录音 + stopMic 平衡 ref_count）。err_fn 在 cpal 内部线程跑，必须 Send。
+            //
+            // factory 形式：build_input_stream 按 sample_format 三选一，每个 arm
+            // 都会 move 一份 closure，所以这里每次 call 都生成一个新的（move closure
+            // 默认不实现 Clone）。实际只一条 arm 会跑，但编译器要求所有 arm 都能拿到。
+            let make_err_fn = || {
+                let app_err = app.clone();
+                let fatal = stream_fatal_cb.clone();
+                move |e: cpal::StreamError| {
+                    log::error!("[audio] cpal stream error: {e}");
+                    fatal.store(true, Ordering::Relaxed);
+                    let _ = app_err.emit(AUDIO_STREAM_ERROR_EVENT, e.to_string());
+                }
+            };
 
             let stream_result = match sample_format {
                 cpal::SampleFormat::F32 => {
@@ -505,7 +530,7 @@ fn spawn_monitor_thread<R: Runtime>(
                                 &voice_marker_cb,
                             );
                         },
-                        err_fn,
+                        make_err_fn(),
                         None,
                     )
                 }
@@ -542,7 +567,7 @@ fn spawn_monitor_thread<R: Runtime>(
                             }
                             peak_cb.store(p.to_bits(), Ordering::Relaxed);
                         },
-                        err_fn,
+                        make_err_fn(),
                         None,
                     )
                 }
@@ -576,7 +601,7 @@ fn spawn_monitor_thread<R: Runtime>(
                             }
                             peak_cb.store(p.to_bits(), Ordering::Relaxed);
                         },
-                        err_fn,
+                        make_err_fn(),
                         None,
                     )
                 }
@@ -621,6 +646,14 @@ fn spawn_monitor_thread<R: Runtime>(
             let _ = ready_tx.send(Ok(()));
 
             loop {
+                // stream_fatal：cpal err_fn 在 CoreAudio HAL 线程置位（设备拔出 /
+                // 抢占等）。每个 tick 检查一次，true 则退出本线程让 stream 被 drop。
+                // 不在这里减 ref_count——前端收到 AUDIO_STREAM_ERROR_EVENT 后调
+                // audio_level_stop，由那条路径平衡 ref_count，避免前后端状态分裂。
+                if stream_fatal_tick.load(Ordering::Relaxed) {
+                    log::warn!("[audio] stream_fatal set → audio thread exiting");
+                    break;
+                }
                 match stop_rx.recv_timeout(Duration::from_millis(TICK_MS)) {
                     Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
