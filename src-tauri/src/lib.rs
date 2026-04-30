@@ -397,6 +397,31 @@ fn rebuild_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+// 把进程提到前台并让主窗成为 key window。
+// plugin-updater 走 app.restart() 直接 spawn 二进制，不经 LaunchServices/`open`，
+// 新进程默认不是 active app，窗口虽然 visible 但落在其他 app 后面，用户感知"最小化"。
+#[cfg(target_os = "macos")]
+fn activate_macos_app(window: &tauri::WebviewWindow) {
+    use objc::runtime::{Object, BOOL, YES};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        if !ns_app.is_null() {
+            let _: BOOL = msg_send![ns_app, activateIgnoringOtherApps: YES];
+        }
+    }
+
+    if let Ok(ptr) = window.ns_window() {
+        let ns_window = ptr as *mut Object;
+        if !ns_window.is_null() {
+            unsafe {
+                let _: () = msg_send![ns_window, makeKeyAndOrderFront: std::ptr::null::<Object>()];
+            }
+        }
+    }
+}
+
 // macOS：通过 NSWindow.collectionBehavior 关闭全屏能力。
 // 同时覆盖绿色按钮点击（默认进入全屏）与双击标题栏（若系统偏好设为"缩放"时会触发全屏）。
 // 清除 FullScreenPrimary (1<<7)、写入 FullScreenNone (1<<9)，绿色按钮随即降级为 zoom。
@@ -432,6 +457,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
+                // Builder::new() 自带默认 targets [Stdout, LogDir]，不清空下面 .target()
+                // 会变成追加 → Stdout 出现两次（终端每条日志重复打印）+ LogDir/Folder 同时
+                // 落盘到两个目录，open_log_dir 按钮只能看见其中一个。
+                .clear_targets()
+                // 默认 UseUtc，终端时间会差一个时区，改本地时区。
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                 // Debug 整体放开 + 把噪声过大的网络栈拽回 Info；release 维持 Info。
                 .level(if cfg!(debug_assertions) {
                     tauri_plugin_log::log::LevelFilter::Debug
@@ -701,6 +732,11 @@ pub fn run() {
                 // macOS：禁用全屏（绿色按钮、双击标题栏、菜单项都失效）。
                 #[cfg(target_os = "macos")]
                 disable_macos_fullscreen(&window);
+
+                // macOS：plugin-updater app.restart() spawn 出来的新进程默认不是前台
+                // app，主窗口会被压在其他窗口之后。setup 末尾 activate 一次让它顶上来。
+                #[cfg(target_os = "macos")]
+                activate_macos_app(&window);
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
