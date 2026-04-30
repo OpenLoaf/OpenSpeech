@@ -48,6 +48,11 @@ dist-ssr
 # 本地临时素材（icon 源图等）
 .tmp/
 
+# public/ 下尚未被代码引用的设计稿候选 logo（引入到代码后再从 ignore 里移除）
+/public/logo-board.png
+/public/logo-no-bg.png
+/public/logo-no-voice.png
+
 # IDE local history（VS Code Local History 插件等本地快照）
 .history/
 

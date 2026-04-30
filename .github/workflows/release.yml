@@ -469,6 +469,85 @@ jobs:
         shell: bash
         run: cp latest.json latest-beta.json
 
+      # download.json 是给"非 Tauri updater 客户端"（官网下载页 / 第三方页面 / 移动端）用的清单。
+      # 与 latest.json 的关键差异：url 字段指向**用户友好的安装包**（dmg / -setup.exe / AppImage），
+      # 而不是 updater 拉的中间产物（.app.tar.gz / .AppImage signed by tauri）。
+      # 字段结构对齐 OpenLoaf 的 download.json：channel + updatedAt + desktop.{version, downloads,
+      # mirrors, ...}；去掉 web/server 字段（OpenSpeech 纯桌面应用），mirrors 只保留 cos + github
+      # （无 R2）。downloads.* 的主 url 走 COS，mirrors 同时列出 cos / github 供前端容灾切源。
+      - name: Generate download.json
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
+          IS_BETA: ${{ steps.channel.outputs.is_beta }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          updated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [[ "$IS_BETA" == "true" ]]; then channel="beta"; else channel="stable"; fi
+          gh_base="https://github.com/${REPO}/releases/download/${TAG}"
+          # 平台 → (staging 文件名, 用户友好扩展名) 映射；与 Stage release files step 命名严格对齐。
+          # 6 个平台与 release matrix 一一对应；缺失某平台（hot fix 单平台跳过）则 skip 该 key。
+          declare -A FILE_MAP=(
+            [mac-arm64]="OpenSpeech-${version}-macOS-arm64.dmg|dmg"
+            [mac-x64]="OpenSpeech-${version}-macOS-intel.dmg|dmg"
+            [win-x64]="OpenSpeech-${version}-Windows-x86_64-setup.exe|exe"
+            [win-arm64]="OpenSpeech-${version}-Windows-arm64-setup.exe|exe"
+            [linux-x64]="OpenSpeech-${version}-Linux-x86_64.AppImage|AppImage"
+            [linux-arm64]="OpenSpeech-${version}-Linux-arm64.AppImage|AppImage"
+          )
+          downloads='{}'
+          for key in "${!FILE_MAP[@]}"; do
+            entry="${FILE_MAP[$key]}"
+            file="${entry%|*}"
+            ext="${entry#*|}"
+            staged="staging/${file}"
+            if [[ ! -f "$staged" ]]; then
+              echo "::warning::missing $file, skipping $key in download.json"
+              continue
+            fi
+            size=$(stat -c %s "$staged")
+            cos_url="${CDN_HOST}/v${version}/${file}"
+            gh_url="${gh_base}/${file}"
+            downloads=$(jq -n --argjson d "$downloads" --arg key "$key" \
+              --arg ext "$ext" --arg url "$cos_url" --arg cos "$cos_url" \
+              --arg gh "$gh_url" --argjson size "$size" \
+              '$d + {($key): {ext: $ext, url: $url, sha256: null, size: $size, mirrors: {cos: $cos, github: $gh}}}')
+          done
+          jq -n \
+            --arg channel "$channel" \
+            --arg updated_at "$updated_at" \
+            --arg version "$version" \
+            --argjson downloads "$downloads" \
+            --arg cdn "$CDN_HOST" \
+            --arg gh_releases "https://github.com/${REPO}/releases" \
+            --arg gh_release "https://github.com/${REPO}/releases/tag/${TAG}" \
+            --arg latest_url "${CDN_HOST}/latest.json" \
+            '{
+              channel: $channel,
+              updatedAt: $updated_at,
+              desktop: {
+                version: $version,
+                publishedAt: $updated_at,
+                downloads: $downloads,
+                githubReleaseUrl: $gh_release,
+                versionManifestUrl: $latest_url
+              },
+              mirrors: {
+                cos: $cdn,
+                github: $gh_releases
+              }
+            }' > "download-${channel}.json"
+          # download-beta.json 始终生成，语义与 latest-beta.json 对齐——stable 发版时复制一份给
+          # beta channel 客户端，让仍在 beta 通道的用户被推到 stable（SemVer：0.3.0 > 0.3.0-beta.2）。
+          if [[ ! -f "download-beta.json" ]]; then
+            cp "download-${channel}.json" "download-beta.json"
+          fi
+          echo "--- download-${channel}.json ---"
+          cat "download-${channel}.json"
+
       - name: Publish draft release
         uses: softprops/action-gh-release@v3
         with:
@@ -478,14 +557,17 @@ jobs:
           prerelease: ${{ steps.channel.outputs.prerelease }}
           fail_on_unmatched_files: true
           body_path: release_notes.md
+          # download-*.json 用 glob 而非显式枚举，因为 stable 发版只生成 download-stable.json +
+          # download-beta.json，beta 发版只生成 download-beta.json，glob 自适应不会因缺文件挂掉。
           files: |
             staging/*
             latest.json
             latest-beta.json
+            download-*.json
 
-      # channel-beta 滚动指针：每次 release（stable + beta）都把当前的 latest-beta.json
-      # 覆盖到 `channel-beta` 这个固定 tag 的 release。前端 beta 通道直接拉
-      # `releases/download/channel-beta/latest-beta.json` 永远拿到最新。
+      # channel-beta 滚动指针：每次 release（stable + beta）都把当前的 latest-beta.json +
+      # download-beta.json 覆盖到 `channel-beta` 这个固定 tag 的 release。前端 beta 通道直接拉
+      # `releases/download/channel-beta/{latest-beta,download-beta}.json` 永远拿到最新。
       # 第一次跑会自动创建这个 release（标记为 prerelease，列表里折叠隐藏）。
       - name: Update channel-beta pointer release
         shell: bash
@@ -502,14 +584,17 @@ jobs:
               --notes "Auto-updated pointer to the latest beta-or-stable release. Do not download from here." \
               --prerelease
           fi
-          gh release upload channel-beta latest-beta.json --repo "$REPO" --clobber
+          gh release upload channel-beta latest-beta.json download-beta.json --repo "$REPO" --clobber
           gh release edit channel-beta --repo "$REPO" \
             --notes "Latest beta-channel pointer · upstream tag: ${TAG} · updated $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       # 同步发布产物到腾讯云 COS（国内分发）：
       #   - cos://bucket/v<version>/OpenSpeech-...   按版本号归档（永不重复，长缓存安全）
-      #   - cos://bucket/latest.json                  stable 滚动指针（强制 no-cache，每次回源）
-      #   - cos://bucket/latest-beta.json             beta 滚动指针
+      #   - cos://bucket/latest.json                  Tauri updater stable 滚动指针（no-cache）
+      #   - cos://bucket/latest-beta.json             Tauri updater beta 滚动指针
+      #   - cos://bucket/download-stable.json         官网下载页 stable 清单（用户友好 dmg/exe/AppImage URL）
+      #   - cos://bucket/download-beta.json           官网下载页 beta 清单
+      #   - cos://bucket/download.json                聚合入口：stable 优先，beta 仅在还没 stable 时占位
       # 失败不阻塞 GitHub Release（已经在前面 publish 了），只是丢失这次的 COS 镜像。
       - name: Install coscli
         # 上游产物文件名是 `coscli-vX.Y.Z-linux-amd64`（带版本号），不是 `coscli-linux-amd64`。
@@ -546,19 +631,43 @@ jobs:
 
       - name: Upload artifacts to COS
         # --routines 16 把单步骤内的并发从默认 3 提高到 16，配合全球加速 endpoint 把跨境上传
-        # 压到几分钟内。manifest 内容跟 GitHub Release 上的同名 latest.json/-beta.json 完全一致
-        # （都是 COS-url 版），COS 这边只是镜像，方便新版本走 COS endpoint 直接拉。
+        # 压到几分钟内。manifest 内容跟 GitHub Release 上的同名 latest.json/-beta.json/download-*.json
+        # 完全一致（都是 COS-url 版），COS 这边只是镜像，方便新版本走 COS endpoint 直接拉。
+        #
+        # download.json 聚合入口的策略与 OpenLoaf 对齐：
+        #   - stable 发版 → 直接覆盖 cos://openspeech/download.json
+        #   - beta   发版 → 仅在 cos 上还没有 download-stable.json 时才占位写 download.json
+        #     （已发过 stable 之后再发 beta，官网首页的下载链接不会被 beta 拉回）
         env:
           TAG: ${{ github.ref_name }}
           IS_BETA: ${{ steps.channel.outputs.is_beta }}
+          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
           coscli sync staging/ cos://openspeech/v${version}/ --recursive --routines 16
           coscli cp latest-beta.json cos://openspeech/latest-beta.json \
             --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
+          coscli cp download-beta.json cos://openspeech/download-beta.json \
+            --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
           if [[ "$IS_BETA" != "true" ]]; then
             coscli cp latest.json cos://openspeech/latest.json \
               --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
+            coscli cp download-stable.json cos://openspeech/download-stable.json \
+              --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
+            # stable 总是覆盖聚合入口
+            coscli cp download-stable.json cos://openspeech/download.json \
+              --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
+          else
+            # beta：先 HEAD 探测 cos 上 download-stable.json 是否存在；不存在才把当前 beta 占位
+            # 给聚合入口。CDN_HOST 缺省时用默认加速域名兜底（与 latest.json step 同口径）。
+            probe_host="${CDN_HOST:-https://openspeech-1329813561.cos.accelerate.myqcloud.com}"
+            if curl -fsSI "${probe_host}/download-stable.json" >/dev/null 2>&1; then
+              echo "download-stable.json already on COS, keeping it as aggregate entry"
+            else
+              echo "no stable yet, beta takes the aggregate slot"
+              coscli cp download-beta.json cos://openspeech/download.json \
+                --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
+            fi
           fi
           echo "Uploaded to COS: cos://openspeech/v${version}/"
