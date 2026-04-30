@@ -93,6 +93,11 @@
     "aborted_saved": {
       "title": "已取消，未转录",
       "description": "录音已保存到历史"
+    },
+    "realtime_degraded": {
+      "title": "实时识别异常",
+      "description": "正在用录音重转，请稍候",
+      "realtime_mode": "已保留前半段，可在历史里重试整段"
     }
   },
   "transcript": {

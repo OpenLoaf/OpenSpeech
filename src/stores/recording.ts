@@ -23,6 +23,7 @@ import {
   finalizeSttSession,
   cancelSttSession,
   refineSpeechTextStream,
+  transcribeRecordingFile,
 } from "@/lib/stt";
 import {
   getHotwordsForRefine,
@@ -169,6 +170,28 @@ const notifyOverlay = (
   });
 };
 
+// DashScope qwen3-asr-flash-realtime 的已知模型层 bug：解码 token 复读循环，
+// 服务端检测到后中断流并抛 "model repeat output happened"。不是参数问题、不是
+// 网络问题——重连同一 realtime 通道大概率仍会复现（特定音频特征触发）。兜底策略：
+// 落本地录音文件后走 REST 一次性 ASR（OL-TL-003）替代实时通道。
+//
+// 仅 MANUAL / AI_REFINE 模式触发降级——REALTIME（VAD 边说边出字）已经把前半段
+// partial 注入到光标，REST 重转拿到的整段会与已注入文本拼接错乱，那条路径不降级，
+// 仅 toast 让用户事后从历史里手动重试。
+const isRealtimeRepeatError = (code: string, message: string): boolean => {
+  const m = `${code} ${message}`.toLowerCase();
+  return (
+    m.includes("model repeat output happened") ||
+    m.includes("repeat output happened") ||
+    m.includes("repetition")
+  );
+};
+
+// 当前录音是否要降级到文件转写。pressed 进 preparing 时 reset；asr-error 命中
+// repeat 关键字时（非 REALTIME 模式）置 true；finalize 读取它决定是走 stt_finalize
+// 还是直接 transcribe_recording_file。Module 级足够——一次录音生命周期内无并发。
+let realtimeDegradedToFile = false;
+
 // 失败原因翻译：Rust 端 stt_start 失败典型文案：
 //   "not authenticated; login first"
 //   "audio stream not running; start mic first"
@@ -281,10 +304,42 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   const recSettled = await Promise.allSettled([stopRecordingAndSave()]).then((r) => r[0]);
   const sttSettled = await Promise.allSettled([finalizeSttSession()]).then((r) => r[0]);
   const rec = recSettled.status === "fulfilled" ? recSettled.value : null;
-  const text =
+  let text =
     sttSettled.status === "fulfilled" && sttSettled.value ? sttSettled.value : "";
 
-  if (sttSettled.status === "rejected") {
+  // DashScope realtime 模型层 repeat bug 降级：原 realtime 通道在 worker_dead /
+  // asr-error 后 finalize 大概率拿到空 text。直接对刚落盘的录音文件用 OL-TL-003
+  // REST ASR 重转一次，结果替换 text。仅 MANUAL / AI_REFINE 路径走此分支（REALTIME
+  // 已在 asr-error 阶段决定不降级，flag 保持 false）。这条分支同时**抑制**原 stt
+  // 错误 toast——"实时识别异常，正在用录音重转"已经在 asr-error 阶段提示过了。
+  if (realtimeDegradedToFile) {
+    if (rec) {
+      try {
+        console.info(
+          "[stt] degraded → REST file transcribe, audio=",
+          rec.audio_path,
+          "duration=",
+          rec.duration_ms,
+        );
+        const r = await transcribeRecordingFile({
+          audioPath: rec.audio_path,
+          durationMs: rec.duration_ms,
+        });
+        text = r.text;
+        console.info(
+          `[stt] degraded → got ${r.text.length} chars (variant=${r.variant})`,
+        );
+      } catch (e) {
+        console.warn("[stt] REST fallback failed:", e);
+        notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
+          description: humanizeSttError(e),
+        });
+        text = "";
+      }
+    } else {
+      console.warn("[stt] degraded but no rec; can't REST fallback");
+    }
+  } else if (sttSettled.status === "rejected") {
     console.warn("[stt] finalize failed:", sttSettled.reason);
     // "no active stt session" 是 start 失败后的必然后续——start 那步已经 toast 过，
     // 这里不重复骚扰。其他错误才弹。
@@ -970,6 +1025,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
 
           const recordingId = newId();
           resetIncrementalInject();
+          realtimeDegradedToFile = false;
           set({
             state: "preparing",
             activeId: id,
@@ -1119,6 +1175,37 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         (evt) => {
           console.warn("[stt] asr-error:", evt.payload);
           const { code, message } = evt.payload ?? { code: "", message: "" };
+
+          // DashScope realtime 模型层复读 bug 兜底：标记本次录音降级走 REST
+          // 文件转写。REALTIME 模式因为已增量注入到光标，降级会让前后半段重复，
+          // 只 toast 不降级；其他模式静默降级，finalize 时由 fallback 分支接手。
+          if (isRealtimeRepeatError(code, message)) {
+            const mode = getEffectiveSegmentMode();
+            if (mode === "REALTIME") {
+              notifyOverlay(
+                "warning",
+                i18n.t("overlay:toast.realtime_degraded.title"),
+                {
+                  description: i18n.t(
+                    "overlay:toast.realtime_degraded.realtime_mode",
+                  ),
+                },
+              );
+            } else {
+              realtimeDegradedToFile = true;
+              notifyOverlay(
+                "info",
+                i18n.t("overlay:toast.realtime_degraded.title"),
+                {
+                  description: i18n.t(
+                    "overlay:toast.realtime_degraded.description",
+                  ),
+                },
+              );
+            }
+            return;
+          }
+
           notifyOverlay("error", i18n.t("overlay:toast.asr_error.title"), {
             description: code
               ? `${code}: ${message}`

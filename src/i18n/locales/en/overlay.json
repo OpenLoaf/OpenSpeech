@@ -93,6 +93,11 @@
     "aborted_saved": {
       "title": "Cancelled, not transcribed",
       "description": "Recording saved to history"
+    },
+    "realtime_degraded": {
+      "title": "Realtime ASR glitch",
+      "description": "Re-transcribing from the recording…",
+      "realtime_mode": "First half kept; retry the full take from history"
     }
   },
   "transcript": {
