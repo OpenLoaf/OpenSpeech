@@ -6,18 +6,18 @@
 
 | 平台 | 听写默认 | 形态 | 备注 |
 |---|---|---|---|
-| **macOS** | `Fn` | modifier-only | 按住 Fn 说话。需用户在 Settings → Keyboard → "Press fn key to" 设为 "Do Nothing"，否则 Fn 会弹出 Emoji 面板。 |
-| **Windows** | `Ctrl + Win` | modifier-only | 按住 Ctrl + Win 说话。不占常规组合键；备选 `Right Alt`。 |
-| **Linux** | `Ctrl + Super` | modifier-only | 按住 Ctrl + Super 说话。GNOME 在某些版本会拦截 Super，若冲突改用 `Right Alt`。 |
+| **macOS** | `Fn + Ctrl` | modifier-only | 按一次开始、再按一次结束。组合键避免 Intel Mac / 外接键盘上单 Fn 不可达 + 减少与系统 Fn 行为的歧义。需用户在 Settings → Keyboard → "Press fn key to" 设为 "Do Nothing"，否则 Fn 会弹出 Emoji 面板。 |
+| **Windows** | `Ctrl + Win` | modifier-only | 按一次开始、再按一次结束。不占常规组合键；备选 `Right Alt`。 |
+| **Linux** | `Ctrl + Super` | modifier-only | 按一次开始、再按一次结束。GNOME 在某些版本会拦截 Super，若冲突改用 `Right Alt`。 |
 
-| 功能 | 默认组合（三端一致） | 模式 | 可否自定义 | 可否清空 |
+| 功能 | 默认组合 | 模式 | 可否自定义 | 可否清空 |
 |---|---|---|---|---|
-| 听写 | 见上表 | `hold`（按住说话）；录入按钮左侧 Switch 打开后切到 `toggle`（单击切换） | ✅ | ❌（听写必须保留一个绑定） |
+| 听写 | 见上表 | `toggle`（按一下开始、再按一下结束，全系统统一） | ✅ | ❌（听写必须保留一个绑定） |
 | 取消录音 | `Esc`（仅录音态生效，见下） | — | ❌ | ❌ |
 
-> 早期设计里听写有两个独立绑定（PTT / Toggle 各占一行），现合并为单一 `dictate_ptt` 绑定；模式通过 `binding.mode` 在 `hold` / `toggle` 间切换。持久化层的 `dictate_toggle` 旧字段由 `hotkeys` store 的 `sanitizeBindings` 读取时自动丢弃。
+> 早期设计里听写有两个独立绑定（PTT / Toggle 各占一行），并支持 `hold`（按住说话）/ `toggle`（单击切换）两种模式。现在合并为单一 `dictate_ptt` 绑定，且**全系统统一为 toggle 语义**——不再有 hold 模式。持久化层的 `dictate_toggle` 旧字段与 `binding.mode` 字段由 `hotkeys` store 的 `sanitizeBindings` 读取时自动丢弃。
 
-> **听写为何用 modifier-only 而非 combo？** 因为 PTT 本质上是"按住一个键"的肌肉记忆——不想让用户同时按 `Ctrl + Shift + Space` 三个键才能说话。modifier-only 绑定（如 `Fn` 单按 / `Ctrl + Win` 组合按住）在三端主流语音输入产品里已成共识。
+> **听写为何用 modifier-only 而非 combo？** modifier-only 绑定（如 `Fn + Ctrl` / `Ctrl + Win` 组合按住）触发肌肉记忆更轻——不想让用户同时按 `Ctrl + Shift + Space` 三个键才能说话。这种形态在三端主流语音输入产品里已成共识。
 
 ## 通用规则
 
@@ -36,12 +36,11 @@
 
 | 行为 | 规则 |
 |---|---|
-| 按下 | 进入 Recording（前 300 ms 仅显示"准备中"悬浮态） |
-| 松开 | 结束录音，进入 Transcribing |
-| 长按超过 SaaS realtime 会话 2 小时硬上限 | 服务端发 `closed{reason:"max_duration"}`，视为录音异常结束，history 标 failed |
-| 按下 < 300 ms 松开 | 视为误触，悬浮条淡出，不调用大模型，不计入历史 |
+| 第一次按下 | 进入 Recording（前 300 ms 仅显示"准备中"悬浮态） |
+| 第二次按下 | 结束录音，进入 Transcribing |
+| 录音持续超过 SaaS realtime 会话 2 小时硬上限 | 服务端发 `closed{reason:"max_duration"}`，视为录音异常结束，history 标 failed |
+| 第一次按下 < 300 ms 内立即再按一次 | 视为误触，悬浮条淡出，不调用大模型，不计入历史 |
 | 录音期间 `Esc` | 立即取消录音，见下"Esc 处理" |
-| 录音期间快捷键"松开事件丢失"（例如 Cmd+Tab 致焦点丢失） | 通过全局 keystate 轮询兜底检测（失焦 500 ms 内主动查询修饰键状态），若检测到修饰键已释放则按"松开"处理；无客户端时长硬上限，极端情况由服务端 2h max-duration 兜住 |
 | 快捷键被其他应用占用 | 字段右侧显示冲突提示；仍尝试注册（见"冲突检测"）|
 
 ## Esc 处理（状态化）
@@ -116,10 +115,10 @@ Esc 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc
 {
   "schemaVersion": 2,
   "bindings": {
-    // macOS 默认：Fn 单按
-    "dictate_ptt": { "kind": "modifierOnly", "mods": ["fn"],            "code": "",     "mode": "hold" },
-    // Windows / Linux 默认：Ctrl + Win|Super 按住
-    // "dictate_ptt": { "kind": "modifierOnly", "mods": ["ctrl", "meta"], "code": "",     "mode": "hold" },
+    // macOS 默认：Fn + Ctrl
+    "dictate_ptt": { "kind": "modifierOnly", "mods": ["fn", "ctrl"],   "code": "" },
+    // Windows / Linux 默认：Ctrl + Win|Super
+    // "dictate_ptt": { "kind": "modifierOnly", "mods": ["ctrl", "meta"], "code": "" },
   },
   "distinguish_left_right": false,   // MVP 固定 false
   "allow_special_keys":     false    // 允许 Esc/Tab/Enter 作为键内容；MVP 默认 false
@@ -137,7 +136,6 @@ Esc 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc
 
 ## 实现时序（开发补充）
 
-- **误触 300 ms 计时**：用单调时钟 `std::time::Instant` 从 keydown 事件接收时起算，与 cpal 采样启动时序无关。
-- **PTT 松开轮询**：进入 Recording 瞬间启动 `tokio::time::interval(200ms)`，`missed_tick_behavior = Skip`；失焦事件以 Tauri 的 `WindowEvent::Focused(false)` 为基准，500 ms 防抖后主动查询修饰键 keystate。
+- **误触 300 ms 计时**：用单调时钟 `std::time::Instant` 从首次 keydown 事件接收时起算，与 cpal 采样启动时序无关。
 - **热重载非原子窗口**：前端在执行 `unregister(old) → register(new)` 期间设置软锁 `hotkeyReloading = true`，期间收到的所有快捷键 trigger 全部 drop（仅 debug 日志记录，不弹错、不抖动 UI），锁释放后恢复。
 - **Recording 中忽略另一听写键**：仅当前会话内存计数，无持久化；仅 debug build 打 `tracing::debug!` 日志。

@@ -34,7 +34,7 @@ use std::{
     num::{NonZeroU32, NonZeroU8},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc,
     },
     thread::{self, JoinHandle},
@@ -62,6 +62,22 @@ const PEAK_GAIN: f32 = 2.8; // 普通对话音量（-25 dBFS 左右）就推到�
 // 噪声门：低于该幅值的窗口直接送 0，避免空调 / 键盘底噪把波形顶起来。
 // 0.015 ≈ -36 dBFS，安静室内底噪刚好被压住，正常说话（哪怕轻声）能干净越过。
 const NOISE_GATE: f32 = 0.015;
+
+// 波形显示带通滤波：300Hz HP + 3400Hz LP（电话语音频段），用于压住车噪 / 风噪 /
+// 键盘脆响，让用户在嘈杂环境里仍能从波形看出自己说话的节奏。仅作用于电平显示，
+// 录音文件 + 喂给 STT 的 PCM 都走原始全频段，不影响识别质量。
+const VOICE_HP_HZ: f32 = 300.0;
+const VOICE_LP_HZ: f32 = 3400.0;
+const VOICE_FILTER_Q: f32 = 0.707;
+
+// 波形显示 VAD（webrtc-vad / fvad）：在带通滤波之上再加"是不是有人说话"判断，
+// 关掉电视 / 音乐 / 远处 babble 这类与人声同频段、滤波器无能为力的伪人声。
+// 仅影响 peak emit；录音 + STT 不经过这一层。
+const VAD_SAMPLE_RATE: u32 = 16_000;
+// 30ms 帧 @16k = 480 sample；webrtc-vad 接受 10/20/30ms，30ms 在准确率与延迟间最稳。
+const VAD_FRAME_SAMPLES: usize = (VAD_SAMPLE_RATE as usize) * 30 / 1000;
+// 检测到 voice 后保留多久不归零——避免"词与词之间的几十 ms 静默"把波形跌到 0。
+const VAD_VOICE_HANG_MS: u64 = 200;
 // OGG Vorbis 输出：采样率 / 声道跟随采集配置，不做 resample / 下混——这两步
 // 留给 STT 集成阶段（大多数 STT 服务上传前自己会做）。
 // 质量取 0.4（≈ 96 kbps mono），人声完全够用且文件 ~1/10 WAV 大小。
@@ -175,6 +191,189 @@ fn push_to_stt_pcm16(data: &[f32], channels: u16, src_rate: u32) {
     crate::stt::try_send_audio_pcm16(bytes);
 }
 
+// RBJ Cookbook biquad，Direct Form II Transposed。系数构造时已除 a0，process 内
+// 仅 5 mul + 4 add，每 callback 几百样本对 audio 线程毫无压力。
+#[derive(Clone, Copy)]
+struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl Biquad {
+    fn highpass(sample_rate: f32, fc: f32, q: f32) -> Self {
+        let omega = 2.0 * std::f32::consts::PI * fc / sample_rate;
+        let (sin_o, cos_o) = (omega.sin(), omega.cos());
+        let alpha = sin_o / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        let one_plus_cos = 1.0 + cos_o;
+        Self {
+            b0: one_plus_cos * 0.5 / a0,
+            b1: -one_plus_cos / a0,
+            b2: one_plus_cos * 0.5 / a0,
+            a1: -2.0 * cos_o / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn lowpass(sample_rate: f32, fc: f32, q: f32) -> Self {
+        let omega = 2.0 * std::f32::consts::PI * fc / sample_rate;
+        let (sin_o, cos_o) = (omega.sin(), omega.cos());
+        let alpha = sin_o / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        let one_minus_cos = 1.0 - cos_o;
+        Self {
+            b0: one_minus_cos * 0.5 / a0,
+            b1: one_minus_cos / a0,
+            b2: one_minus_cos * 0.5 / a0,
+            a1: -2.0 * cos_o / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.z1;
+        self.z1 = self.b1 * x - self.a1 * y + self.z2;
+        self.z2 = self.b2 * x - self.a2 * y;
+        y
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VoiceBandFilter {
+    hp: Biquad,
+    lp: Biquad,
+}
+
+impl VoiceBandFilter {
+    fn new(sample_rate: f32) -> Self {
+        // Nyquist 限制：超过 sr/2 的截止会让系数发散；极端 8kHz 设备时把 LP 压到 sr*0.45
+        let lp_fc = VOICE_LP_HZ.min(sample_rate * 0.45);
+        let hp_fc = VOICE_HP_HZ.min(lp_fc * 0.5);
+        Self {
+            hp: Biquad::highpass(sample_rate, hp_fc, VOICE_FILTER_Q),
+            lp: Biquad::lowpass(sample_rate, lp_fc, VOICE_FILTER_Q),
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        self.lp.process(self.hp.process(x))
+    }
+}
+
+// 仅取第一通道喂滤波器（多声道下混再滤波只为更准确的 peak 不值得，立体声麦左右
+// 都有人声）。filter 状态跨 callback 累积，调用方持有 mut 引用。
+fn voice_band_peak(data: &[f32], channels: u16, filter: &mut VoiceBandFilter) -> f32 {
+    let step = channels.max(1) as usize;
+    let mut p = 0f32;
+    let mut i = 0;
+    while i < data.len() {
+        let y = filter.process(data[i]).abs();
+        if y > p {
+            p = y;
+        }
+        i += step;
+    }
+    p
+}
+
+// 包住 fvad 实例 + 16k mono i16 累积 buffer。callback 内独占使用，跨线程移交
+// 仅发生一次（spawn → audio thread），故标 Send 安全。
+struct VadGate {
+    vad: webrtc_vad::Vad,
+    buf: Vec<i16>,
+}
+
+unsafe impl Send for VadGate {}
+
+impl VadGate {
+    fn new() -> Self {
+        Self {
+            // Aggressive (mode 2)：嘈杂环境下减少误报；不用 VeryAggressive 否则
+            // 轻声 / 普通对话起始 50-100ms 容易被吞。
+            vad: webrtc_vad::Vad::new_with_rate_and_mode(
+                webrtc_vad::SampleRate::Rate16kHz,
+                webrtc_vad::VadMode::Aggressive,
+            ),
+            buf: Vec::with_capacity(VAD_FRAME_SAMPLES * 2),
+        }
+    }
+
+    /// 把原始 callback 数据转成 16k mono i16 累积，每凑够 30ms 帧喂一次 fvad；
+    /// 检测到 voice 时把当前 elapsed_ms 写入 atomic，emit tick 据此 hang。
+    fn feed(
+        &mut self,
+        data: &[f32],
+        channels: u16,
+        src_rate: u32,
+        stream_start: Instant,
+        voice_marker: &AtomicU64,
+    ) {
+        let ch = channels.max(1) as usize;
+        let frames = data.len() / ch;
+        if frames == 0 {
+            return;
+        }
+
+        let mono: Vec<f32> = if ch == 1 {
+            data[..frames].to_vec()
+        } else {
+            let mut out = Vec::with_capacity(frames);
+            for f in 0..frames {
+                let start = f * ch;
+                let mut sum = 0.0f32;
+                for c in 0..ch {
+                    sum += data[start + c];
+                }
+                out.push(sum / ch as f32);
+            }
+            out
+        };
+
+        let pcm: Vec<f32> = if src_rate == VAD_SAMPLE_RATE {
+            mono
+        } else {
+            let ratio = src_rate as f64 / VAD_SAMPLE_RATE as f64;
+            let dst_len = (mono.len() as f64 / ratio).floor() as usize;
+            if dst_len == 0 {
+                return;
+            }
+            let last = mono.len() - 1;
+            let mut out = Vec::with_capacity(dst_len);
+            for i in 0..dst_len {
+                let src_idx = i as f64 * ratio;
+                let lo = src_idx.floor() as usize;
+                let hi = (lo + 1).min(last);
+                let frac = src_idx - lo as f64;
+                out.push((mono[lo] as f64 * (1.0 - frac) + mono[hi] as f64 * frac) as f32);
+            }
+            out
+        };
+
+        for s in pcm {
+            self.buf.push((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
+        }
+
+        while self.buf.len() >= VAD_FRAME_SAMPLES {
+            let frame: Vec<i16> = self.buf.drain(..VAD_FRAME_SAMPLES).collect();
+            if let Ok(true) = self.vad.is_voice_segment(&frame) {
+                let elapsed_ms = stream_start.elapsed().as_millis() as u64;
+                voice_marker.store(elapsed_ms, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 struct MonitorState {
     ref_count: usize,
     stop_tx: Option<mpsc::Sender<()>>,
@@ -234,6 +433,11 @@ fn spawn_monitor_thread<R: Runtime>(
     let peak_bits = Arc::new(AtomicU32::new(0));
     let peak_cb = peak_bits.clone();
     let peak_tick = peak_bits.clone();
+    // VAD 决策的最近 voice 时间戳（自 stream_start 起的毫秒数）；0 表示从未检测到。
+    let voice_marker = Arc::new(AtomicU64::new(0));
+    let voice_marker_tick = voice_marker.clone();
+    // VAD callback 与 emit tick 共享同一时间参考。在 spawn 闭包入口取一次。
+    let stream_start = Instant::now();
 
     let th = thread::Builder::new()
         .name("openspeech-audio".into())
@@ -282,70 +486,100 @@ fn spawn_monitor_thread<R: Runtime>(
             let err_fn = |e: cpal::StreamError| log::warn!("[audio] stream error: {e}");
 
             let stream_result = match sample_format {
-                cpal::SampleFormat::F32 => device.build_input_stream(
-                    &stream_config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let mut p = 0f32;
-                        for s in data {
-                            let a = s.abs();
-                            if a > p {
-                                p = a;
-                            }
-                        }
-                        peak_cb.store(p.to_bits(), Ordering::Relaxed);
-                        push_samples(data);
-                        push_to_stt_pcm16(data, cb_channels, cb_sample_rate);
-                    },
-                    err_fn,
-                    None,
-                ),
-                cpal::SampleFormat::I16 => device.build_input_stream(
-                    &stream_config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        let scale = 1.0 / i16::MAX as f32;
-                        let mut p = 0f32;
-                        // 归一化一次，同时喂给 peak / 录音 / STT——避免多次 i16→f32
-                        // 转换，降低 callback 里的 CPU 峰值。
-                        let mut buf: [f32; 1024] = [0.0; 1024];
-                        for chunk in data.chunks(buf.len()) {
-                            for (i, s) in chunk.iter().enumerate() {
-                                let v = *s as f32 * scale;
-                                buf[i] = v;
-                                let a = v.abs();
-                                if a > p {
-                                    p = a;
+                cpal::SampleFormat::F32 => {
+                    let mut filter = VoiceBandFilter::new(cb_sample_rate as f32);
+                    let mut vad_gate = VadGate::new();
+                    let voice_marker_cb = voice_marker.clone();
+                    device.build_input_stream(
+                        &stream_config,
+                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                            let p = voice_band_peak(data, cb_channels, &mut filter);
+                            peak_cb.store(p.to_bits(), Ordering::Relaxed);
+                            push_samples(data);
+                            push_to_stt_pcm16(data, cb_channels, cb_sample_rate);
+                            vad_gate.feed(
+                                data,
+                                cb_channels,
+                                cb_sample_rate,
+                                stream_start,
+                                &voice_marker_cb,
+                            );
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
+                cpal::SampleFormat::I16 => {
+                    let mut filter = VoiceBandFilter::new(cb_sample_rate as f32);
+                    let mut vad_gate = VadGate::new();
+                    let voice_marker_cb = voice_marker.clone();
+                    device.build_input_stream(
+                        &stream_config,
+                        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                            let scale = 1.0 / i16::MAX as f32;
+                            let mut p = 0f32;
+                            // 归一化一次，同时喂给 peak / 录音 / STT / VAD——避免多次
+                            // i16→f32 转换，降低 callback 里的 CPU 峰值。
+                            let mut buf: [f32; 1024] = [0.0; 1024];
+                            for chunk in data.chunks(buf.len()) {
+                                for (i, s) in chunk.iter().enumerate() {
+                                    buf[i] = *s as f32 * scale;
                                 }
-                            }
-                            push_samples(&buf[..chunk.len()]);
-                            push_to_stt_pcm16(&buf[..chunk.len()], cb_channels, cb_sample_rate);
-                        }
-                        peak_cb.store(p.to_bits(), Ordering::Relaxed);
-                    },
-                    err_fn,
-                    None,
-                ),
-                cpal::SampleFormat::U16 => device.build_input_stream(
-                    &stream_config,
-                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        let mut p = 0f32;
-                        let mut buf: [f32; 1024] = [0.0; 1024];
-                        for chunk in data.chunks(buf.len()) {
-                            for (i, s) in chunk.iter().enumerate() {
-                                let v = (*s as f32 - 32768.0) / 32768.0;
-                                buf[i] = v;
-                                let a = v.abs();
-                                if a > p {
-                                    p = a;
+                                let slice = &buf[..chunk.len()];
+                                let chunk_peak = voice_band_peak(slice, cb_channels, &mut filter);
+                                if chunk_peak > p {
+                                    p = chunk_peak;
                                 }
+                                push_samples(slice);
+                                push_to_stt_pcm16(slice, cb_channels, cb_sample_rate);
+                                vad_gate.feed(
+                                    slice,
+                                    cb_channels,
+                                    cb_sample_rate,
+                                    stream_start,
+                                    &voice_marker_cb,
+                                );
                             }
-                            push_samples(&buf[..chunk.len()]);
-                            push_to_stt_pcm16(&buf[..chunk.len()], cb_channels, cb_sample_rate);
-                        }
-                        peak_cb.store(p.to_bits(), Ordering::Relaxed);
-                    },
-                    err_fn,
-                    None,
-                ),
+                            peak_cb.store(p.to_bits(), Ordering::Relaxed);
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
+                cpal::SampleFormat::U16 => {
+                    let mut filter = VoiceBandFilter::new(cb_sample_rate as f32);
+                    let mut vad_gate = VadGate::new();
+                    let voice_marker_cb = voice_marker.clone();
+                    device.build_input_stream(
+                        &stream_config,
+                        move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                            let mut p = 0f32;
+                            let mut buf: [f32; 1024] = [0.0; 1024];
+                            for chunk in data.chunks(buf.len()) {
+                                for (i, s) in chunk.iter().enumerate() {
+                                    buf[i] = (*s as f32 - 32768.0) / 32768.0;
+                                }
+                                let slice = &buf[..chunk.len()];
+                                let chunk_peak = voice_band_peak(slice, cb_channels, &mut filter);
+                                if chunk_peak > p {
+                                    p = chunk_peak;
+                                }
+                                push_samples(slice);
+                                push_to_stt_pcm16(slice, cb_channels, cb_sample_rate);
+                                vad_gate.feed(
+                                    slice,
+                                    cb_channels,
+                                    cb_sample_rate,
+                                    stream_start,
+                                    &voice_marker_cb,
+                                );
+                            }
+                            peak_cb.store(p.to_bits(), Ordering::Relaxed);
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
                 other => {
                     log::error!("[audio] unsupported sample format: {other:?}");
                     let _ = ready_tx.send(Err(format!("unsupported sample format: {other:?}")));
@@ -391,7 +625,14 @@ fn spawn_monitor_thread<R: Runtime>(
                     Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         let bits = peak_tick.swap(0, Ordering::Relaxed);
-                        let raw = f32::from_bits(bits);
+                        let raw_peak = f32::from_bits(bits);
+                        // VAD gate：距离最近一次 voice 检测超过 hang 窗口就强制 0；
+                        // last_voice_ms == 0 表示从未检测到（stream 刚起 / 全程静音）。
+                        let now_ms = stream_start.elapsed().as_millis() as u64;
+                        let last_voice_ms = voice_marker_tick.load(Ordering::Relaxed);
+                        let voice_active = last_voice_ms > 0
+                            && now_ms.saturating_sub(last_voice_ms) <= VAD_VOICE_HANG_MS;
+                        let raw = if voice_active { raw_peak } else { 0.0 };
                         // gate 之后把 [GATE, 1] 重新铺到 [0, 1]，避免门刚开时电平骤跳。
                         let gated = if raw < NOISE_GATE {
                             0.0

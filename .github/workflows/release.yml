@@ -479,6 +479,9 @@ jobs:
           coscli --version
 
       - name: Configure coscli
+        # GitHub runner 在境外，走默认 region endpoint 上传到国内 COS 极慢（v0.2.26-beta.2 跑超
+        # 17 分钟仍卡）。改走全球加速 endpoint：bucket 加 endpoint=cos.accelerate.myqcloud.com，
+        # coscli 会拼成 <bucket>.cos.accelerate.myqcloud.com，大幅缩短上传时间。
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
           TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
@@ -496,16 +499,19 @@ jobs:
               - name: ${TENCENT_COS_BUCKET}
                 alias: openspeech
                 region: ${TENCENT_COS_REGION}
+                endpoint: cos.accelerate.myqcloud.com
           EOF
 
       - name: Upload artifacts to COS
+        # --routines 16 把单步骤内的并发从默认 3 提高到 16，配合全球加速 endpoint 把跨境上传
+        # 压到几分钟内。
         env:
           TAG: ${{ github.ref_name }}
           IS_BETA: ${{ steps.channel.outputs.is_beta }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          coscli sync staging/ cos://openspeech/v${version}/ --recursive
+          coscli sync staging/ cos://openspeech/v${version}/ --recursive --routines 16
           coscli cp latest.cos.json cos://openspeech/latest-beta.json \
             --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
           if [[ "$IS_BETA" != "true" ]]; then
