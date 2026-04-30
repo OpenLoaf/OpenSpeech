@@ -26,10 +26,10 @@
 
 OpenSpeech is a cross-platform desktop voice typing tool. Press a hotkey in any app to start recording, press it again, and the transcribed text is written at your cursor. Released for Windows, macOS and Linux at the same time.
 
-## Screenshots
+**Speak in plain words and the transcript lands at your cursor as a clean, structured note.** Record → transcribe → AI clean-up smooths over filler words, slips of the tongue and self-corrections, then reformats the result the way you want it:
 
 <p align="center">
-  <img src="images/english.png" alt="OpenSpeech English UI" />
+  <img src="images/demo-en.gif" alt="OpenSpeech demo: record, transcribe, AI clean-up, write to cursor" width="640" />
 </p>
 
 ## Features
@@ -41,6 +41,22 @@ OpenSpeech is a cross-platform desktop voice typing tool. Press a hotkey in any 
 - **Personal dictionary** — Add proper nouns, people's names and jargon to improve accuracy.
 - **Localised UI** — Simplified Chinese and English; light/dark themes follow the system.
 - **Tray / autostart / in-app updates** — The usual desktop niceties.
+
+## Screenshots
+
+<p align="center">
+  <img src="images/english.png" alt="OpenSpeech English UI" width="640" />
+</p>
+
+## Install
+
+Grab the installer for your platform from [Releases](https://github.com/OpenLoaf/OpenSpeech/releases/latest):
+
+- **macOS**: `OpenSpeech_x.y.z_universal.dmg` (macOS 10.15+)
+- **Windows**: `OpenSpeech_x.y.z_x64-setup.exe`
+- **Linux**: `.AppImage` / `.deb` / `.rpm`
+
+You'll be asked to grant microphone access on first launch; macOS additionally needs Accessibility permission.
 
 ## Roadmap (To-Do)
 
@@ -65,16 +81,6 @@ Multi-provider STT integrations:
 - [ ] OpenAI Whisper API
 - [ ] Deepgram
 - [ ] AssemblyAI
-
-## Install
-
-Grab the installer for your platform from [Releases](https://github.com/OpenLoaf/OpenSpeech/releases/latest):
-
-- **macOS**: `OpenSpeech_x.y.z_universal.dmg` (macOS 10.15+)
-- **Windows**: `OpenSpeech_x.y.z_x64-setup.exe`
-- **Linux**: `.AppImage` / `.deb` / `.rpm`
-
-You'll be asked to grant microphone access on first launch; macOS additionally needs Accessibility permission.
 
 ## Quick start
 

@@ -26,10 +26,10 @@
 
 OpenSpeech 是一款跨平台的桌面端語音輸入工具：在任何應用、任何輸入框，按一下快捷鍵開始說話，再按一下就把轉寫文字寫到游標位置。Windows / macOS / Linux 三端同步發佈。
 
-## 截圖
+**說一段大白話，落到游標裡就是結構化文件。** 錄音 → 轉寫 → AI 清洗，口誤、語氣詞、自我糾錯全部抹平，再按你想要的格式重排：
 
 <p align="center">
-  <img src="images/chinese.png" alt="OpenSpeech 中文介面" />
+  <img src="images/demo-zh-TW.gif" alt="OpenSpeech 演示：錄音、轉寫、AI 清洗、寫入游標" width="640" />
 </p>
 
 ## 功能
@@ -41,6 +41,22 @@ OpenSpeech 是一款跨平台的桌面端語音輸入工具：在任何應用、
 - **個人字典**：維護專有名詞、人名、術語，提高辨識準確率。
 - **多語言介面**：簡體中文、English；明暗主題跟隨系統。
 - **常駐工具列 / 開機自動啟動 / 應用程式內更新**：常規桌面應用整合。
+
+## 截圖
+
+<p align="center">
+  <img src="images/chinese.png" alt="OpenSpeech 中文介面" width="640" />
+</p>
+
+## 安裝
+
+前往 [Releases](https://github.com/OpenLoaf/OpenSpeech/releases/latest) 下載對應平台安裝包：
+
+- **macOS**：`OpenSpeech_x.y.z_universal.dmg`（macOS 10.15+）
+- **Windows**：`OpenSpeech_x.y.z_x64-setup.exe`
+- **Linux**：`.AppImage` / `.deb` / `.rpm`
+
+首次啟動需授予麥克風權限；macOS 還需要輔助使用（Accessibility）權限。
 
 ## 路線圖（To-Do）
 
@@ -65,16 +81,6 @@ OpenSpeech 是一款跨平台的桌面端語音輸入工具：在任何應用、
 - [ ] OpenAI Whisper API
 - [ ] Deepgram
 - [ ] AssemblyAI
-
-## 安裝
-
-前往 [Releases](https://github.com/OpenLoaf/OpenSpeech/releases/latest) 下載對應平台安裝包：
-
-- **macOS**：`OpenSpeech_x.y.z_universal.dmg`（macOS 10.15+）
-- **Windows**：`OpenSpeech_x.y.z_x64-setup.exe`
-- **Linux**：`.AppImage` / `.deb` / `.rpm`
-
-首次啟動需授予麥克風權限；macOS 還需要輔助使用（Accessibility）權限。
 
 ## 快速上手
 
