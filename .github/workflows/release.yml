@@ -320,22 +320,26 @@ jobs:
 
       # latest.json 是 Tauri updater 客户端 fetch 的入口（plugins.updater.endpoints 指向它）。
       # 字段：version / pub_date / platforms[<platform-arch>].{signature, url}。
-      # signature 取 .sig 文件全文；url 指向 Release 上的对应 asset 直链（保留原名）。
+      # signature 取 .sig 文件全文；url **直接指向 COS**（按版本号归档），让所有客户端
+      # （包括老版本 < 0.2.26，endpoint 写死 GitHub 的）从这一份 manifest 解析后下载安装包
+      # 也走 COS。代价：COS 全挂时无自动 fallback——发版时手工 gh release upload --clobber
+      # 一份 GitHub-url 版 manifest 顶替即可应急。
       - name: Generate latest.json
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
+          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
         run: |
           set -euo pipefail
           cd staging
+          version="${TAG#v}"
           pub_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           platforms='{}'
           for sig in *.sig; do
             [[ -f "$sig" ]] || continue
             base="${sig%.sig}"
             sig_content="$(cat "$sig")"
-            url="https://github.com/${REPO}/releases/download/${TAG}/${base}"
+            url="${CDN_HOST}/v${version}/${base}"
             # stage step 已经把 platform 写进文件名（OpenSpeech-<version>-<platform>.<ext>），
             # 这里直接按 -<platform>. / -<platform>- 段匹配，比凑 arch 关键字稳。
             case "$base" in
@@ -361,26 +365,6 @@ jobs:
             > ../latest.json
           echo "--- latest.json ---"
           cat ../latest.json
-
-      # COS/CDN 版本的 latest.json：内容同 latest.json，但每个 platform.url 替换成 COS 域名 +
-      # 按版本号归档的路径（cos://bucket/v<version>/<filename>）。
-      # 双轨设计：updater endpoints 数组里 COS 在前、GitHub 在后；任一可用即可升级。
-      # GitHub Release 上仍然上传"GitHub url 版"的 latest.json（这里不动），COS 桶上传
-      # "COS url 版"。客户端命中哪个 endpoint，url 自洽地走对应源。
-      - name: Generate latest.json (COS variant)
-        shell: bash
-        env:
-          TAG: ${{ github.ref_name }}
-          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
-        run: |
-          set -euo pipefail
-          version="${TAG#v}"
-          jq --arg cdn "$CDN_HOST" --arg ver "$version" \
-            '.platforms |= with_entries(.value.url = ($cdn + "/v" + $ver + "/" + (.value.url | split("/") | last)))' \
-            latest.json > latest.cos.json
-          cp latest.cos.json latest-beta.cos.json
-          echo "--- latest.cos.json ---"
-          cat latest.cos.json
 
       # Release 正文 = changelog 原文，不再追加下载表 / 自动更新说明等内容。
       # changelog SSoT = `docs/changelogs/{version}/zh.md`（缺失则回退 en.md，再缺回退占位文）。
@@ -504,7 +488,8 @@ jobs:
 
       - name: Upload artifacts to COS
         # --routines 16 把单步骤内的并发从默认 3 提高到 16，配合全球加速 endpoint 把跨境上传
-        # 压到几分钟内。
+        # 压到几分钟内。manifest 内容跟 GitHub Release 上的同名 latest.json/-beta.json 完全一致
+        # （都是 COS-url 版），COS 这边只是镜像，方便新版本走 COS endpoint 直接拉。
         env:
           TAG: ${{ github.ref_name }}
           IS_BETA: ${{ steps.channel.outputs.is_beta }}
@@ -512,10 +497,10 @@ jobs:
           set -euo pipefail
           version="${TAG#v}"
           coscli sync staging/ cos://openspeech/v${version}/ --recursive --routines 16
-          coscli cp latest.cos.json cos://openspeech/latest-beta.json \
+          coscli cp latest-beta.json cos://openspeech/latest-beta.json \
             --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
           if [[ "$IS_BETA" != "true" ]]; then
-            coscli cp latest.cos.json cos://openspeech/latest.json \
+            coscli cp latest.json cos://openspeech/latest.json \
               --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
           fi
           echo "Uploaded to COS: cos://openspeech/v${version}/"
