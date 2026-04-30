@@ -155,6 +155,7 @@ interface OverlayToastOptions {
   description?: string;
   action?: { label: string; key: OverlayToastActionKey };
   durationMs?: number;
+  dismissOnDisarm?: boolean;
 }
 const notifyOverlay = (
   kind: OverlayToastKind,
@@ -168,6 +169,7 @@ const notifyOverlay = (
     description: options.description,
     action: options.action,
     durationMs: options.durationMs,
+    dismissOnDisarm: options.dismissOnDisarm,
   });
 };
 
@@ -425,6 +427,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         `[refine] stream done refinedLen=${refinedText.length} elapsedMs=${Math.round(performance.now() - refineStart)} credits=${r.creditsConsumed ?? "?"}`,
       );
       rememberHotwordsCacheId(hotwords, r.hotwordsCacheId);
+      flushPendingInject();
       try {
         await injectChain;
       } catch {}
@@ -533,10 +536,41 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
 // injectChain 串行化：enigo 的 Cmd+V 不会被打断，但 writeClipboard 是异步，
 // 多次 final 几乎同时到达时会撞剪贴板（后写覆盖前写、前一段没贴完就被改）。
 // 用一个 Promise 串行链兜住。
+//
+// 节流：AI_REFINE 流式 token 频率高（10–30/s），每个 delta 一次完整 IPC+Enigo+paste
+// 会让 overlay 动画肉眼可见地卡顿。把 delta 攒进 pendingDelta，INJECT_FLUSH_MS
+// 内只 flush 一次；累积超过 INJECT_FLUSH_MAX_CHARS 立即 flush，避免长 token 饿肚子。
+const INJECT_FLUSH_MS = 40;
+const INJECT_FLUSH_MAX_CHARS = 24;
 let lastInjectedText = "";
 let injectChain: Promise<void> = Promise.resolve();
+let pendingDelta = "";
+let flushTimer: number | null = null;
+
+const flushPendingInject = () => {
+  if (flushTimer !== null) {
+    window.clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (!pendingDelta) return;
+  const chunk = pendingDelta;
+  pendingDelta = "";
+  injectChain = injectChain.then(async () => {
+    try {
+      await writeClipboard(chunk);
+      await invoke("inject_paste");
+    } catch (e) {
+      console.warn("[stt] incremental inject failed:", e);
+    }
+  });
+};
 
 const resetIncrementalInject = () => {
+  if (flushTimer !== null) {
+    window.clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  pendingDelta = "";
   lastInjectedText = "";
 };
 
@@ -549,14 +583,17 @@ const injectIncremental = (fullText: string) => {
   const delta = fullText.slice(lastInjectedText.length);
   if (!delta) return;
   lastInjectedText = fullText;
-  injectChain = injectChain.then(async () => {
-    try {
-      await writeClipboard(delta);
-      await invoke("inject_paste");
-    } catch (e) {
-      console.warn("[stt] incremental inject failed:", e);
-    }
-  });
+  pendingDelta += delta;
+  if (pendingDelta.length >= INJECT_FLUSH_MAX_CHARS) {
+    flushPendingInject();
+    return;
+  }
+  if (flushTimer === null) {
+    flushTimer = window.setTimeout(() => {
+      flushTimer = null;
+      flushPendingInject();
+    }, INJECT_FLUSH_MS);
+  }
 };
 
 const discardRecording = () => {
@@ -631,6 +668,12 @@ const abortAndSaveHistory = async (): Promise<void> => {
 
 // 听写提示音：Web Audio 即时合成，零素材依赖。
 // 桌面壳 WebView 内不需 user gesture 即可 resume（与浏览器策略不同）。
+//
+// 冷启动延迟根因：macOS WebView 长时间空闲后 audioCtx 自动 suspend，按激活键
+// 那一瞬 resume() 是 async，但 ding 立刻按 currentTime schedule oscillator —— ctx
+// 还在 suspend，schedule 出去的事件被推迟到 resume 完成（实测 50–200ms），听感
+// 就是"提示音慢一拍"。修复：boot 时 warmAudioCtx 把 ctx 起到 running 状态；每次
+// 播 cue 之前再 resume 兜底（用户系统睡眠回来 ctx 又被踢回 suspend 的场景）。
 let audioCtx: AudioContext | null = null;
 const ensureAudioCtx = () => {
   if (!IS_MAIN_WINDOW) return null;
@@ -646,6 +689,25 @@ const ensureAudioCtx = () => {
   return audioCtx;
 };
 
+// boot 时调一次：创建 ctx + 触发一次零增益的 oscillator，把 macOS WebView audio
+// 子系统真正起到 running。否则首次按激活键时还要等 ctx 从 lazy/suspended 切到
+// running，提示音永远比触发慢一拍。
+const warmAudioCtx = () => {
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+  try {
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t0);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.02);
+  } catch (e) {
+    console.warn("[cue] warm failed:", e);
+  }
+};
+
 // 柔和"叮咚"：sine 基频 + 一点八度泛音，串 lowpass 软化高频；30ms attack + 指数衰减，避免敲击的硬边缘
 const ding = (
   freq: number,
@@ -655,7 +717,11 @@ const ding = (
 ) => {
   const ctx = ensureAudioCtx();
   if (!ctx) return;
-  const t0 = ctx.currentTime + delayMs / 1000;
+  // ctx 还 suspended 时 currentTime 会一直停在某个旧值；resume 完成后 currentTime
+  // 才推进。给 schedule 加一个最小 +5ms 的安全 buffer，避免 t0 落在 ctx 真正起来
+  // 之后的"过去时间"，让首发 cue 在 ctx 唤醒同一帧就能开声。
+  const baseT = ctx.currentTime + 0.005;
+  const t0 = baseT + delayMs / 1000;
   const t1 = t0 + durationMs / 1000;
   const filter = ctx.createBiquadFilter();
   filter.type = "lowpass";
@@ -724,6 +790,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         return;
       }
 
+      // 提前把 AudioContext 起到 running，避免首次按激活键时还要等 ctx 从
+      // lazy/suspended 切到 running 导致提示音"慢一拍"。
+      warmAudioCtx();
+
       // 主窗每次 set 后向 overlay 推送一次 FSM 快照 + 在状态过渡时播放提示音。
       // 20Hz 的 audioLevels 不在这里同步——overlay 自己 listen 'audio-level'，
       // 避免双倍 IPC 流量。
@@ -733,15 +803,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       let prevErrorState = get().state === "error";
       let prevErrorMessage: string | null = get().errorMessage;
       useRecordingStore.subscribe((s) => {
-        // 提示音三条 FSM 边触发——startCue 放在进入 preparing 时（按下即响），
-        // 不等 PREPARING_MS 后才到 recording，否则用户感觉"按了 300ms 才有反馈"。
+        // 提示音两条 FSM 边触发：stop / cancel。startCue 已经移到 hotkey
+        // press handler 入口（按下瞬间立刻播），避免被 gate / preflight / setState
+        // 链路上的几十~上千 ms 拖成"慢一拍"。
         // cancelCue 覆盖 ESC 双击、overlay × 按钮、快速双击误触三条收尾路径。
-        if (
-          (prevState === "idle" || prevState === "error") &&
-          s.state === "preparing"
-        ) {
-          playStartCue();
-        } else if (prevState === "recording" && s.state === "transcribing") {
+        if (prevState === "recording" && s.state === "transcribing") {
           playStopCue();
         } else if (
           (prevState === "preparing" || prevState === "recording") &&
@@ -762,15 +828,23 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           s.state === "recording" ||
           s.state === "transcribing";
         if (!wasActive && isActive) escCaptureStart();
-        else if (wasActive && !isActive) {
-          escCaptureStop();
-          // 离开 active 态（提交 / 完成 / 别处取消）时同步清掉 ESC 状态：
-          // 否则 timer 仍在跑，下一次进入录音的瞬间可能误触发 disarm/cancel。
-          if (escFirstAt > 0 || escPendingTimer !== null || escPromptTimer !== null) {
-            clearEscTimers();
-            escFirstAt = 0;
-            void emitTo("overlay", "openspeech://esc-disarmed", null);
-          }
+        else if (wasActive && !isActive) escCaptureStop();
+        // 离开 preparing/recording（toggle off → transcribing、双击丢弃 → idle、
+        // 取消 → idle 等）时同步清掉 ESC 状态。ESC 提示「再按一下取消」只对录音
+        // 窗口有意义，转写阶段继续显示会和「正在思考中」叠在一起；timer 也得清，
+        // 否则后续误触发 disarm/cancel。
+        const wasInRecording =
+          prevState === "preparing" || prevState === "recording";
+        const isInRecording =
+          s.state === "preparing" || s.state === "recording";
+        if (
+          wasInRecording &&
+          !isInRecording &&
+          (escFirstAt > 0 || escPendingTimer !== null || escPromptTimer !== null)
+        ) {
+          clearEscTimers();
+          escFirstAt = 0;
+          void emitTo("overlay", "openspeech://esc-disarmed", null);
         }
 
         prevState = s.state;
@@ -938,6 +1012,13 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             );
             return;
           }
+
+          // 提示音"按下即响"：这里才进入"新一次录音"的真实路径，不再等
+          // gate / preflight / setState=preparing 之后由 subscriber 触发，避免
+          // openloaf_try_recover (1.5s)、preflightMic 列设备、AudioContext 冷启动
+          // 几条慢路径叠加之后才出声的"慢一拍"体感。gate 拒了也不补偿——原本
+          // 就有 toast 通知用户为什么没起，多一次 cue 反而干扰。
+          playStartCue();
 
           // Gate：转写后端必须至少一条可用，否则录了一段没人转的废录音是浪费。
           //   saasReady = 已登录 OpenLoaf（默认 dictationSource=SAAS 走云端）
@@ -1395,6 +1476,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             // 错误（红）风格都拉开距离，避免被误读为"录音条出错了"。
             notifyOverlay("info", i18n.t("overlay:toast.esc_arm.title"), {
               durationMs: ESC_PROMPT_MS,
+              dismissOnDisarm: true,
             });
             escPromptTimer = window.setTimeout(() => {
               escPromptTimer = null;

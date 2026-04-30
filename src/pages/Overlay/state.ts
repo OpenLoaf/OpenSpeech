@@ -19,6 +19,9 @@ export interface ToastPayload {
   action?: { label: string; key: ToastActionKey };
   /** 0 = 不自动消失（用户必须显式关闭或点动作）。默认 2000ms。 */
   durationMs?: number;
+  /** ESC arm 提示这种「与 escArmed 状态强绑定」的 toast：disarm 时一并消失，
+   *  避免用户激活快捷键 toggle 结束录音后，提示条还残留在悬浮条上方。 */
+  dismissOnDisarm?: boolean;
 }
 
 export interface ToastState extends ToastPayload {
@@ -75,7 +78,11 @@ function reduce(s: OverlayState, a: Action): OverlayState {
     case "esc-armed":
       return { ...s, escArmed: true };
     case "esc-disarmed":
-      return { ...s, escArmed: false };
+      return {
+        ...s,
+        escArmed: false,
+        toast: s.toast?.dismissOnDisarm ? null : s.toast,
+      };
   }
 }
 
@@ -125,6 +132,10 @@ export function useOverlayMachine(): OverlayMachine {
   };
 
   const setEscArmed = (armed: boolean) => {
+    // disarm 路径会顺带清掉 dismissOnDisarm 的 toast——必须同时清掉它的 auto-dismiss
+    // timer，否则等 timer 回调到了再 dispatch toast-dismiss(旧 id)，下一条 toast
+    // 已经占用 state.toast，会被这个迟来的 dismiss 误关。
+    if (!armed) clearToastTimer();
     dispatch({ type: armed ? "esc-armed" : "esc-disarmed" });
   };
 

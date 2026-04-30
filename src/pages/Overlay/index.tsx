@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, Check, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -18,6 +18,8 @@ const PILL_HEIGHT = 36;
 const TOAST_HEIGHT = 42;
 const TOAST_GAP = 4;
 const EXPANDED_HEIGHT = TOAST_HEIGHT + TOAST_GAP + PILL_HEIGHT;
+// toast 单独显示（无录音活动）时，整窗只渲染 toast 一行，省得用户被一条空的灰胶囊干扰。
+const TOAST_ONLY_HEIGHT = TOAST_HEIGHT;
 
 export default function OverlayPage() {
   const { t } = useTranslation();
@@ -58,23 +60,49 @@ export default function OverlayPage() {
   }, [state.main]);
 
   const visible = state.main !== "idle" || state.toast !== null;
+  // 录音活动期 = 胶囊必须显示。idle / error 时若有 toast，就让 toast 独占——
+  // error 状态的红字本来就只是 toast 标题的回显，没必要在底下再挂个胶囊。
+  const pillVisible =
+    state.main !== "idle" && state.main !== "error" ? true : state.toast === null;
 
-  // 可见时根据 toast 是否存在调整窗口高度；切换通过 set_height 命令。
+  // 窗口尺寸切换走"先涨后缩"两段：要变大时立刻涨（让动画里新元素有地方画），
+  // 要变小时延迟到 framer-motion exit 动画结束（约 160ms）再收，避免窗口先于
+  // toast/胶囊缩掉、把动画半路截断成生硬的 pop。
+  const targetHeight = !visible
+    ? 0
+    : pillVisible
+      ? state.toast
+        ? EXPANDED_HEIGHT
+        : PILL_HEIGHT
+      : TOAST_ONLY_HEIGHT;
+  const [appliedHeight, setAppliedHeight] = useState(targetHeight);
   useEffect(() => {
-    if (!visible) return;
-    const h = state.toast ? EXPANDED_HEIGHT : PILL_HEIGHT;
-    invoke("overlay_set_height", { height: h }).catch((e) =>
+    if (targetHeight === appliedHeight) return;
+    if (targetHeight > appliedHeight) {
+      setAppliedHeight(targetHeight);
+      return;
+    }
+    const t = window.setTimeout(() => setAppliedHeight(targetHeight), 200);
+    return () => window.clearTimeout(t);
+  }, [targetHeight, appliedHeight]);
+
+  useEffect(() => {
+    if (!visible || appliedHeight <= 0) return;
+    invoke("overlay_set_height", { height: appliedHeight }).catch((e) =>
       console.warn("[overlay] set_height failed", e),
     );
-  }, [state.toast, visible]);
+  }, [appliedHeight, visible]);
 
   // 不可见时调用 hide。Rust 端 hide 是单 command 串行：先移屏外 → 复位尺寸 → hide，
-  // 不会再有 IPC 顺序竞争留下黑条/旧尺寸。
+  // 不会再有 IPC 顺序竞争留下黑条/旧尺寸。延迟一帧让 motion exit 跑完再 hide。
   useEffect(() => {
     if (visible) return;
-    invoke("overlay_hide").catch((e) =>
-      console.warn("[overlay] hide failed", e),
-    );
+    const t = window.setTimeout(() => {
+      invoke("overlay_hide").catch((e) =>
+        console.warn("[overlay] hide failed", e),
+      );
+    }, 200);
+    return () => window.clearTimeout(t);
   }, [visible]);
 
   // overlay 是镜像窗口：按钮交互通过 emitTo 发回主窗，主窗 FSM 调真实的 Rust 副作用。
@@ -111,29 +139,35 @@ export default function OverlayPage() {
         ? "error"
         : "wave";
 
-  if (!visible) return null;
   return (
+    <AnimatePresence>
+      {visible && (
     <motion.div
       key="overlay-shell"
       initial={{ opacity: 0, scale: 0.94, y: 4 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-      className="flex h-screen w-screen flex-col"
+      exit={{ opacity: 0, scale: 0.94, y: 4 }}
+      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+      className="flex h-screen w-screen flex-col justify-end"
       style={{ transformOrigin: "50% 100%" }}
     >
-      <AnimatePresence>
+      <AnimatePresence initial={false}>
         {state.toast && (
           <motion.div
             key={state.toast.id}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            transition={{ duration: 0.15 }}
+            initial={{ opacity: 0, y: 8, height: 0, marginBottom: 0 }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              height: TOAST_HEIGHT,
+              marginBottom: pillVisible ? TOAST_GAP : 0,
+            }}
+            exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
-              "flex items-center gap-1.5 border bg-te-bg px-2 py-1",
+              "flex items-center gap-1.5 overflow-hidden border bg-te-bg px-2 py-1",
               toastAccent,
             )}
-            style={{ height: TOAST_HEIGHT, marginBottom: TOAST_GAP }}
           >
             <AlertTriangle className="size-3 shrink-0" />
             <div className="min-w-0 flex-1">
@@ -163,12 +197,18 @@ export default function OverlayPage() {
         )}
       </AnimatePresence>
 
-      <div
+      <AnimatePresence initial={false}>
+      {pillVisible && (
+      <motion.div
+        key="overlay-pill"
+        initial={{ opacity: 0, y: 6, height: 0 }}
+        animate={{ opacity: 1, y: 0, height: PILL_HEIGHT }}
+        exit={{ opacity: 0, y: 6, height: 0 }}
+        transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
         className={cn(
-          "flex w-full items-center gap-2 border px-1.5 transition-colors",
+          "flex w-full items-center gap-2 overflow-hidden border px-1.5 transition-colors",
           isError ? "border-te-accent bg-te-bg" : "border-te-gray bg-te-bg",
         )}
-        style={{ height: PILL_HEIGHT }}
       >
         <button
           type="button"
@@ -206,7 +246,7 @@ export default function OverlayPage() {
                         : "overlay:status.transcribing",
                     )}
                   </span>
-                  <div className="relative h-px w-20 overflow-hidden bg-te-gray/40">
+                  <div className="relative h-px w-32 overflow-hidden bg-te-gray/40">
                     <motion.span
                       className="absolute inset-y-0 bg-te-accent"
                       style={{ width: "33%" }}
@@ -245,7 +285,11 @@ export default function OverlayPage() {
         >
           <Check className="size-3" />
         </button>
-      </div>
+      </motion.div>
+      )}
+      </AnimatePresence>
     </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
