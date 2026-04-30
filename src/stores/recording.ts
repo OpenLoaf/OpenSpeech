@@ -328,10 +328,17 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // 走原 UTTERANCE 路径整段贴到光标。
   const segmentMode = getEffectiveSegmentMode();
   let refinedText: string | null = null;
+  console.info(
+    `[refine] gate textLen=${text.length} segmentMode=${segmentMode} willCallRefine=${!!text && segmentMode === "AI_REFINE"}`,
+  );
   if (text && segmentMode === "AI_REFINE") {
     const { hotwords, hotwordsCacheId } = getHotwordsForRefine();
     resetIncrementalInject();
     let streamedSoFar = "";
+    const refineStart = performance.now();
+    console.info(
+      `[refine] stream start textLen=${text.length} hotwordsLen=${hotwords?.length ?? 0} cacheId=${hotwordsCacheId ? "yes" : "no"}`,
+    );
     try {
       const r = await refineSpeechTextStream(
         { text, hotwords: hotwords || undefined, hotwordsCacheId },
@@ -341,6 +348,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         },
       );
       refinedText = r.refinedText;
+      console.info(
+        `[refine] stream done refinedLen=${refinedText.length} elapsedMs=${Math.round(performance.now() - refineStart)} credits=${r.creditsConsumed ?? "?"}`,
+      );
       rememberHotwordsCacheId(hotwords, r.hotwordsCacheId);
       try {
         await injectChain;
@@ -353,9 +363,15 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     } catch (e) {
       const raw = String(e ?? "");
       if (isAuthError(raw)) {
+        console.warn(
+          `[refine] auth lost after ${Math.round(performance.now() - refineStart)}ms: ${raw}`,
+        );
         handleAuthLost();
       } else {
-        console.warn("[stt] refine stream failed, falling back to raw transcript:", e);
+        console.warn(
+          `[refine] stream failed after ${Math.round(performance.now() - refineStart)}ms, falling back to raw transcript:`,
+          e,
+        );
         notifyOverlay(
           "warning",
           i18n.t("overlay:toast.transcribe_failed.title"),
@@ -364,6 +380,8 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       }
     }
     void streamedSoFar;
+  } else if (text && segmentMode !== "AI_REFINE") {
+    console.info(`[refine] skipped, segmentMode=${segmentMode}`);
   }
   const finalText = refinedText ?? text;
 
