@@ -97,12 +97,32 @@ pub struct UpdateMetadata {
     raw_json: serde_json::Value,
 }
 
+// 当前进程 OS+ARCH 对应的 manifest platforms key（与 release.yml jq 那边的 case 对齐）。
+fn current_platform_key() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-aarch64",
+        ("macos", "x86_64") => "darwin-x86_64",
+        ("linux", "aarch64") => "linux-aarch64",
+        ("linux", "x86_64") => "linux-x86_64",
+        ("windows", "aarch64") => "windows-aarch64",
+        ("windows", "x86_64") => "windows-x86_64",
+        _ => "unknown",
+    }
+}
+
 #[tauri::command]
 pub async fn check_for_update<R: Runtime>(
     webview: Webview<R>,
 ) -> Result<Option<UpdateMetadata>, String> {
     let channel = read_channel();
-    let endpoints: Vec<url::Url> = endpoints_for(channel)
+    let endpoint_strs = endpoints_for(channel);
+    log::info!(
+        target: "openspeech::updater",
+        "check_for_update channel={} endpoints={:?}",
+        channel, endpoint_strs
+    );
+
+    let endpoints: Vec<url::Url> = endpoint_strs
         .into_iter()
         .filter_map(|s| url::Url::parse(s).ok())
         .collect();
@@ -113,11 +133,29 @@ pub async fn check_for_update<R: Runtime>(
     }
 
     let updater = builder.build().map_err(|e| e.to_string())?;
-    let update = updater.check().await.map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| {
+        log::warn!(target: "openspeech::updater", "updater.check() failed: {e}");
+        e.to_string()
+    })?;
 
     let Some(update) = update else {
+        log::info!(target: "openspeech::updater", "no update available");
         return Ok(None);
     };
+
+    let platform_key = current_platform_key();
+    let manifest_url = update
+        .raw_json
+        .get("platforms")
+        .and_then(|p| p.get(platform_key))
+        .and_then(|p| p.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("<missing>");
+    log::info!(
+        target: "openspeech::updater",
+        "update found {} -> {} platform={} install_url={}",
+        update.current_version, update.version, platform_key, manifest_url
+    );
 
     // 前端 Update.date 仅展示用、且我们目前 toast 里没用到。OffsetDateTime 的 RFC3339
     // 格式化要拉 `time` crate，没必要——直接置 None。

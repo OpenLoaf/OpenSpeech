@@ -29,8 +29,7 @@ OpenSpeech 是一款跨平台的桌面端語音輸入工具：在任何應用、
 ## 截圖
 
 <p align="center">
-  <img src="images/chinese.png" alt="OpenSpeech 中文介面" width="48%" />
-  <img src="images/english.png" alt="OpenSpeech English UI" width="48%" />
+  <img src="images/chinese.png" alt="OpenSpeech 中文介面" />
 </p>
 
 ## 功能

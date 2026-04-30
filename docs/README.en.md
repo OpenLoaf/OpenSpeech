@@ -29,8 +29,7 @@ OpenSpeech is a cross-platform desktop voice typing tool. Press a hotkey in any 
 ## Screenshots
 
 <p align="center">
-  <img src="images/chinese.png" alt="OpenSpeech Chinese UI" width="48%" />
-  <img src="images/english.png" alt="OpenSpeech English UI" width="48%" />
+  <img src="images/english.png" alt="OpenSpeech English UI" />
 </p>
 
 ## Features
