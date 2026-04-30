@@ -8,9 +8,15 @@ use tauri_plugin_updater::UpdaterExt;
 const CHANNEL_FILE: &str = "update-channel";
 const APP_IDENTIFIER: &str = "com.openspeech.app";
 
-const STABLE_ENDPOINT: &str =
+// COS 国内分发（主）+ GitHub 兜底。Tauri updater 按数组顺序逐个尝试，第一个 200 命中即用，
+// 所以 COS 全挂时会回退到 GitHub Release，用户至少还能升级。
+const STABLE_COS: &str =
+    "https://openspeech-1329813561.cos.accelerate.myqcloud.com/latest.json";
+const STABLE_GITHUB: &str =
     "https://github.com/OpenLoaf/OpenSpeech/releases/latest/download/latest.json";
-const BETA_ENDPOINT: &str =
+const BETA_COS: &str =
+    "https://openspeech-1329813561.cos.accelerate.myqcloud.com/latest-beta.json";
+const BETA_GITHUB: &str =
     "https://github.com/OpenLoaf/OpenSpeech/releases/download/channel-beta/latest-beta.json";
 
 // plugin-updater 注册时不支持动态 endpoints，conf.json 又是 build-time 写死，
@@ -63,8 +69,8 @@ fn write_channel(channel: &str) -> std::io::Result<()> {
 
 fn endpoints_for(channel: &str) -> Vec<&'static str> {
     match channel {
-        "beta" => vec![BETA_ENDPOINT],
-        _ => vec![STABLE_ENDPOINT],
+        "beta" => vec![BETA_COS, BETA_GITHUB],
+        _ => vec![STABLE_COS, STABLE_GITHUB],
     }
 }
 

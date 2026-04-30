@@ -362,6 +362,26 @@ jobs:
           echo "--- latest.json ---"
           cat ../latest.json
 
+      # COS/CDN 版本的 latest.json：内容同 latest.json，但每个 platform.url 替换成 COS 域名 +
+      # 按版本号归档的路径（cos://bucket/v<version>/<filename>）。
+      # 双轨设计：updater endpoints 数组里 COS 在前、GitHub 在后；任一可用即可升级。
+      # GitHub Release 上仍然上传"GitHub url 版"的 latest.json（这里不动），COS 桶上传
+      # "COS url 版"。客户端命中哪个 endpoint，url 自洽地走对应源。
+      - name: Generate latest.json (COS variant)
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          jq --arg cdn "$CDN_HOST" --arg ver "$version" \
+            '.platforms |= with_entries(.value.url = ($cdn + "/v" + $ver + "/" + (.value.url | split("/") | last)))' \
+            latest.json > latest.cos.json
+          cp latest.cos.json latest-beta.cos.json
+          echo "--- latest.cos.json ---"
+          cat latest.cos.json
+
       # Release 正文 = changelog 原文，不再追加下载表 / 自动更新说明等内容。
       # changelog SSoT = `docs/changelogs/{version}/zh.md`（缺失则回退 en.md，再缺回退占位文）。
       - name: Build release notes
@@ -443,3 +463,51 @@ jobs:
           gh release upload channel-beta latest-beta.json --repo "$REPO" --clobber
           gh release edit channel-beta --repo "$REPO" \
             --notes "Latest beta-channel pointer · upstream tag: ${TAG} · updated $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      # 同步发布产物到腾讯云 COS（国内分发）：
+      #   - cos://bucket/v<version>/OpenSpeech-...   按版本号归档（永不重复，长缓存安全）
+      #   - cos://bucket/latest.json                  stable 滚动指针（强制 no-cache，每次回源）
+      #   - cos://bucket/latest-beta.json             beta 滚动指针
+      # 失败不阻塞 GitHub Release（已经在前面 publish 了），只是丢失这次的 COS 镜像。
+      - name: Install coscli
+        run: |
+          curl -fsSL "https://github.com/tencentyun/coscli/releases/download/v1.0.7/coscli-linux-amd64" -o /tmp/coscli
+          chmod +x /tmp/coscli
+          sudo mv /tmp/coscli /usr/local/bin/coscli
+          coscli --version
+
+      - name: Configure coscli
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          TENCENT_COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
+          TENCENT_COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
+        run: |
+          cat > ~/.cos.yaml <<EOF
+          cos:
+            base:
+              secretid: ${TENCENT_SECRET_ID}
+              secretkey: ${TENCENT_SECRET_KEY}
+              sessiontoken: ""
+              protocol: https
+            buckets:
+              - name: ${TENCENT_COS_BUCKET}
+                alias: openspeech
+                region: ${TENCENT_COS_REGION}
+          EOF
+
+      - name: Upload artifacts to COS
+        env:
+          TAG: ${{ github.ref_name }}
+          IS_BETA: ${{ steps.channel.outputs.is_beta }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          coscli sync staging/ cos://openspeech/v${version}/ --recursive
+          coscli cp latest.cos.json cos://openspeech/latest-beta.json \
+            --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
+          if [[ "$IS_BETA" != "true" ]]; then
+            coscli cp latest.cos.json cos://openspeech/latest.json \
+              --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
+          fi
+          echo "Uploaded to COS: cos://openspeech/v${version}/"
