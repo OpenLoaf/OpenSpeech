@@ -25,8 +25,8 @@ class WaveStore {
     this.attached = true;
     void listen<number>("openspeech://audio-level", (e) => {
       const v = Math.max(0, Math.min(1, Number(e.payload) || 0));
-      this.buffer.copyWithin(0, 1);
-      this.buffer[BAR_COUNT - 1] = v;
+      this.buffer.copyWithin(1, 0, BAR_COUNT - 1);
+      this.buffer[0] = v;
       this.snapshotCache = null;
       this.listeners.forEach((l) => l());
     });

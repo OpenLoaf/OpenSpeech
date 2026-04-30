@@ -1222,7 +1222,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             );
           }
           set((s) => ({
-            audioLevels: [...s.audioLevels.slice(1), v],
+            audioLevels: [v, ...s.audioLevels.slice(0, -1)],
           }));
         },
       );

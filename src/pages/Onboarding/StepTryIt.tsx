@@ -14,7 +14,7 @@ import { useRecordingStore, type RecordingState } from "@/stores/recording";
 
 function fakeWaveform(seed: number, len = 60): number[] {
   return Array.from({ length: len }, (_, i) => {
-    const t = (i + seed) / 7;
+    const t = (i - seed) / 7;
     const v = (Math.sin(t) + Math.sin(t * 1.7) + Math.sin(t * 0.4)) / 3;
     return Math.max(0, Math.min(1, 0.45 + v * 0.45));
   });
