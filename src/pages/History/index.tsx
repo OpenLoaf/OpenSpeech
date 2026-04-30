@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   Pause,
   Play,
+  RefreshCw,
   RotateCcw,
   Trash2,
   X,
@@ -567,9 +568,25 @@ export default function HistoryPage() {
   const { t } = useTranslation();
   const items = useHistoryStore((s) => s.items);
   const clearAllInDb = useHistoryStore((s) => s.clearAll);
+  const reload = useHistoryStore((s) => s.reload);
   const [filter, setFilter] = useState<FilterValue>("all");
   const [query, setQuery] = useState("");
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    const minSpin = new Promise((r) => setTimeout(r, 500));
+    try {
+      await Promise.all([reload(), minSpin]);
+    } catch (e) {
+      console.error("[history] refresh failed:", e);
+      toast.error(t("pages:history.toast.refresh_failed"));
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     const base = filter === "all" ? items : items.filter((it) => it.type === filter);
@@ -644,11 +661,26 @@ export default function HistoryPage() {
                 {t("pages:history.subtitle")}
               </p>
             </div>
-            <MoreMenu
-              onClear={() => setConfirmClearOpen(true)}
-              onExport={exportJson}
-              disabled={items.length === 0}
-            />
+            <div className="flex items-center gap-2" data-tauri-drag-region="false">
+              <button
+                type="button"
+                onClick={() => void handleRefresh()}
+                disabled={refreshing}
+                className="inline-flex size-9 items-center justify-center border border-te-gray/40 text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-te-gray/40 disabled:hover:text-te-light-gray"
+                title={t("pages:history.refresh")}
+                aria-label={t("pages:history.refresh")}
+              >
+                <RefreshCw
+                  className={`size-4 ${refreshing ? "animate-spin" : ""}`}
+                  strokeWidth={2}
+                />
+              </button>
+              <MoreMenu
+                onClear={() => setConfirmClearOpen(true)}
+                onExport={exportJson}
+                disabled={items.length === 0}
+              />
+            </div>
           </motion.div>
         </div>
       </div>

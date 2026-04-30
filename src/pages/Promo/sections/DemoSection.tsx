@@ -1,343 +1,569 @@
-import { useRef } from "react";
-import {
-  motion,
-  useScroll,
-  useTransform,
-  type MotionValue,
-} from "framer-motion";
-import SectionLabel from "../components/SectionLabel";
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { Check, Command, Diamond, X } from "lucide-react";
+import { detectPlatform, type Platform } from "@/lib/platform";
 
-const TRANSCRIPT = "帮我把这段周报改得更简洁一点";
+type SegKind = "keep" | "filler" | "correction";
+type Segment = { text: string; kind: SegKind };
+
+const RAW: Segment[] = [
+  { text: "嗯，", kind: "filler" },
+  { text: "我们这周要做三件事", kind: "keep" },
+  { text: "啊", kind: "filler" },
+  { text: "。第一个，", kind: "keep" },
+  { text: "呃，", kind: "filler" },
+  { text: "把", kind: "keep" },
+  { text: "那个", kind: "filler" },
+  { text: "登录页面…不对不对，是", kind: "correction" },
+  { text: "注册页面修一下", kind: "keep" },
+  { text: "。然后", kind: "keep" },
+  { text: "呢", kind: "filler" },
+  { text: "，把数据库迁移搞完", kind: "keep" },
+  { text: "。最后，把测试覆盖率提到 80% 以上。", kind: "keep" },
+];
+
+const RAW_TEXT = RAW.map((s) => s.text).join("");
+
+const POLISHED_TITLE = "本周任务";
+const POLISHED_LIST = [
+  "修改注册页面",
+  "完成数据库迁移",
+  "测试覆盖率提升至 80% 以上",
+];
+
+// 对齐 src/pages/Overlay 的真实 RecordingState：preparing / recording / transcribing / injecting / idle
+type Stage =
+  | "idle"
+  | "recording"
+  | "transcribing"
+  | "polishing"
+  | "injecting";
+
+const STAGE_DURATION: Record<Stage, number> = {
+  idle: 1000,
+  recording: 1500,
+  transcribing: 2400,
+  polishing: 1500,
+  injecting: 2200,
+};
+
+const NEXT_STAGE: Record<Stage, Stage> = {
+  idle: "recording",
+  recording: "transcribing",
+  transcribing: "polishing",
+  polishing: "injecting",
+  injecting: "idle",
+};
+
+// 对齐 LiveDictationPanel.statusCopy 的工业 tag 风格
+const STAGE_TAG: Record<Stage, string> = {
+  idle: "// IDLE",
+  recording: "// LISTENING",
+  transcribing: "// TRANSCRIBING",
+  polishing: "// POLISHING",
+  injecting: "// INJECTING",
+};
+
+const CAPTIONS: Record<Stage, string> = {
+  idle: "// IDLE · 按下快捷键唤起胶囊",
+  recording: "// LISTENING · 实时录音 + 波形",
+  transcribing: "// TRANSCRIBING · 上传到你自己的 ASR",
+  polishing: "// POLISHING · AI 清洗口误并重排",
+  injecting: "// INJECTING · 写入光标位置",
+};
 
 export default function DemoSection() {
-  const ref = useRef<HTMLDivElement>(null);
-  const { scrollYProgress } = useScroll({
-    target: ref,
-    offset: ["start start", "end end"],
-  });
+  const [stage, setStage] = useState<Stage>("idle");
+  const [active, setActive] = useState(false);
+  const reduce = useReducedMotion();
 
-  // 全幕进度切成 4 段：键盘按下 / 录音 / 转写 / 注入
-  const keyOpacity = useTransform(scrollYProgress, [0, 0.05, 0.2, 0.3], [0, 1, 1, 0.3]);
-  const keyScale = useTransform(scrollYProgress, [0, 0.05, 0.2], [0.92, 1.05, 1]);
+  useEffect(() => {
+    if (!active || reduce) return;
+    const t = setTimeout(() => setStage(NEXT_STAGE[stage]), STAGE_DURATION[stage]);
+    return () => clearTimeout(t);
+  }, [stage, active, reduce]);
 
-  const barY = useTransform(scrollYProgress, [0.18, 0.28], [120, 0]);
-  const barOpacity = useTransform(scrollYProgress, [0.18, 0.28], [0, 1]);
-  const barFadeOut = useTransform(scrollYProgress, [0.85, 0.95], [1, 0]);
-
-  // 录音/转写/注入的状态过渡：scrollYProgress 0.28→0.55 录音；0.55→0.75 转写；0.75→0.9 注入
-  const recordingOpacity = useTransform(scrollYProgress, [0.28, 0.32, 0.55, 0.6], [0, 1, 1, 0]);
-  const transcribingOpacity = useTransform(scrollYProgress, [0.55, 0.6, 0.75, 0.8], [0, 1, 1, 0]);
-  const injectedOpacity = useTransform(scrollYProgress, [0.75, 0.8, 0.95], [0, 1, 1]);
-
-  // 文字流入：从 0.7 开始逐字
-  const textProgress = useTransform(scrollYProgress, [0.7, 0.92], [0, TRANSCRIPT.length]);
+  useEffect(() => {
+    if (reduce) setStage("injecting");
+  }, [reduce]);
 
   return (
-    <section
-      ref={ref}
-      data-promo-section
-      style={{ position: "relative" }}
-      className="h-[250vh] w-full bg-te-bg"
-    >
-      <div className="sticky top-0 flex h-screen w-full flex-col items-center justify-center gap-6 overflow-hidden px-6 py-16">
-        <SectionLabel index="02" title="CORE DEMO" />
-
-        <div className="relative w-full max-w-3xl">
-          <MockBrowser
-            transcript={TRANSCRIPT}
-            textProgress={textProgress}
-            cursorOpacity={recordingOpacity}
-          />
-          <KeyboardHint opacity={keyOpacity} scale={keyScale} />
-        </div>
-
-        <motion.div style={{ y: barY, opacity: barOpacity }}>
-          <motion.div style={{ opacity: barFadeOut }}>
-            <RecorderBar
-              progress={scrollYProgress}
-              recording={recordingOpacity}
-              transcribing={transcribingOpacity}
-              injected={injectedOpacity}
-            />
-          </motion.div>
+    <section id="demo" className="bg-te-bg px-[4vw] py-[clamp(5rem,11vw,9rem)]">
+      <div className="mx-auto max-w-6xl">
+        <motion.div
+          className="mb-14 md:mb-20"
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.6 }}
+        >
+          <div className="mb-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray/50">
+            [02] CORE DEMO
+          </div>
+          <h2 className="font-mono text-3xl font-bold tracking-tighter text-te-fg md:text-4xl">
+            说一段大白话，落到光标里就是结构化文档。
+          </h2>
+          <p className="mt-4 max-w-2xl text-sm leading-relaxed text-te-light-gray/60 md:text-base">
+            录音 → 转写 → AI 清洗。口误、语气词、自我纠错全部抹平，再按你想要的格式重排。
+          </p>
         </motion.div>
 
-        <Caption progress={scrollYProgress} />
+        <motion.div
+          className="relative flex flex-col items-center gap-10"
+          initial={{ opacity: 0, y: 24 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: "-15% 0px" }}
+          transition={{ duration: 0.6 }}
+          onViewportEnter={() => setActive(true)}
+          onViewportLeave={() => setActive(false)}
+        >
+          <div className="relative w-full max-w-4xl">
+            <ScratchPanel stage={stage} />
+            <KeyboardHint visible={stage === "recording"} />
+          </div>
+
+          <RecorderBar stage={stage} />
+          <Caption stage={stage} />
+        </motion.div>
       </div>
     </section>
   );
 }
 
-function MockBrowser({
-  transcript,
-  textProgress,
-  cursorOpacity,
-}: {
-  transcript: string;
-  textProgress: MotionValue<number>;
-  cursorOpacity: MotionValue<number>;
-}) {
-  return (
-    <div className="w-full max-w-3xl border border-te-gray bg-te-surface shadow-2xl">
-      <div className="flex items-center gap-2 border-b border-te-gray bg-te-bg px-3 py-2">
-        <span className="h-2.5 w-2.5 rounded-full bg-te-light-gray/40" />
-        <span className="h-2.5 w-2.5 rounded-full bg-te-light-gray/40" />
-        <span className="h-2.5 w-2.5 rounded-full bg-te-light-gray/40" />
-        <span className="ml-3 truncate text-[10px] uppercase tracking-[0.3em] text-te-light-gray">
-          chat · 新建消息
-        </span>
-      </div>
+function ScratchPanel({ stage }: { stage: Stage }) {
+  const charCount =
+    stage === "injecting"
+      ? POLISHED_LIST.join("").length + POLISHED_TITLE.length
+      : stage === "polishing"
+        ? RAW_TEXT.length
+        : 0;
+  const isLive = stage === "recording" || stage === "transcribing";
 
-      <div className="flex flex-col gap-3 p-5">
-        <div className="flex items-start gap-3">
-          <div className="h-6 w-6 shrink-0 rounded-full bg-te-light-gray/20" />
-          <div className="rounded bg-te-surface-hover px-3 py-2 text-sm text-te-light-gray">
-            上周的进度怎么样？看下你的周报。
+  return (
+    <div className="border border-te-gray/30 p-px">
+      <div className="flex flex-col bg-te-surface">
+        <div className="flex items-center justify-between gap-3 border-b border-te-gray/30 px-5 py-3">
+          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.25em] text-te-light-gray/70">
+            <span className="text-te-accent">▍</span>
+            <span>~/scratch.md</span>
           </div>
+          <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-te-accent">
+            {STAGE_TAG[stage]}
+          </span>
         </div>
 
-        <div className="ml-9 mt-1 border-l-2 border-te-accent py-1 pl-4">
-          <div className="text-[10px] uppercase tracking-[0.3em] text-te-light-gray">
-            input · type or speak
-          </div>
-          <TypewriterText
-            text={transcript}
-            progress={textProgress}
-            cursorOpacity={cursorOpacity}
-          />
+        <div className="px-8 py-9 md:px-12 md:py-12">
+          <ChatBody stage={stage} />
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-te-gray/30 px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray/40">
+          <span>input · 按住快捷键说话</span>
+          <span className="flex items-center gap-2">
+            {isLive ? (
+              <>
+                <motion.span
+                  className="size-1.5 rounded-full bg-te-accent"
+                  animate={{ opacity: [1, 0.3, 1] }}
+                  transition={{ duration: 1.4, repeat: Infinity }}
+                />
+                live
+              </>
+            ) : (
+              <span>{charCount} 字</span>
+            )}
+          </span>
         </div>
       </div>
     </div>
   );
 }
 
-function TypewriterText({
-  text,
-  progress,
-  cursorOpacity,
-}: {
-  text: string;
-  progress: MotionValue<number>;
-  cursorOpacity: MotionValue<number>;
-}) {
+function ChatBody({ stage }: { stage: Stage }) {
+  const showList = stage === "injecting";
+
   return (
-    <div className="mt-2 flex flex-wrap items-baseline text-xl font-medium text-te-fg">
-      {text.split("").map((char, i) => (
-        <TypewriterChar key={i} char={char} index={i} progress={progress} />
-      ))}
+    <div className="relative min-h-[9rem]">
+      <AnimatePresence mode="wait" initial={false}>
+        {!showList && (
+          <motion.div
+            key="raw"
+            initial={{ opacity: 1 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.35, ease: "easeOut" }}
+          >
+            <RawTranscript stage={stage} />
+          </motion.div>
+        )}
+        {showList && (
+          <motion.div
+            key="list"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }}
+          >
+            <PolishedList />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function RawTranscript({ stage }: { stage: Stage }) {
+  const [count, setCount] = useState(0);
+  const reduce = useReducedMotion();
+
+  useEffect(() => {
+    if (stage === "transcribing") {
+      setCount(0);
+      const total = RAW_TEXT.length;
+      const step = Math.max(28, Math.floor(STAGE_DURATION.transcribing / total));
+      const id = setInterval(() => {
+        setCount((c) => {
+          if (c >= total) {
+            clearInterval(id);
+            return c;
+          }
+          return c + 1;
+        });
+      }, step);
+      return () => clearInterval(id);
+    }
+    if (stage === "polishing") setCount(RAW_TEXT.length);
+    if (stage === "idle" || stage === "recording") setCount(0);
+  }, [stage]);
+
+  useEffect(() => {
+    if (reduce) setCount(RAW_TEXT.length);
+  }, [reduce]);
+
+  const showCursor = stage === "recording" || stage === "transcribing";
+
+  if (stage === "idle" || stage === "recording") {
+    return (
+      <div className="flex min-h-[1.6em] items-baseline">
+        <span className="font-mono text-sm text-te-light-gray/40">
+          {stage === "recording" ? "// 正在听..." : "// 等待按键"}
+        </span>
+        <motion.span
+          className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-te-accent"
+          animate={
+            stage === "recording" ? { opacity: [1, 0.2, 1] } : { opacity: 0.3 }
+          }
+          transition={{
+            repeat: stage === "recording" ? Infinity : 0,
+            duration: 1,
+            ease: "easeInOut",
+          }}
+        />
+      </div>
+    );
+  }
+
+  let consumed = 0;
+  return (
+    <div className="text-lg leading-relaxed text-te-fg md:text-xl">
+      {RAW.map((seg, i) => {
+        const start = consumed;
+        consumed = start + seg.text.length;
+        const visible = Math.max(0, Math.min(seg.text.length, count - start));
+        if (visible === 0) return null;
+        const slice = seg.text.slice(0, visible);
+        const isMarked = stage === "polishing" && seg.kind !== "keep";
+        return (
+          <motion.span
+            key={i}
+            className="inline align-baseline transition-colors"
+            animate={{
+              opacity: isMarked ? 0.45 : 1,
+              color: isMarked
+                ? seg.kind === "correction"
+                  ? "var(--te-accent)"
+                  : "var(--te-light-gray)"
+                : "var(--te-fg)",
+            }}
+            transition={{ duration: 0.35 }}
+            style={isMarked ? { textDecoration: "line-through" } : undefined}
+          >
+            {slice}
+          </motion.span>
+        );
+      })}
+      {showCursor && (
+        <motion.span
+          className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-te-accent"
+          animate={{ opacity: [1, 0.2, 1] }}
+          transition={{ repeat: Infinity, duration: 1, ease: "easeInOut" }}
+        />
+      )}
+    </div>
+  );
+}
+
+function PolishedList() {
+  return (
+    <div className="flex flex-col gap-3 text-lg leading-relaxed text-te-fg md:text-xl">
+      <div className="font-mono text-[12px] uppercase tracking-[0.25em] text-te-accent">
+        {POLISHED_TITLE} · 共 {POLISHED_LIST.length} 项
+      </div>
+      <ol className="flex flex-col gap-2">
+        {POLISHED_LIST.map((item, i) => (
+          <motion.li
+            key={item}
+            className="flex items-baseline gap-3"
+            initial={{ opacity: 0, x: -6 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.35, delay: 0.15 + i * 0.08 }}
+          >
+            <span className="font-mono text-base text-te-accent md:text-lg">
+              {i + 1}.
+            </span>
+            <span>{item}</span>
+          </motion.li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+// 平台对应默认快捷键（与 src/lib/hotkey.ts getDefaultBindings 完全一致）
+function defaultKeys(platform: Platform): { icon: ReactNode; label: string }[] {
+  if (platform === "macos") {
+    return [
+      { icon: <span aria-hidden>fn</span>, label: "Fn" },
+      { icon: <span aria-hidden>⌃</span>, label: "Control" },
+    ];
+  }
+  if (platform === "windows") {
+    return [
+      { icon: <span aria-hidden>⌃</span>, label: "Ctrl" },
+      { icon: <WinIcon />, label: "Win" },
+    ];
+  }
+  return [
+    { icon: <span aria-hidden>⌃</span>, label: "Ctrl" },
+    { icon: <Diamond size={11} strokeWidth={2.5} />, label: "Super" },
+  ];
+}
+
+// 复刻 HotkeyPreview.WinIcon
+function WinIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M1 3.5l5.5-.75v5.5H1V3.5z" />
+      <path d="M7.5 2.5L15 1v7H7.5V2.5z" />
+      <path d="M1 9h5.5v5.5L1 13.5V9z" />
+      <path d="M7.5 9H15v7l-7.5-1.5V9z" />
+    </svg>
+  );
+}
+
+// 复刻 HotkeyPreview.Kbd 的小尺寸版本，给 demo 用
+function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-sm border border-te-accent bg-te-bg px-2.5 py-1 font-mono text-xs text-te-fg shadow-[inset_0_-2px_0_0_var(--te-accent)]">
+      {children}
+    </span>
+  );
+}
+
+function KeyboardHint({ visible }: { visible: boolean }) {
+  const platform = useMemo(() => detectPlatform(), []);
+  const keys = useMemo(() => defaultKeys(platform), [platform]);
+
+  return (
+    <AnimatePresence>
+      {visible && (
+        <motion.div
+          data-promo-hide-mobile
+          className="absolute -top-12 right-0 flex items-center gap-2"
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.25 }}
+        >
+          <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
+            按住
+          </span>
+          {keys.map((k, i) => (
+            <Fragment key={k.label}>
+              {i > 0 && (
+                <span className="font-mono text-base text-te-light-gray/60">
+                  +
+                </span>
+              )}
+              <Kbd>
+                <span className="opacity-70">
+                  {k.label === "Command" ? <Command size={12} strokeWidth={2.5} /> : k.icon}
+                </span>
+                {k.label}
+              </Kbd>
+            </Fragment>
+          ))}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function RecorderBar({ stage }: { stage: Stage }) {
+  const canConfirm = stage === "recording";
+  const canCancel = stage === "recording";
+
+  return (
+    <div className="flex h-[52px] w-[340px] max-w-full items-center gap-2 border border-te-gray bg-te-bg px-2">
+      <button
+        type="button"
+        disabled={!canCancel}
+        aria-label="cancel"
+        className={
+          canCancel
+            ? "flex size-9 shrink-0 items-center justify-center border border-te-gray text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+            : "flex size-9 shrink-0 items-center justify-center border border-te-gray/40 text-te-light-gray/40"
+        }
+      >
+        <X className="size-4" />
+      </button>
+
+      <div className="flex min-w-0 flex-1 items-center justify-center">
+        <AnimatePresence mode="wait" initial={false}>
+          {stage === "recording" && (
+            <motion.div
+              key="wave"
+              className="flex h-full w-full items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
+            >
+              <CapsuleWaveform />
+            </motion.div>
+          )}
+
+          {stage === "transcribing" && (
+            <CapsuleStatus key="transcribing" label="// TRANSCRIBING" />
+          )}
+
+          {stage === "polishing" && (
+            <CapsuleStatus key="polishing" label="// POLISHING" />
+          )}
+
+          {stage === "injecting" && (
+            <CapsuleStatus key="injecting" label="// INJECTING" />
+          )}
+
+          {stage === "idle" && (
+            <motion.div
+              key="idle"
+              className="flex h-full w-full items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
+            >
+              <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-te-light-gray/50">
+                // IDLE
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      <button
+        type="button"
+        disabled={!canConfirm}
+        aria-label="confirm"
+        className={
+          canConfirm
+            ? "flex size-9 shrink-0 items-center justify-center border border-te-accent text-te-accent transition-colors hover:bg-te-accent hover:text-te-accent-fg"
+            : "flex size-9 shrink-0 items-center justify-center border border-te-gray/40 text-te-light-gray/40"
+        }
+      >
+        <Check className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+function CapsuleStatus({ label }: { label: string }) {
+  return (
+    <motion.div
+      className="flex h-full w-full flex-col items-center justify-center gap-1.5 px-2"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.12 }}
+    >
+      <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-te-fg">
+        {label}
+      </span>
+      <SlidingProgress />
+    </motion.div>
+  );
+}
+
+function CapsuleWaveform() {
+  const bars = 36;
+  return (
+    <div className="flex h-9 w-full items-center gap-[2px]">
+      {Array.from({ length: bars }).map((_, i) => {
+        const seed = Math.abs(Math.sin(i * 0.7)) * 0.7 + 0.3;
+        return (
+          <motion.span
+            key={i}
+            className="block flex-1 rounded-[1px] bg-te-accent"
+            style={{ height: "100%", originY: 0.5 }}
+            animate={{ scaleY: [seed * 0.3, seed * 1, seed * 0.5, seed * 0.85, seed * 0.4] }}
+            transition={{
+              repeat: Infinity,
+              duration: 0.7 + (i % 5) * 0.1,
+              ease: "easeInOut",
+              delay: (i % 7) * 0.04,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function SlidingProgress() {
+  return (
+    <div className="relative h-px w-24 overflow-hidden bg-te-gray/40">
       <motion.span
-        className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[0.15em] bg-te-accent"
-        style={{ opacity: cursorOpacity }}
+        className="absolute inset-y-0 bg-te-accent"
+        style={{ width: "33%" }}
+        initial={{ left: "-33%" }}
+        animate={{ left: "100%" }}
+        transition={{ repeat: Infinity, duration: 1.1, ease: "linear" }}
       />
     </div>
   );
 }
 
-function TypewriterChar({
-  char,
-  index,
-  progress,
-}: {
-  char: string;
-  index: number;
-  progress: MotionValue<number>;
-}) {
-  const opacity = useTransform(progress, [index, index + 0.6], [0, 1]);
-  const y = useTransform(progress, [index, index + 0.6], [6, 0]);
-  return <motion.span style={{ opacity, y }}>{char}</motion.span>;
-}
-
-function KeyboardHint({
-  opacity,
-  scale,
-}: {
-  opacity: MotionValue<number>;
-  scale: MotionValue<number>;
-}) {
-  const keys = ["Ctrl", "Shift", "Space"];
+function Caption({ stage }: { stage: Stage }) {
   return (
-    <motion.div
-      data-promo-hide-mobile
-      className="absolute -top-12 right-0 flex items-center gap-2"
-      style={{ opacity, scale }}
-    >
-      <span className="text-[10px] uppercase tracking-[0.3em] text-te-light-gray">
-        press
-      </span>
-      {keys.map((k) => (
-        <span
-          key={k}
-          className="rounded border border-te-accent bg-te-bg px-2 py-1 font-mono text-xs text-te-fg shadow-[0_0_0_3px_rgba(255,204,0,0.2)]"
+    <div className="relative h-4 w-full text-center">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={stage}
+          className="absolute inset-x-0 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.4em] text-te-light-gray md:text-[11px]"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.3 }}
         >
-          {k}
-        </span>
-      ))}
-    </motion.div>
-  );
-}
-
-function RecorderBar({
-  progress,
-  recording,
-  transcribing,
-  injected,
-}: {
-  progress: MotionValue<number>;
-  recording: MotionValue<number>;
-  transcribing: MotionValue<number>;
-  injected: MotionValue<number>;
-}) {
-  const timer = useTransform(progress, [0.3, 0.55], [0, 6.4]);
-
-  return (
-    <div className="relative flex h-14 w-[420px] items-center gap-3 border border-te-gray bg-te-bg px-4 shadow-2xl">
-      <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-te-accent">
-        DICTATE
-      </span>
-      <span className="h-4 w-px bg-te-gray/60" />
-
-      {/* Recording state */}
-      <motion.div className="flex flex-1 items-center gap-3" style={{ opacity: recording }}>
-        <BreathingDot />
-        <Waveform progress={progress} />
-        <Timer value={timer} />
-      </motion.div>
-
-      {/* Transcribing state */}
-      <motion.div
-        className="absolute inset-0 flex items-center gap-3 px-4"
-        style={{ opacity: transcribing }}
-      >
-        <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-te-accent">
-          DICTATE
-        </span>
-        <span className="h-4 w-px bg-te-gray/60" />
-        <Spinner />
-        <span className="text-xs text-te-light-gray">
-          Transcribing via realtime-asr…
-        </span>
-      </motion.div>
-
-      {/* Injected state */}
-      <motion.div
-        className="absolute inset-0 flex items-center justify-center gap-2"
-        style={{ opacity: injected }}
-      >
-        <span className="text-te-accent">✓</span>
-        <span className="text-xs uppercase tracking-[0.3em] text-te-fg">
-          inserted
-        </span>
-      </motion.div>
+          {CAPTIONS[stage]}
+        </motion.div>
+      </AnimatePresence>
     </div>
-  );
-}
-
-function BreathingDot() {
-  return (
-    <motion.span
-      className="block h-2.5 w-2.5 rounded-full bg-red-500"
-      animate={{ opacity: [1, 0.4, 1], scale: [1, 0.85, 1] }}
-      transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
-    />
-  );
-}
-
-function Waveform({ progress }: { progress: MotionValue<number> }) {
-  const bars = 28;
-  const amplitude = useTransform(progress, [0.28, 0.55], [0.3, 1]);
-  return (
-    <div className="flex flex-1 items-center gap-[2px]">
-      {Array.from({ length: bars }).map((_, i) => (
-        <WaveBar key={i} index={i} amplitude={amplitude} />
-      ))}
-    </div>
-  );
-}
-
-function WaveBar({
-  index,
-  amplitude,
-}: {
-  index: number;
-  amplitude: MotionValue<number>;
-}) {
-  const baseHeight = 6 + Math.abs(Math.sin(index * 0.6)) * 18;
-  const height = useTransform(amplitude, (a) => `${baseHeight * a + 3}px`);
-  return (
-    <motion.span
-      className="block w-[2px] bg-te-fg"
-      style={{ height }}
-      animate={{
-        scaleY: [0.6, 1.1, 0.7, 1, 0.5],
-      }}
-      transition={{
-        repeat: Infinity,
-        duration: 0.8 + (index % 5) * 0.1,
-        ease: "easeInOut",
-        delay: (index % 7) * 0.05,
-      }}
-    />
-  );
-}
-
-function Timer({ value }: { value: MotionValue<number> }) {
-  const display = useTransform(value, (v) => {
-    const s = Math.max(0, v);
-    const sec = Math.floor(s);
-    const ms = Math.floor((s - sec) * 10);
-    return `0:0${sec}.${ms}`;
-  });
-  return (
-    <motion.span className="font-mono text-xs text-te-fg">{display}</motion.span>
-  );
-}
-
-function Spinner() {
-  return (
-    <motion.span
-      className="block h-3 w-3 rounded-full border-2 border-te-accent border-t-transparent"
-      animate={{ rotate: 360 }}
-      transition={{ repeat: Infinity, duration: 0.9, ease: "linear" }}
-    />
-  );
-}
-
-function Caption({ progress }: { progress: MotionValue<number> }) {
-  const lines: { text: string; range: [number, number] }[] = [
-    { text: "PRESS · 按下快捷键", range: [0.05, 0.27] },
-    { text: "SPEAK · 实时录音 + 波形", range: [0.3, 0.54] },
-    { text: "TRANSCRIBE · 大模型转写", range: [0.57, 0.74] },
-    { text: "RELEASE · 写入光标位置", range: [0.78, 0.95] },
-  ];
-  return (
-    <div className="pointer-events-none absolute bottom-8 left-1/2 h-4 -translate-x-1/2 text-[10px] uppercase tracking-[0.4em] text-te-light-gray">
-      {lines.map((l) => (
-        <CaptionLine key={l.text} text={l.text} range={l.range} progress={progress} />
-      ))}
-    </div>
-  );
-}
-
-function CaptionLine({
-  text,
-  range,
-  progress,
-}: {
-  text: string;
-  range: [number, number];
-  progress: MotionValue<number>;
-}) {
-  const [a, b] = range;
-  const fadeIn = (b - a) * 0.3;
-  const fadeOut = (b - a) * 0.3;
-  const opacity = useTransform(
-    progress,
-    [a, a + fadeIn, b - fadeOut, b],
-    [0, 1, 1, 0],
-  );
-  return (
-    <motion.div className="absolute inset-x-0 whitespace-nowrap text-center" style={{ opacity }}>
-      {text}
-    </motion.div>
   );
 }

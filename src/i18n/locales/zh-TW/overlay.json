@@ -70,6 +70,11 @@
       "title": "轉寫異常",
       "unknown": "未知錯誤"
     },
+    "worker_dead": {
+      "title": "語音通道異常中斷",
+      "description": "已停止本次錄音，請重新開始",
+      "error_message": "語音通道異常中斷，已停止錄音"
+    },
     "insufficient_credits": {
       "title": "餘額不足",
       "description": "已取消本次轉寫，請前往帳戶頁儲值",

@@ -70,6 +70,11 @@
       "title": "Transcription error",
       "unknown": "Unknown error"
     },
+    "worker_dead": {
+      "title": "Voice channel disconnected",
+      "description": "This recording has been stopped — please try again",
+      "error_message": "Voice channel disconnected; recording stopped"
+    },
     "insufficient_credits": {
       "title": "Insufficient credits",
       "description": "This transcription was cancelled — top up in your account",

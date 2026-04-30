@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import i18next from "i18next";
 import { useTranslation } from "react-i18next";
-import { BookOpen, History, Home, Settings, UserCircle } from "lucide-react";
+import {
+  BookOpen,
+  Coins,
+  History,
+  Home,
+  Settings,
+  UserCircle,
+} from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -489,11 +496,16 @@ export default function Layout() {
             </span>
             {profile.membershipLevel === "pro" ||
             profile.membershipLevel === "premium" ? (
-              <span className="font-mono text-xs font-bold uppercase tracking-[0.25em] text-te-accent">
+              <span className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-[0.25em] text-te-accent">
+                <Coins className="size-2.5 shrink-0" strokeWidth={2} />
                 UNLIMITED
               </span>
             ) : (
-              <span className="font-mono text-base font-bold tracking-tighter text-te-fg tabular-nums">
+              <span className="flex items-center gap-1 font-mono text-xs font-bold tracking-tighter text-te-fg tabular-nums">
+                <Coins
+                  className="size-2.5 shrink-0 text-te-accent"
+                  strokeWidth={2}
+                />
                 {Math.round(profile.creditsBalance).toLocaleString("zh-CN")}
               </span>
             )}

@@ -1076,6 +1076,23 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               recordingId: null,
               liveTranscript: "",
             });
+          } else if (reason === "worker_dead") {
+            // Rust worker 因协议错误（连续 decode 失败 / 网络断）异常退出。
+            // 不能等用户松手再走 finalize —— 那条路只会拿到 segs=0 + 整段音频白录。
+            // 立即停止音频流、丢弃当前录音、切 error 让 UI 解锁。
+            console.warn("[stt] worker_dead, aborting recording", evt.payload);
+            discardRecording();
+            stopMic();
+            notifyOverlay("error", i18n.t("overlay:toast.worker_dead.title"), {
+              description: i18n.t("overlay:toast.worker_dead.description"),
+            });
+            set({
+              state: "error",
+              errorMessage: i18n.t("overlay:toast.worker_dead.error_message"),
+              audioLevels: emptyLevels(),
+              recordingId: null,
+              liveTranscript: "",
+            });
           } else if (reason === "max_duration") {
             notifyOverlay("warning", i18n.t("overlay:toast.session_timeout.title"), {
               description: i18n.t("overlay:toast.session_timeout.description"),

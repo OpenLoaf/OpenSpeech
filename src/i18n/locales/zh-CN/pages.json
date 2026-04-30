@@ -27,6 +27,7 @@
     "subtitle": "历史记录保存在本设备。",
     "search_placeholder": "搜索历史...",
     "more": "更多",
+    "refresh": "刷新",
     "export": "导出",
     "delete_all": "删除全部历史",
     "filters": {
@@ -73,7 +74,8 @@
       "retry_failed": "重试失败",
       "delete_failed": "删除失败",
       "export_success": "音频已导出",
-      "export_failed": "导出失败"
+      "export_failed": "导出失败",
+      "refresh_failed": "刷新失败"
     },
     "confirm_clear": {
       "title": "删除全部历史",

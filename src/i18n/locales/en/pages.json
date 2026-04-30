@@ -27,6 +27,7 @@
     "subtitle": "History stays on this device.",
     "search_placeholder": "Search history...",
     "more": "More",
+    "refresh": "Refresh",
     "export": "Export",
     "delete_all": "Delete all history",
     "filters": {
@@ -73,7 +74,8 @@
       "retry_failed": "Retry failed",
       "delete_failed": "Delete failed",
       "export_success": "Audio exported",
-      "export_failed": "Export failed"
+      "export_failed": "Export failed",
+      "refresh_failed": "Refresh failed"
     },
     "confirm_clear": {
       "title": "Delete all history",

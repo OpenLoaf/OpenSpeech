@@ -54,7 +54,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use openloaf_saas::SaaSError;
+use openloaf_saas::{SaaSError, SaaSResult};
 use openloaf_saas::v4_tools::{
     RealtimeAsrLlmLanguage, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmVadMode,
     RealtimeAsrSession, RealtimeEvent, SpeechRefineOlTl005Input,
@@ -87,6 +87,12 @@ const EVENT_REFINE_DELTA: &str = "openspeech://refine-delta";
 const FINALIZE_WAIT_MS: u64 = 3000;
 /// worker 每轮 next_event_timeout 的超时。太短空转多，太长 stop 响应迟。
 const EVENT_POLL_MS: u64 = 30;
+/// 容忍连续 decode error 次数：超过则认定协议崩坏退出。
+/// 服务端偶发某字段为 null（典型 60s 心跳的 credits 事件 `consumed_seconds` /
+/// `remaining_credits` 是 f64 无 Option，端上偶发 null 解码失败）属于单条坏消息，
+/// SDK 那条消息已被 ws.read 消费，下次循环读下一条即可恢复；持续解码失败才视为
+/// 真协议崩坏。
+const MAX_CONSECUTIVE_DECODE_ERRORS: u32 = 5;
 
 /// worker 主循环里消费的控制消息。音频数据、finish、停止都走这一个通道，
 /// 保证顺序与 session 独占性——worker 先排空通道再 next_event。
@@ -296,6 +302,30 @@ fn stt_start_impl<R: Runtime>(
     Ok(())
 }
 
+/// next_event_timeout 结果分类（纯函数，副作用全部上提到 run_worker，便于单测）。
+#[derive(Debug)]
+enum LoopAction {
+    /// 拿到一个事件，交给 handle_event 处理。
+    Process(RealtimeEvent),
+    /// 超时 / 通道断开，下一轮继续。
+    Idle,
+    /// 单条消息解码失败：emit asr-error 但不退出 —— SDK 已消费该坏消息，
+    /// 下次能读到下一条；连续失败由 run_worker 的计数器把关。
+    DecodeRecoverable(String),
+    /// 网络层退出：与 SDK Drop 路径一致，安静退出。
+    ExitNetwork(String),
+}
+
+fn classify_event_result(r: SaaSResult<Option<RealtimeEvent>>) -> LoopAction {
+    match r {
+        Ok(Some(ev)) => LoopAction::Process(ev),
+        Ok(None) => LoopAction::Idle,
+        Err(SaaSError::Network(msg)) => LoopAction::ExitNetwork(msg),
+        Err(SaaSError::Decode(msg)) => LoopAction::DecodeRecoverable(msg),
+        Err(e) => LoopAction::DecodeRecoverable(e.to_string()),
+    }
+}
+
 fn run_worker<R: Runtime>(
     app: AppHandle<R>,
     sess: RealtimeAsrSession,
@@ -304,9 +334,28 @@ fn run_worker<R: Runtime>(
     final_segments: Arc<Mutex<BTreeMap<i64, String>>>,
     final_count: Arc<AtomicI64>,
 ) {
-    'outer: while !stop.load(Ordering::Relaxed) {
+    // 退出原因：用于决定是否要给前端发 worker_dead 信号。
+    // - Stop:        Control::Stop / stop_signal / 通道断开 —— 是上层主动收尾，
+    //                finalize/cancel 流程会自己驱动 UI；不发额外信号。
+    // - ServerEnd:   handle_event 返回 true（收到 Closed/Error）—— 已经在
+    //                handle_event 里 emit 过 EVENT_CLOSED/ERROR，不再重复。
+    // - WorkerDead:  非 Stop 路径下 worker 自己决定退出（连续 decode 错误 / 网络断）——
+    //                需要主动 emit 兜底事件，让前端立即停录音 + 切 error，避免出现
+    //                "音频还在录但 STT 已死，松手 finalize 才发现 segs=0"。
+    enum ExitReason {
+        Stop,
+        ServerEnd,
+        WorkerDead(&'static str),
+    }
+
+    let mut consecutive_decode_errs: u32 = 0;
+    let exit_reason: ExitReason = 'outer: loop {
+        if stop.load(Ordering::Relaxed) {
+            break 'outer ExitReason::Stop;
+        }
+
         // 1) 排空控制通道（非阻塞）：音频帧直接转发、finish/stop 改 session 状态 / 退出。
-        loop {
+        let ctrl_exit = loop {
             match ctrl_rx.try_recv() {
                 Ok(Control::Audio(bytes)) => {
                     if let Err(e) = sess.send_audio(bytes) {
@@ -318,44 +367,60 @@ fn run_worker<R: Runtime>(
                         log::warn!("[stt] finish: {e}");
                     }
                 }
-                Ok(Control::Stop) => {
-                    break 'outer;
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    break 'outer;
-                }
+                Ok(Control::Stop) => break Some(ExitReason::Stop),
+                Err(mpsc::TryRecvError::Empty) => break None,
+                Err(mpsc::TryRecvError::Disconnected) => break Some(ExitReason::Stop),
             }
+        };
+        if let Some(r) = ctrl_exit {
+            break 'outer r;
         }
 
         // 2) 拉服务端事件（短超时让控制通道 / stop_signal 及时响应）。
-        match sess.next_event_timeout(Duration::from_millis(EVENT_POLL_MS)) {
-            Ok(Some(ev)) => {
+        let action = classify_event_result(
+            sess.next_event_timeout(Duration::from_millis(EVENT_POLL_MS)),
+        );
+        match action {
+            LoopAction::Process(ev) => {
+                consecutive_decode_errs = 0;
                 if handle_event(&app, ev, &final_segments, &final_count) {
-                    break 'outer;
+                    break 'outer ExitReason::ServerEnd;
                 }
             }
-            Ok(None) => {} // 超时或 worker 已 disconnect；下一轮 try_recv 检测 Stop
-            Err(SaaSError::Network(msg)) => {
-                log::info!("[stt] worker exit on network: {msg}");
-                break 'outer;
-            }
-            Err(e) => {
-                log::warn!("[stt] next_event: {e}");
-                let _ = app.emit(
-                    EVENT_ERROR,
-                    ErrorPayload {
-                        code: "next_event".into(),
-                        message: e.to_string(),
-                    },
+            LoopAction::Idle => {}
+            LoopAction::DecodeRecoverable(msg) => {
+                consecutive_decode_errs += 1;
+                log::warn!(
+                    "[stt] decode error (skipping, {consecutive_decode_errs}/{MAX_CONSECUTIVE_DECODE_ERRORS}): {msg}"
                 );
-                break 'outer;
+                // 单条坏消息不打扰用户：只在预算耗尽真正放弃会话时，由 worker_dead
+                // 分支兜底发 EVENT_CLOSED；中间的可恢复错误只记日志，不 emit。
+                if consecutive_decode_errs >= MAX_CONSECUTIVE_DECODE_ERRORS {
+                    break 'outer ExitReason::WorkerDead("decode_errors");
+                }
+            }
+            LoopAction::ExitNetwork(msg) => {
+                log::info!("[stt] worker exit on network: {msg}");
+                break 'outer ExitReason::WorkerDead("network");
             }
         }
-    }
+    };
 
     // sess 随局部变量 drop → RealtimeAsrSession::drop 发 Close 帧 + 关 socket。
     log::info!("[stt] worker loop ended");
+
+    if let ExitReason::WorkerDead(reason) = exit_reason {
+        // 前端 asr-closed 的 reason="worker_dead" 分支会立刻 stopMic + 切 error。
+        // detail 字段透传给可观察性，前端不依赖它做路由。
+        let _ = app.emit(
+            EVENT_CLOSED,
+            json!({
+                "reason": "worker_dead",
+                "detail": reason,
+                "totalCredits": serde_json::Value::Null,
+            }),
+        );
+    }
 }
 
 fn merge_segments(map: &BTreeMap<i64, String>) -> String {
@@ -418,7 +483,9 @@ fn handle_event<R: Runtime>(
         RealtimeEvent::Credits {
             remaining_credits, ..
         } => {
-            log::info!("[stt] credits update: remaining={remaining_credits}");
+            // None = 服务端把 Infinity 序列化成 null（典型 internal/无限账号）。
+            // 前端 EVENT_CREDITS 收到 null 视为"未知/无限"，不参与余额展示与告警。
+            log::info!("[stt] credits update: remaining={remaining_credits:?}");
             let _ = app.emit(EVENT_CREDITS, remaining_credits);
         }
         RealtimeEvent::Closed {
@@ -781,4 +848,166 @@ fn refine_speech_text_stream_impl<R: Runtime>(
         warning: final_warning,
         hotwords_cache_id: final_cache_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! 回归点：长录音 60s 后 worker 突然死亡 + 录音继续白录到松手才发现 segs=0。
+    //! 根因：服务端心跳期发的某帧（典型为 credits）某 f64 字段为 null，SDK
+    //! `serde_json::from_str::<RealtimeEvent>` 解码失败 → `SaaSError::Decode`。
+    //! 旧 worker 把 `Err(_)` 一概当致命错误 `break 'outer`，整个 STT 会话当场死。
+    //! 但 SDK 那条坏消息已被 `ws.read` 消费，下次循环可读到下一条 → decode 错误
+    //! 应作为单条可恢复错误，仅在连续多次失败时才视为协议崩坏退出。
+
+    use super::*;
+    use openloaf_saas::SaaSError;
+    use openloaf_saas::v4_tools::RealtimeEvent;
+
+    fn assert_recoverable(action: LoopAction) {
+        match action {
+            LoopAction::DecodeRecoverable(_) => {}
+            other => panic!(
+                "expected DecodeRecoverable (worker should NOT exit on a single bad frame), got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn classify_processes_event() {
+        let ev = RealtimeEvent::Partial {
+            sentence_id: 1,
+            text: "hello".into(),
+        };
+        assert!(matches!(
+            classify_event_result(Ok(Some(ev))),
+            LoopAction::Process(_)
+        ));
+    }
+
+    #[test]
+    fn classify_idle_on_none() {
+        assert!(matches!(
+            classify_event_result(Ok(None)),
+            LoopAction::Idle
+        ));
+    }
+
+    #[test]
+    fn classify_network_exits() {
+        let r: SaaSResult<Option<RealtimeEvent>> =
+            Err(SaaSError::Network("connection reset".into()));
+        match classify_event_result(r) {
+            LoopAction::ExitNetwork(msg) => assert_eq!(msg, "connection reset"),
+            other => panic!("expected ExitNetwork, got {other:?}"),
+        }
+    }
+
+    /// SDK 0.3.7 修复：服务端 internal 账号每分钟计费心跳里 `remainingCredits=Infinity`
+    /// 被 JS `JSON.stringify` 写成 null。0.3.7 把 Credits 三个 f64 改成 Option<f64>，
+    /// 该 payload 现在解码为 `Credits { ..None.. }`，不再 decode error。
+    #[test]
+    fn credits_with_null_f64_field_is_decoded_to_none() {
+        let payload = r#"{"type":"credits","consumedSeconds":null,"consumedCredits":0.0,"remainingCredits":1.5}"#;
+        let ev = serde_json::from_str::<RealtimeEvent>(payload).expect(
+            "SDK ≥ 0.3.7 必须把 null f64 视为 None；若失败说明 SDK 回退或被降级",
+        );
+        match ev {
+            RealtimeEvent::Credits {
+                consumed_seconds,
+                consumed_credits,
+                remaining_credits,
+                ..
+            } => {
+                assert!(consumed_seconds.is_none());
+                assert_eq!(consumed_credits, Some(0.0));
+                assert_eq!(remaining_credits, Some(1.5));
+            }
+            other => panic!("expected Credits, got {other:?}"),
+        }
+    }
+
+    /// Bug 1 修复点：SaaSError::Decode 必须不让 worker 退出。
+    #[test]
+    fn classify_saas_decode_error_is_recoverable() {
+        let r: SaaSResult<Option<RealtimeEvent>> = Err(SaaSError::Decode(
+            "invalid type: null, expected f64 at line 1 column 42".into(),
+        ));
+        assert_recoverable(classify_event_result(r));
+    }
+
+    /// 端到端：日志里那条会让旧 SDK 崩的 payload，在 0.3.7 上直接走 Process 分支。
+    /// 这是上游修复的回归用例 —— 一旦失败说明计费心跳的 null 字段又能炸 worker。
+    #[test]
+    fn null_f64_credits_payload_flows_through_as_process() {
+        let payload = r#"{"type":"credits","consumedSeconds":null,"consumedCredits":0.0,"remainingCredits":1.5}"#;
+        let ev = serde_json::from_str::<RealtimeEvent>(payload).expect("0.3.7 应能解码");
+        let r: SaaSResult<Option<RealtimeEvent>> = Ok(Some(ev));
+        assert!(matches!(
+            classify_event_result(r),
+            LoopAction::Process(RealtimeEvent::Credits { .. })
+        ));
+    }
+
+    /// 防御性：HTTP / Input 类错误如果在 next_event_timeout 路径上意外冒出，
+    /// 也按可恢复处理（不该比 Network 更激进地杀会话）。
+    #[test]
+    fn classify_http_and_input_errors_are_recoverable() {
+        let http: SaaSResult<Option<RealtimeEvent>> = Err(SaaSError::Http {
+            status: 500,
+            message: "internal".into(),
+            body: None,
+        });
+        assert_recoverable(classify_event_result(http));
+
+        let input: SaaSResult<Option<RealtimeEvent>> = Err(SaaSError::Input("bad".into()));
+        assert_recoverable(classify_event_result(input));
+    }
+
+    /// 容错预算：连续 MAX_CONSECUTIVE_DECODE_ERRORS 次坏消息时退出，
+    /// 期间任何一条好消息都应把计数清零。这里手动跑 run_worker 的同款决策步进逻辑。
+    #[test]
+    fn consecutive_decode_error_budget() {
+        let mut consecutive: u32 = 0;
+        let bump = |c: &mut u32| {
+            *c += 1;
+            *c >= MAX_CONSECUTIVE_DECODE_ERRORS
+        };
+        for i in 1..MAX_CONSECUTIVE_DECODE_ERRORS {
+            assert!(!bump(&mut consecutive), "must not exit at iter {i}");
+        }
+        assert!(
+            bump(&mut consecutive),
+            "must exit once budget reached at iter {MAX_CONSECUTIVE_DECODE_ERRORS}"
+        );
+    }
+
+    /// 错→好→错→错 的真实序列：good event 必须把累计 streak 归零，
+    /// 否则单次偶发 null 长期叠加会被误判成"协议崩坏"提前杀会话。
+    #[test]
+    fn good_event_resets_decode_error_streak() {
+        let make_decode = || -> SaaSResult<Option<RealtimeEvent>> {
+            Err(SaaSError::Decode("null f64".into()))
+        };
+        let make_good = || -> SaaSResult<Option<RealtimeEvent>> {
+            Ok(Some(RealtimeEvent::Partial {
+                sentence_id: 1,
+                text: "ok".into(),
+            }))
+        };
+
+        // 模拟 run_worker 内累计语义。
+        let mut streak: u32 = 0;
+        for r in [make_decode(), make_decode(), make_good(), make_decode()] {
+            match classify_event_result(r) {
+                LoopAction::Process(_) => streak = 0,
+                LoopAction::DecodeRecoverable(_) => streak += 1,
+                other => panic!("unexpected branch: {other:?}"),
+            }
+        }
+        assert_eq!(
+            streak, 1,
+            "good event 之后只剩 1 次错误，不应触达预算上限"
+        );
+        assert!(streak < MAX_CONSECUTIVE_DECODE_ERRORS);
+    }
 }

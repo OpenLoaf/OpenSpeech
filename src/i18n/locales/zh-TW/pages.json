@@ -27,6 +27,7 @@
     "subtitle": "歷史記錄保存在本裝置。",
     "search_placeholder": "搜尋歷史...",
     "more": "更多",
+    "refresh": "重新整理",
     "export": "匯出",
     "delete_all": "刪除全部歷史",
     "filters": {
@@ -73,7 +74,8 @@
       "retry_failed": "重試失敗",
       "delete_failed": "刪除失敗",
       "export_success": "音訊已匯出",
-      "export_failed": "匯出失敗"
+      "export_failed": "匯出失敗",
+      "refresh_failed": "重新整理失敗"
     },
     "confirm_clear": {
       "title": "刪除全部歷史",
