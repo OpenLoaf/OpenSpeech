@@ -131,13 +131,14 @@ export default function OverlayPage() {
       : "border-te-accent text-te-accent";
 
   // 中央 AnimatePresence 用 centerKey 切换：同 key 只视作 prop 变化，不会触发动画。
-  const centerKey = isTranscribing
-    ? "transcribing"
-    : isInjecting
-      ? "injecting"
-      : isError
-        ? "error"
-        : "wave";
+  // transcribing / injecting 共用 "progress" 容器（进度条不重启），内部的文字标签
+  // 走另一层 AnimatePresence 单独 crossfade。
+  const centerKey = isTranscribing || isInjecting
+    ? "progress"
+    : isError
+      ? "error"
+      : "wave";
+  const progressLabelKey = isInjecting ? "injecting" : "transcribing";
 
   return (
     <AnimatePresence>
@@ -237,15 +238,26 @@ export default function OverlayPage() {
               transition={{ duration: 0.12 }}
               className="flex h-full w-full items-center justify-center"
             >
-              {(centerKey === "transcribing" || centerKey === "injecting") && (
-                <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-2">
-                  <span className="max-w-full truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg">
-                    {t(
-                      centerKey === "injecting"
-                        ? "overlay:status.injecting"
-                        : "overlay:status.transcribing",
-                    )}
-                  </span>
+              {centerKey === "progress" && (
+                <div className="relative flex h-full w-full flex-col items-center justify-center gap-1 px-2">
+                  <div className="relative h-3 w-full">
+                    <AnimatePresence initial={false}>
+                      <motion.span
+                        key={progressLabelKey}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.24, ease: "easeInOut" }}
+                        className="absolute inset-0 flex items-center justify-center truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg"
+                      >
+                        {t(
+                          progressLabelKey === "injecting"
+                            ? "overlay:status.injecting"
+                            : "overlay:status.transcribing",
+                        )}
+                      </motion.span>
+                    </AnimatePresence>
+                  </div>
                   <div className="relative h-px w-32 overflow-hidden bg-te-gray/40">
                     <motion.span
                       className="absolute inset-y-0 bg-te-accent"
