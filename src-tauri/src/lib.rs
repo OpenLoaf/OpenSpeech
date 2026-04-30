@@ -113,6 +113,16 @@ fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// 应急清场：强制 drop cpal stream + 关掉残留 stt session。
+/// 前端 boot 时调一次兜底"上轮 webview reload / 状态机错乱"导致的 mic 占用泄漏——
+/// macOS 状态栏的橙色录音指示灯只在 cpal Stream 还活着时点亮，正常 stop 路径减不到
+/// ref_count=0 就关不掉。无副作用：没有遗留时是 no-op。
+#[tauri::command]
+fn app_emergency_reset() {
+    audio::force_stop();
+    stt::close_if_active();
+}
+
 // 用于权限授权后重启进程：macOS AXIsProcessTrusted 与 AVCaptureDevice
 // authorizationStatus 都是 per-process 缓存，用户在系统设置勾选后老进程
 // 仍读到 not-granted；必须重启进程才能拿到新值。Tauri 2 的 AppHandle.restart()
@@ -154,14 +164,44 @@ fn sync_dock_icon(_app: tauri::AppHandle) {
 // 直接 spawn 系统命令打开网络设置面板——`tauri-plugin-opener` 默认 scope 不允许
 // `x-apple.systempreferences:` / `ms-settings:` 这种自定义 scheme，自管更省事。
 // 失败只记日志（按钮已经按下了，弹另一个错误对话框打扰更甚）。
+// 日志目录：~/Library/Application Support/com.openspeech.app/logs（macOS）
+// Windows: %LOCALAPPDATA%\com.openspeech.app\logs；Linux: $XDG_DATA_HOME/com.openspeech.app/logs
+// 必须与 tauri_plugin_log 的 Folder target 保持同源，否则按钮打开的目录看不到日志。
+fn resolved_log_dir() -> std::path::PathBuf {
+    const IDENTIFIER: &str = "com.openspeech.app";
+
+    #[cfg(target_os = "macos")]
+    let base = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+        .join("Library/Application Support");
+
+    #[cfg(target_os = "windows")]
+    let base = std::env::var("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("APPDATA")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default()
+        });
+
+    #[cfg(target_os = "linux")]
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+                .unwrap_or_default()
+        });
+
+    let dir = base.join(IDENTIFIER).join("logs");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
 #[tauri::command]
 fn open_log_dir(app: tauri::AppHandle) -> Result<(), String> {
-    let log_dir = app
-        .path()
-        .app_log_dir()
-        .map_err(|e| format!("failed to resolve log dir: {e:?}"))?;
-    std::fs::create_dir_all(&log_dir).ok();
-
+    let log_dir = resolved_log_dir();
     let path = log_dir
         .to_str()
         .ok_or_else(|| format!("log dir contains non-utf8 chars: {log_dir:?}"))?
@@ -415,9 +455,16 @@ pub fn run() {
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Stdout,
                 ))
-                // 生产包落盘，macOS: ~/Library/Logs/com.openspeech.app/
+                // 生产包落盘到 app data 目录下 logs/ 子目录（绝对路径）。
+                // 不用 TargetKind::LogDir（macOS = ~/Library/Logs/<id>/）：签名 + Hardened
+                // Runtime 的 .app 调 NSWorkspace/`open` 打开此跨容器路径会被 LaunchServices
+                // 静默拦掉，"打开日志目录"按钮失效。改写到 ~/Library/Application Support/
+                // <id>/logs/，在 app 自己的 data 容器内，打开权限稳定。
                 .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::LogDir { file_name: None },
+                    tauri_plugin_log::TargetKind::Folder {
+                        path: resolved_log_dir(),
+                        file_name: None,
+                    },
                 ))
                 .max_file_size(10_000_000)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
@@ -670,6 +717,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             exit_app,
+            app_emergency_reset,
             relaunch_app,
             hide_to_tray,
             show_main_window_cmd,
@@ -732,11 +780,27 @@ pub fn run() {
         .run(|app_handle, event| {
             // 后备：极端情况下若 Cmd+Q 绕过菜单直达 app 级退出，这里兜住。
             // code.is_none() 代表"用户触发"；code=Some(n) 是我们主动 app.exit(n)，放行。
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
-                    let _ = app_handle.emit(CLOSE_REQUESTED_EVENT, ());
+            match event {
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    if code.is_none() {
+                        api.prevent_exit();
+                        let _ = app_handle.emit(CLOSE_REQUESTED_EVENT, ());
+                    } else {
+                        // 真正放行退出前主动 drop cpal Stream / 关 stt session：
+                        // macOS 进程死透时 OS 会回收 audio 资源，但偶发 OS 端 audio
+                        // session 还没收到 close 就被强杀，状态栏橙点会卡住。显式
+                        // force_stop 走完正常 thread join，让 cpal 把 stream stop
+                        // 信号发到 CoreAudio。
+                        audio::force_stop();
+                        stt::close_if_active();
+                    }
                 }
+                tauri::RunEvent::Exit => {
+                    // 真要退出了——再补一刀，覆盖任何绕过 ExitRequested 的退出路径。
+                    audio::force_stop();
+                    stt::close_if_active();
+                }
+                _ => {}
             }
         });
 }

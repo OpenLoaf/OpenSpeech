@@ -87,6 +87,14 @@ const bootPromise = (async () => {
 
   console.log("[boot] starting store init...");
   try {
+    // 应急清场：vite HMR / webview reload 时 Rust backend 进程往往没死，老的 cpal
+    // Stream 还在跑、stt session 也可能没关——表现为 macOS 状态栏橙色录音指示灯
+    // 卡住、按取消键不消失。boot 第一步先告诉 backend "把所有遗留状态归零"。
+    // 没遗留时是 no-op；失败只打日志，不阻断 boot。
+    await invoke("app_emergency_reset").catch((e) =>
+      console.warn("[boot] app_emergency_reset failed:", e),
+    );
+
     // settings 必须在 history 之前 ready：history.init 会读 historyRetention 决定
     // 启动期 sweep 删多少。其它 store 与之无依赖，并行即可。
     await useSettingsStore.getState().init();
@@ -117,7 +125,7 @@ const bootPromise = (async () => {
     // useUIStore.pendingUpdate，由 Layout 弹 toast 让用户主动点"立即安装"再
     // 走下载。整段不 await，boot 立刻继续走 listeners 注册等步骤。
     // 走 plugin-log 而不是 console.log——生产包打不开 devtools，必须把 updater
-    // 的诊断信号写进 LogDir 文件（~/Library/Logs/com.openspeech.app/OpenSpeech.log）。
+    // 的诊断信号写到日志文件（macOS: ~/Library/Application Support/com.openspeech.app/logs/）。
     if (useSettingsStore.getState().general.autoUpdate) {
       void (async () => {
         void logInfo("[updater] boot check start, autoUpdate=on");

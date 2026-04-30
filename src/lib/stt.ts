@@ -91,11 +91,17 @@ export async function refineSpeechText(args: {
   text: string;
   hotwords?: string;
   hotwordsCacheId?: string;
+  /** 关联前置 ASR / Realtime 任务 ID（≤128 字符），仅用于服务端日志关联。v0.3.8+ */
+  taskId?: string;
+  /** 参考上下文（≤50000 字符），帮助模型消解代词 / 缩略 / 跳跃式表达。v0.3.7+ */
+  referenceContext?: string;
 }): Promise<RefineSpeechTextResult> {
   return await invoke<RefineSpeechTextResult>("refine_speech_text", {
     text: args.text,
     hotwords: args.hotwords,
     hotwordsCacheId: args.hotwordsCacheId,
+    taskId: args.taskId,
+    referenceContext: args.referenceContext,
   });
 }
 
@@ -113,6 +119,10 @@ export async function refineSpeechTextStream(
     text: string;
     hotwords?: string;
     hotwordsCacheId?: string;
+    /** 关联前置 Realtime 任务 sessionId（≤128 字符）。v0.3.8+ */
+    taskId?: string;
+    /** 参考上下文（最近若干条 history 的 refinedText，≤50000 字符）。v0.3.7+ */
+    referenceContext?: string;
   },
   onDelta: (chunk: string) => void,
 ): Promise<RefineSpeechTextResult> {
@@ -126,6 +136,8 @@ export async function refineSpeechTextStream(
       text: args.text,
       hotwords: args.hotwords,
       hotwordsCacheId: args.hotwordsCacheId,
+      taskId: args.taskId,
+      referenceContext: args.referenceContext,
     });
   } finally {
     if (unlisten) unlisten();

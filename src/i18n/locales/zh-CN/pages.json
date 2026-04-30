@@ -57,6 +57,7 @@
       "export": "导出音频",
       "delete": "删除",
       "retry": "重试",
+      "transcribe": "转入",
       "retrying_label": "重试中",
       "retry_no_audio": "无可用音频，无法重试",
       "retry_too_long": "暂不支持超过 5 分钟的录音重试",

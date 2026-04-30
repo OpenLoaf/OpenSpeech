@@ -80,7 +80,7 @@ pub async fn openloaf_submit_feedback(
 
     let email_owned = payload.email.as_ref().map(|s| s.trim().to_string());
     let body = SubmitFeedbackBody {
-        source: "openloaf-saas",
+        source: "openloaf",
         r#type: payload.r#type,
         content: &content,
         context,

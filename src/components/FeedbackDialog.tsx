@@ -33,6 +33,17 @@ const TYPE_ORDER: FeedbackType[] = [
 
 const MIN_CONTENT_LEN = 5;
 
+// 微信登录用户后端会合成 `wechat-<openid>@wechat.local` 占位邮箱，不能当真实联系方式。
+function pickContactEmail(...candidates: Array<string | null | undefined>): string {
+  for (const raw of candidates) {
+    const v = raw?.trim();
+    if (!v) continue;
+    if (/@wechat\.local$/i.test(v) || /\.local$/i.test(v)) continue;
+    return v;
+  }
+  return "";
+}
+
 export function FeedbackDialog({ open, onOpenChange }: Props) {
   const { t } = useTranslation("feedback");
   const user = useAuthStore((s) => s.user);
@@ -48,7 +59,7 @@ export function FeedbackDialog({ open, onOpenChange }: Props) {
     if (!open) return;
     setType("bug");
     setContent("");
-    setEmail(user?.email ?? profile?.email ?? "");
+    setEmail(pickContactEmail(user?.email, profile?.email));
     setSubmitting(false);
   }, [open, user?.email, profile?.email]);
 

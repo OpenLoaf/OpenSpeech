@@ -31,6 +31,7 @@ import { NoInternetDialog } from "@/components/NoInternetDialog";
 import { FeedbackDialog } from "@/components/FeedbackDialog";
 import { WindowControls } from "@/components/WindowControls";
 import { useAuthStore } from "@/stores/auth";
+import { useHistoryStore } from "@/stores/history";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import {
@@ -53,7 +54,7 @@ const MAIN_NAV: NavItem[] = [
   { to: "/dictionary", i18nKey: "dictionary", icon: BookOpen },
 ];
 
-function NavRow({ item }: { item: NavItem }) {
+function NavRow({ item, badge = 0 }: { item: NavItem; badge?: number }) {
   const { t } = useTranslation();
   const Icon = item.icon;
   return (
@@ -78,7 +79,12 @@ function NavRow({ item }: { item: NavItem }) {
             )}
           />
           <Icon className="size-4 shrink-0" />
-          <span>{t(`pages:layout.nav.${item.i18nKey}`)}</span>
+          <span className="flex-1">{t(`pages:layout.nav.${item.i18nKey}`)}</span>
+          {badge > 0 ? (
+            <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#ff4d4d] px-1 font-mono text-[10px] font-bold leading-none text-white tabular-nums tracking-normal">
+              {badge > 99 ? "99+" : badge}
+            </span>
+          ) : null}
         </>
       )}
     </NavLink>
@@ -111,6 +117,16 @@ export default function Layout() {
   const openSettings = useUIStore((s) => s.openSettings);
   const pendingUpdate = useUIStore((s) => s.pendingUpdate);
   const setPendingUpdate = useUIStore((s) => s.setPendingUpdate);
+
+  // 从最新一条往前数连续 failed 的条数：最新条不是 failed 即为 0，气泡隐藏。
+  const historyFailedHeadCount = useHistoryStore((s) => {
+    let n = 0;
+    for (const it of s.items) {
+      if (it.status === "failed") n += 1;
+      else break;
+    }
+    return n;
+  });
 
   // 启动时 main.tsx 后台 check 出新版本，会把 update 对象写到 ui store。这里
   // 监听 store 弹一个常驻 toast，让用户在自己方便的时机点"立即安装"再下载——
@@ -481,7 +497,11 @@ export default function Layout() {
         {/* Main nav */}
         <nav className="flex flex-1 flex-col gap-px overflow-y-auto py-4">
           {MAIN_NAV.map((item) => (
-            <NavRow key={item.to} item={item} />
+            <NavRow
+              key={item.to}
+              item={item}
+              badge={item.to === "/history" ? historyFailedHeadCount : 0}
+            />
           ))}
         </nav>
 

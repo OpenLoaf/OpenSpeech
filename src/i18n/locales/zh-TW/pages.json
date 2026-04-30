@@ -57,6 +57,7 @@
       "export": "匯出音訊",
       "delete": "刪除",
       "retry": "重試",
+      "transcribe": "轉入",
       "retrying_label": "重試中",
       "retry_no_audio": "無可用音訊，無法重試",
       "retry_too_long": "暫不支援超過 5 分鐘的錄音重試",

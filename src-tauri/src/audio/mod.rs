@@ -695,6 +695,22 @@ fn spawn_monitor_thread<R: Runtime>(
 const STREAM_READY_TIMEOUT: Duration = Duration::from_millis(1500);
 
 pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Result<(), String> {
+    // 僵尸自愈：thread 已 finished 但 ref_count > 0，是上轮 audio 线程因 cpal error /
+    // panic 提前退出后状态没回滚的残留——直接 force_stop 清零，避免下面快速路径漏掉
+    // 已死线程导致 stream_info=None 后续报 "audio stream not running"。
+    {
+        let guard = monitor().lock().expect("monitor mutex poisoned");
+        let zombie = guard.ref_count > 0
+            && guard
+                .thread
+                .as_ref()
+                .is_none_or(|th| th.is_finished());
+        drop(guard);
+        if zombie {
+            force_stop();
+        }
+    }
+
     // 快速路径：已在运行且设备相同 → 只增引用计数（stream_info 已就绪，无需等待）
     // 必须同时检查线程是否还活着——audio 线程可能因 cpal stream error / panic 已退出，
     // 退出时清了 stream_info 但 MonitorState 的 thread/current_device 还残留，
@@ -766,6 +782,32 @@ pub fn stop() {
             (None, None)
         }
     };
+    if let Some(tx) = tx {
+        let _ = tx.send(());
+    }
+    if let Some(th) = th {
+        let _ = th.join();
+    }
+}
+
+/// 应急清场：无视 ref_count 直接把 monitor 状态归零、停 audio 线程、drop cpal Stream。
+/// macOS 状态栏的橙色 mic 指示灯只在 cpal Stream 还活着时点亮——前端 webview 重启 /
+/// 状态机错乱导致 stop() 无法把计数器减到 0 时，正常路径无法关闭 stream，indicator 卡死。
+/// 调用方：app boot（前端 / setup）、ExitRequested 退出回调、audio::start 检测到僵尸时。
+pub fn force_stop() {
+    let (tx, th, prev_ref) = {
+        let mut guard = monitor().lock().expect("monitor mutex poisoned");
+        let prev = guard.ref_count;
+        guard.ref_count = 0;
+        guard.current_device = None;
+        (guard.stop_tx.take(), guard.thread.take(), prev)
+    };
+    if tx.is_some() || th.is_some() || prev_ref > 0 {
+        log::warn!(
+            "[audio] force_stop: clearing stale monitor (prev_ref={})",
+            prev_ref
+        );
+    }
     if let Some(tx) = tx {
         let _ = tx.send(());
     }

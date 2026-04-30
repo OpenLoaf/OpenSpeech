@@ -7,6 +7,7 @@ import {
   getHotwordsForRefine,
   rememberHotwordsCacheId,
 } from "@/lib/hotwordsCache";
+import { buildRefineContext } from "@/lib/refineContext";
 import { useAuthStore } from "@/stores/auth";
 import {
   useSettingsStore,
@@ -282,11 +283,16 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       let refinedText: string | null = null;
       if (text && segmentMode === "AI_REFINE") {
         const { hotwords, hotwordsCacheId } = getHotwordsForRefine();
+        // 重试当前条时把这条排除掉，避免把"自己尚未刷新的旧文本"塞进上下文。
+        const referenceContext = buildRefineContext(get().items, {
+          excludeId: id,
+        });
         try {
           const rr = await refineSpeechText({
             text,
             hotwords: hotwords || undefined,
             hotwordsCacheId,
+            referenceContext,
           });
           refinedText = rr.refinedText;
           rememberHotwordsCacheId(hotwords, rr.hotwordsCacheId);

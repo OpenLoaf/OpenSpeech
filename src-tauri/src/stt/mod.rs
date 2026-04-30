@@ -81,6 +81,9 @@ const EVENT_ERROR: &str = "openspeech://asr-error";
 const EVENT_CLOSED: &str = "openspeech://asr-closed";
 const EVENT_CREDITS: &str = "openspeech://asr-credits";
 const EVENT_REFINE_DELTA: &str = "openspeech://refine-delta";
+// 服务端 WS 握手成功后会发 Ready，携带本次会话的 sessionId。前端把它当作
+// 后续 refine 调用 task_id 透传，关联 ASR/Realtime 与口语优化两侧日志。
+const EVENT_READY: &str = "openspeech://stt-ready";
 
 /// send_finish 后等 Final 的最长时间。服务端典型 < 500ms，3s 能兜住抖动；
 /// 超时走空串，前端自行决定是否把 history 标 failed。
@@ -136,7 +139,7 @@ struct ErrorPayload {
     message: String,
 }
 
-fn close_if_active() {
+pub fn close_if_active() {
     let state = slot().lock().ok().and_then(|mut g| g.take());
     if let Some(mut state) = state {
         state.stop_signal.store(true, Ordering::Relaxed);
@@ -438,8 +441,11 @@ fn handle_event<R: Runtime>(
     final_count: &Arc<AtomicI64>,
 ) -> bool {
     match ev {
-        RealtimeEvent::Ready { .. } => {
-            log::info!("[stt] realtime Ready (WS handshake complete, server ready to ingest audio)");
+        RealtimeEvent::Ready { session_id, .. } => {
+            log::info!(
+                "[stt] realtime Ready (WS handshake complete, server ready to ingest audio) session_id={session_id}"
+            );
+            let _ = app.emit(EVENT_READY, json!({ "sessionId": session_id }));
         }
         RealtimeEvent::Partial { sentence_id, text } => {
             // partial 只反映「当前 sentence_id 这一句」从开口到现在的累积，前面已 Final
@@ -626,6 +632,8 @@ pub async fn refine_speech_text<R: Runtime>(
     text: String,
     hotwords: Option<String>,
     hotwords_cache_id: Option<String>,
+    task_id: Option<String>,
+    reference_context: Option<String>,
 ) -> Result<RefineSpeechTextResult, String> {
     {
         let ol = app.state::<SharedOpenLoaf>();
@@ -635,7 +643,14 @@ pub async fn refine_speech_text<R: Runtime>(
         }
     }
     tauri::async_runtime::spawn_blocking(move || {
-        refine_speech_text_impl(app, text, hotwords, hotwords_cache_id)
+        refine_speech_text_impl(
+            app,
+            text,
+            hotwords,
+            hotwords_cache_id,
+            task_id,
+            reference_context,
+        )
     })
     .await
     .map_err(|e| format!("refine_speech_text join: {e}"))?
@@ -646,6 +661,8 @@ fn refine_speech_text_impl<R: Runtime>(
     text: String,
     hotwords: Option<String>,
     hotwords_cache_id: Option<String>,
+    task_id: Option<String>,
+    reference_context: Option<String>,
 ) -> Result<RefineSpeechTextResult, String> {
     let ol = app.state::<SharedOpenLoaf>();
     let client = ol.authenticated_client().ok_or_else(|| {
@@ -663,17 +680,31 @@ fn refine_speech_text_impl<R: Runtime>(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let task_id_clean = task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let reference_context_clean = reference_context
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     let build_input = |use_cache: bool| -> SpeechRefineOlTl005Input {
         let mut input = SpeechRefineOlTl005Input::new(text.clone());
         if use_cache {
             if let Some(id) = cache_id_clean.as_deref() {
                 input = input.with_hotwords_cache_id(id);
-                return input;
             }
-        }
-        if let Some(hw) = hotwords_clean.as_deref() {
+        } else if let Some(hw) = hotwords_clean.as_deref() {
             input = input.with_hotwords(hw);
+        }
+        if let Some(tid) = task_id_clean.as_deref() {
+            input = input.with_task_id(tid);
+        }
+        if let Some(ctx) = reference_context_clean.as_deref() {
+            input = input.with_reference_context(ctx);
         }
         input
     };
@@ -732,6 +763,8 @@ pub async fn refine_speech_text_stream<R: Runtime>(
     text: String,
     hotwords: Option<String>,
     hotwords_cache_id: Option<String>,
+    task_id: Option<String>,
+    reference_context: Option<String>,
 ) -> Result<RefineSpeechTextResult, String> {
     {
         let ol = app.state::<SharedOpenLoaf>();
@@ -741,7 +774,14 @@ pub async fn refine_speech_text_stream<R: Runtime>(
         }
     }
     tauri::async_runtime::spawn_blocking(move || {
-        refine_speech_text_stream_impl(app, text, hotwords, hotwords_cache_id)
+        refine_speech_text_stream_impl(
+            app,
+            text,
+            hotwords,
+            hotwords_cache_id,
+            task_id,
+            reference_context,
+        )
     })
     .await
     .map_err(|e| format!("refine_speech_text_stream join: {e}"))?
@@ -752,6 +792,8 @@ fn refine_speech_text_stream_impl<R: Runtime>(
     text: String,
     hotwords: Option<String>,
     hotwords_cache_id: Option<String>,
+    task_id: Option<String>,
+    reference_context: Option<String>,
 ) -> Result<RefineSpeechTextResult, String> {
     let ol = app.state::<SharedOpenLoaf>();
     let client = ol.authenticated_client().ok_or_else(|| {
@@ -769,17 +811,31 @@ fn refine_speech_text_stream_impl<R: Runtime>(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let task_id_clean = task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let reference_context_clean = reference_context
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     let build_input = |use_cache: bool| -> SpeechRefineOlTl005Input {
         let mut input = SpeechRefineOlTl005Input::new(text.clone());
         if use_cache {
             if let Some(id) = cache_id_clean.as_deref() {
                 input = input.with_hotwords_cache_id(id);
-                return input;
             }
-        }
-        if let Some(hw) = hotwords_clean.as_deref() {
+        } else if let Some(hw) = hotwords_clean.as_deref() {
             input = input.with_hotwords(hw);
+        }
+        if let Some(tid) = task_id_clean.as_deref() {
+            input = input.with_task_id(tid);
+        }
+        if let Some(ctx) = reference_context_clean.as_deref() {
+            input = input.with_reference_context(ctx);
         }
         input
     };

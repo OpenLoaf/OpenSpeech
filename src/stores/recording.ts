@@ -29,6 +29,7 @@ import {
   getHotwordsForRefine,
   rememberHotwordsCacheId,
 } from "@/lib/hotwordsCache";
+import { buildRefineContext } from "@/lib/refineContext";
 import { newId } from "@/lib/ids";
 
 export type RecordingState =
@@ -96,9 +97,9 @@ const MIN_RECORD_MS = 1000;
 const TOO_SHORT_TOTAL_MS = PREPARING_MS + MIN_RECORD_MS;
 
 // error 态最长停留时长——超过后自动回 idle，避免悬浮条因用户没注意到错误而
-// 永久挂在屏幕上。Toast (2s) 提示先消失，再多给约 2s 让用户读 pill 上的错误
-// 文字。需要更久阅读时间的错误应改用 toast 的 durationMs 控制。
-const ERROR_AUTO_DISMISS_MS = 4000;
+// 永久挂在屏幕上。1.5s 足以扫一眼 toast / pill 上的红字；用户随时可以按
+// 激活快捷键或 ESC 立即关掉。需要更久阅读时间的错误应改用 toast 的 durationMs。
+const ERROR_AUTO_DISMISS_MS = 1500;
 
 const emptyLevels = () => Array(LEVEL_BUFFER_LEN).fill(0) as number[];
 
@@ -192,6 +193,11 @@ const isRealtimeRepeatError = (code: string, message: string): boolean => {
 // 还是直接 transcribe_recording_file。Module 级足够——一次录音生命周期内无并发。
 let realtimeDegradedToFile = false;
 
+// 当前 realtime 会话的 sessionId，stt-ready 事件到达时写入，stt_start 之前清空。
+// finalize 后调 refineSpeechTextStream 时作为 task_id 透传给 OL-TL-005，让服务端
+// 把 ASR 与口语优化两侧日志关联起来。Module 级足够——同一时刻只有一个 stt session。
+let currentSttSessionId: string | null = null;
+
 // 失败原因翻译：Rust 端 stt_start 失败典型文案：
 //   "not authenticated; login first"
 //   "audio stream not running; start mic first"
@@ -256,6 +262,9 @@ const abortToIdle = (errorTitle: string, errorDesc: string) => {
 
 const startRecordingSession = (id: string) => {
   if (!IS_MAIN_WINDOW) return;
+  // 每次 start 前清掉上一次会话残留的 sessionId，避免本次 stt-ready 还没到时
+  // 把上一次的 sessionId 误带给本次 refine。
+  currentSttSessionId = null;
   void startRecordingToFile(id)
     .then(() => {
       const segmentMode = getEffectiveSegmentMode();
@@ -395,8 +404,17 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       `[refine] stream start textLen=${text.length} hotwordsLen=${hotwords?.length ?? 0} cacheId=${hotwordsCacheId ? "yes" : "no"}`,
     );
     try {
+      const referenceContext = buildRefineContext(
+        useHistoryStore.getState().items,
+      );
       const r = await refineSpeechTextStream(
-        { text, hotwords: hotwords || undefined, hotwordsCacheId },
+        {
+          text,
+          hotwords: hotwords || undefined,
+          hotwordsCacheId,
+          taskId: currentSttSessionId ?? undefined,
+          referenceContext,
+        },
         (chunk) => {
           streamedSoFar += chunk;
           injectIncremental(streamedSoFar);
@@ -712,6 +730,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       let prevSnapshot = "";
       let prevState: RecordingState = get().state;
       let errorDismissTimer: number | null = null;
+      let prevErrorState = get().state === "error";
+      let prevErrorMessage: string | null = get().errorMessage;
       useRecordingStore.subscribe((s) => {
         // 提示音三条 FSM 边触发——startCue 放在进入 preparing 时（按下即响），
         // 不等 PREPARING_MS 后才到 recording，否则用户感觉"按了 300ms 才有反馈"。
@@ -755,21 +775,26 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
 
         prevState = s.state;
 
-        // error 自愈：每次状态变化先清旧定时器；若进入 error 则重新计时。
-        // 同样的 error 重复 set（errorMessage 变了）也会重置——给"最近一次错误"
-        // 完整的 ERROR_AUTO_DISMISS_MS 阅读窗口。
-        if (errorDismissTimer !== null) {
-          window.clearTimeout(errorDismissTimer);
-          errorDismissTimer = null;
-        }
-        if (s.state === "error") {
+        // error 自愈：1.5s 后回 idle。subscribe 会在每次 set 时触发，但 error 期间
+        // 还有 audio-level（20Hz，cpal 停流尾巴 / 设置页预览）、asr-partial/final、
+        // liveTranscript 等无关写入——若每次都重置 timer，错误条会被永远推到下一帧，
+        // 用户必须手动按 X / 快捷键才能消除。只在「进入 error」或「errorMessage 换了」
+        // 时重置，给最近一次错误一个完整的阅读窗口。
+        const isError = s.state === "error";
+        if (isError && (!prevErrorState || s.errorMessage !== prevErrorMessage)) {
+          if (errorDismissTimer !== null) window.clearTimeout(errorDismissTimer);
           errorDismissTimer = window.setTimeout(() => {
             errorDismissTimer = null;
             if (useRecordingStore.getState().state === "error") {
               useRecordingStore.getState().dismissError();
             }
           }, ERROR_AUTO_DISMISS_MS);
+        } else if (!isError && errorDismissTimer !== null) {
+          window.clearTimeout(errorDismissTimer);
+          errorDismissTimer = null;
         }
+        prevErrorState = isError;
+        prevErrorMessage = s.errorMessage;
 
         const snap = JSON.stringify({
           state: s.state,
@@ -868,8 +893,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             set({ state: "transcribing", audioLevels: emptyLevels() });
             void finalizeAndWriteHistory().then((outcome) => {
               // 转写没拿到任何文字（0 段 Final / 超时 / 异常）：进入 error 态，
-              // 让 PTT 在 ERROR_AUTO_DISMISS_MS（4s）内被忽略，避免用户看到失败
-              // toast 之前又触发一次新的录音、连环失败。
+              // ERROR_AUTO_DISMISS_MS 后自动回 idle；用户也可以主动按激活快捷键 /
+              // ESC 立刻关掉提示开始下一次录音。
               if (!outcome.text) {
                 set({
                   state: "error",
@@ -894,13 +919,17 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             return;
           }
 
-          // 中间态 / error 态都忽略新的 PTT 触发：
-          // - transcribing / injecting / preparing：流程未完成，避免抢资源；
-          // - error：刚失败的 toast 还在显示（ERROR_AUTO_DISMISS_MS=4s 后自动回 idle），
-          //   立刻让用户再录一遍多半是同样的失败，反而盖过提示信息。
-          if (cur.state !== "idle") {
+          // error 态：把"再按一次激活快捷键"当作用户主动放弃当前失败提示、
+          // 立刻发起下一次录音。dismissError 把 state 切回 idle，继续 fall through
+          // 到 gate / preflight / startMic 正常流程。配套：ESC 在 error 态也会
+          // 立即 dismiss（见 key-preview 监听器）。
+          if (cur.state === "error") {
+            console.log("[recording] press on error → dismiss & start new", { id });
+            get().dismissError();
+          } else if (cur.state !== "idle") {
+            // transcribing / injecting / preparing：流程未完成，避免抢资源。
             console.warn(
-              "[recording] press IGNORED: state not idle/error and activeId mismatch",
+              "[recording] press IGNORED: state not idle and activeId mismatch",
               {
                 pressed_id: id,
                 cur_state: cur.state,
@@ -1260,6 +1289,19 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
         },
       );
+      // realtime WS 握手成功后服务端首条事件，把 sessionId 透出来。
+      // 缓存到 module 级 currentSttSessionId，给 finalize 后调 OL-TL-005 时
+      // 作为 task_id 透传，关联 ASR 与口语优化两侧日志。
+      const u7r = await listen<{ sessionId: string }>(
+        "openspeech://stt-ready",
+        (evt) => {
+          const sid = evt.payload?.sessionId ?? "";
+          if (sid) {
+            currentSttSessionId = sid;
+            console.info(`[stt] session ready, id=${sid}`);
+          }
+        },
+      );
 
       // Esc 取消——走 Rust modifier_only 的预览通道（`openspeech://key-preview`），
       // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc）。状态门控：仅当录音 /
@@ -1322,7 +1364,14 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           // macOS 长按 Esc 会以 ~30ms 间隔触发 KeyPress——is_repeat=true 必须丢弃。
           if (evt.payload.isRepeat) return;
           const s = get().state;
-          if (s === "idle" || s === "error" || s === "injecting") return;
+          // error 态：ESC 立即关掉失败提示回到 idle，让用户能马上再次按
+          // 激活快捷键开始新一次录音，不必等 ERROR_AUTO_DISMISS_MS 自然消失。
+          if (s === "error") {
+            console.log("[recording] Esc on error → dismiss");
+            get().dismissError();
+            return;
+          }
+          if (s === "idle" || s === "injecting") return;
 
           // 已经 armed（任意阶段：pending 或 prompt）→ 第二次 ESC = 取消。
           if (escFirstAt > 0) {
@@ -1357,7 +1406,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u8, u9);
+      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u7r, u8, u9);
       console.log(
         "[recording] listeners attached (hotkey + register-failed + audio-level + asr-* + stream-error)",
       );

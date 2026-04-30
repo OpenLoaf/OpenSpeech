@@ -57,11 +57,15 @@ type Action =
 function reduce(s: OverlayState, a: Action): OverlayState {
   switch (a.type) {
     case "fsm":
+      // error → 非 error 切换时一起清 toast：用户按激活快捷键 / ESC 主动放弃
+      // 失败提示时，pill 立即变 idle，伴生的失败 toast 不该再多停 0.x 秒。
+      // 自然超时（ERROR_AUTO_DISMISS_MS）回 idle 也走这条路径，体感更整齐。
       return {
         ...s,
         main: a.state,
         errorMessage: a.errorMessage,
         liveTranscript: a.liveTranscript,
+        toast: s.main === "error" && a.state !== "error" ? null : s.toast,
       };
     case "toast-show":
       return { ...s, toast: { ...a.payload, id: a.id } };

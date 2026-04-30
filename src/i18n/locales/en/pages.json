@@ -57,6 +57,7 @@
       "export": "Export audio",
       "delete": "Delete",
       "retry": "Retry",
+      "transcribe": "Transcribe",
       "retrying_label": "Retrying",
       "retry_no_audio": "No audio available, can't retry",
       "retry_too_long": "Retry isn't supported for recordings over 5 minutes",

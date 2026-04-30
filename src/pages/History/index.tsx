@@ -231,6 +231,7 @@ function RowActions({
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const isFailed = status === "failed";
+  const isCancelled = status === "cancelled";
   const baseBtn =
     "inline-flex size-7 items-center justify-center border border-transparent text-te-light-gray transition-colors hover:border-te-gray/60 hover:text-te-accent";
   const dangerBtn =
@@ -292,8 +293,11 @@ function RowActions({
         ? t("pages:history.row.retry_in_progress")
         : t("pages:history.row.retry_tooltip");
 
-  // 失败态：只有「(hover) 删除 + 重试常显」，由外层 HistoryRow 在更右侧再放一个播放按钮。
-  if (isFailed) {
+  // 失败态/取消态：只有「(hover) 删除 + 重试/转入常显」，由外层 HistoryRow 在更右侧再放一个播放按钮。
+  if (isFailed || isCancelled) {
+    const label = isCancelled
+      ? t("pages:history.row.transcribe")
+      : t("pages:history.row.retry");
     return (
       <div className="flex items-center gap-1">
         <div className="pointer-events-none flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
@@ -319,9 +323,7 @@ function RowActions({
             <RotateCcw className="size-3" strokeWidth={2} />
           )}
           <span>
-            {retrying
-              ? t("pages:history.row.retrying_label")
-              : t("pages:history.row.retry")}
+            {retrying ? t("pages:history.row.retrying_label") : label}
           </span>
         </button>
       </div>
@@ -484,7 +486,11 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
       <div className="min-w-0 flex-1">
         <p
           className={`font-sans text-sm leading-relaxed ${
-            isFailed ? "text-[#ff4d4d]" : "text-te-fg"
+            isFailed
+              ? "text-[#ff4d4d]"
+              : isCancelled
+                ? "text-te-light-gray/70"
+                : "text-te-fg"
           }`}
           style={{
             display: "-webkit-box",

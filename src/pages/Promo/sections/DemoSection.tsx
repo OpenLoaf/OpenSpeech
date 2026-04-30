@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Check, Command, Diamond, X } from "lucide-react";
+import { Check, Diamond, X } from "lucide-react";
 import { detectPlatform, type Platform } from "@/lib/platform";
 
 type SegKind = "keep" | "filler" | "correction";
@@ -32,14 +32,14 @@ const POLISHED_LIST = [
 ];
 
 // 对齐 src/pages/Overlay 的真实 RecordingState：preparing / recording / transcribing / injecting / idle
-type Stage =
+export type Stage =
   | "idle"
   | "recording"
   | "transcribing"
   | "polishing"
   | "injecting";
 
-const STAGE_DURATION: Record<Stage, number> = {
+export const STAGE_DURATION: Record<Stage, number> = {
   idle: 1000,
   recording: 1500,
   transcribing: 2400,
@@ -47,7 +47,7 @@ const STAGE_DURATION: Record<Stage, number> = {
   injecting: 2200,
 };
 
-const NEXT_STAGE: Record<Stage, Stage> = {
+export const NEXT_STAGE: Record<Stage, Stage> = {
   idle: "recording",
   recording: "transcribing",
   transcribing: "polishing",
@@ -55,26 +55,8 @@ const NEXT_STAGE: Record<Stage, Stage> = {
   injecting: "idle",
 };
 
-// 对齐 LiveDictationPanel.statusCopy 的工业 tag 风格
-const STAGE_TAG: Record<Stage, string> = {
-  idle: "// IDLE",
-  recording: "// LISTENING",
-  transcribing: "// TRANSCRIBING",
-  polishing: "// POLISHING",
-  injecting: "// INJECTING",
-};
-
-const CAPTIONS: Record<Stage, string> = {
-  idle: "// IDLE · 按下快捷键唤起胶囊",
-  recording: "// LISTENING · 实时录音 + 波形",
-  transcribing: "// TRANSCRIBING · 上传到你自己的 ASR",
-  polishing: "// POLISHING · AI 清洗口误并重排",
-  injecting: "// INJECTING · 写入光标位置",
-};
-
-export default function DemoSection() {
+export function useStageCycle(active: boolean): Stage {
   const [stage, setStage] = useState<Stage>("idle");
-  const [active, setActive] = useState(false);
   const reduce = useReducedMotion();
 
   useEffect(() => {
@@ -86,6 +68,30 @@ export default function DemoSection() {
   useEffect(() => {
     if (reduce) setStage("injecting");
   }, [reduce]);
+
+  return stage;
+}
+
+// 对齐 LiveDictationPanel.statusCopy 的工业 tag 风格
+const STAGE_TAG: Record<Stage, string> = {
+  idle: "// IDLE",
+  recording: "// LISTENING",
+  transcribing: "// TRANSCRIBING",
+  polishing: "// POLISHING",
+  injecting: "// INJECTING",
+};
+
+const CAPTIONS: Record<Stage, string> = {
+  idle: "// IDLE · 按一下快捷键开始",
+  recording: "// LISTENING · 再按一次快捷键 结束并转写",
+  transcribing: "// TRANSCRIBING · 正在转写…",
+  polishing: "// POLISHING · AI 清洗口误并重排",
+  injecting: "// INJECTING · 正在写入输入框…",
+};
+
+export default function DemoSection() {
+  const [active, setActive] = useState(false);
+  const stage = useStageCycle(active);
 
   return (
     <section id="demo" className="bg-te-bg px-[4vw] py-[clamp(5rem,11vw,9rem)]">
@@ -119,18 +125,19 @@ export default function DemoSection() {
         >
           <div className="relative w-full max-w-4xl">
             <ScratchPanel stage={stage} />
-            <KeyboardHint visible={stage === "recording"} />
           </div>
 
-          <RecorderBar stage={stage} />
-          <Caption stage={stage} />
+          <div className="flex flex-wrap items-center justify-center gap-4">
+            <ShortcutKeys stage={stage} />
+            <RecorderBar stage={stage} />
+          </div>
         </motion.div>
       </div>
     </section>
   );
 }
 
-function ScratchPanel({ stage }: { stage: Stage }) {
+export function ScratchPanel({ stage }: { stage: Stage }) {
   const charCount =
     stage === "injecting"
       ? POLISHED_LIST.join("").length + POLISHED_TITLE.length
@@ -152,12 +159,12 @@ function ScratchPanel({ stage }: { stage: Stage }) {
           </span>
         </div>
 
-        <div className="px-8 py-9 md:px-12 md:py-12">
+        <div className="px-8 py-7 md:px-12 md:py-9">
           <ChatBody stage={stage} />
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-te-gray/30 px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray/40">
-          <span>input · 按住快捷键说话</span>
+          <span>input · 按一下快捷键开始 · 再按一下结束</span>
           <span className="flex items-center gap-2">
             {isLive ? (
               <>
@@ -182,7 +189,7 @@ function ChatBody({ stage }: { stage: Stage }) {
   const showList = stage === "injecting";
 
   return (
-    <div className="relative min-h-[9rem]">
+    <div className="relative h-[11rem]">
       <AnimatePresence mode="wait" initial={false}>
         {!showList && (
           <motion.div
@@ -305,7 +312,7 @@ function RawTranscript({ stage }: { stage: Stage }) {
 function PolishedList() {
   return (
     <div className="flex flex-col gap-3 text-lg leading-relaxed text-te-fg md:text-xl">
-      <div className="font-mono text-[12px] uppercase tracking-[0.25em] text-te-accent">
+      <div className="font-mono text-lg text-te-accent md:text-xl">
         {POLISHED_TITLE} · 共 {POLISHED_LIST.length} 项
       </div>
       <ol className="flex flex-col gap-2">
@@ -329,22 +336,16 @@ function PolishedList() {
 }
 
 // 平台对应默认快捷键（与 src/lib/hotkey.ts getDefaultBindings 完全一致）
-function defaultKeys(platform: Platform): { icon: ReactNode; label: string }[] {
+function defaultKeys(platform: Platform): { glyph?: ReactNode; label: string }[] {
   if (platform === "macos") {
-    return [
-      { icon: <span aria-hidden>fn</span>, label: "Fn" },
-      { icon: <span aria-hidden>⌃</span>, label: "Control" },
-    ];
+    return [{ label: "Fn" }, { glyph: "⌃", label: "Ctrl" }];
   }
   if (platform === "windows") {
-    return [
-      { icon: <span aria-hidden>⌃</span>, label: "Ctrl" },
-      { icon: <WinIcon />, label: "Win" },
-    ];
+    return [{ glyph: "⌃", label: "Ctrl" }, { glyph: <WinIcon />, label: "Win" }];
   }
   return [
-    { icon: <span aria-hidden>⌃</span>, label: "Ctrl" },
-    { icon: <Diamond size={11} strokeWidth={2.5} />, label: "Super" },
+    { glyph: "⌃", label: "Ctrl" },
+    { glyph: <Diamond size={11} strokeWidth={2.5} />, label: "Super" },
   ];
 }
 
@@ -366,55 +367,52 @@ function WinIcon() {
   );
 }
 
-// 复刻 HotkeyPreview.Kbd 的小尺寸版本，给 demo 用
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-sm border border-te-accent bg-te-bg px-2.5 py-1 font-mono text-xs text-te-fg shadow-[inset_0_-2px_0_0_var(--te-accent)]">
-      {children}
-    </span>
-  );
-}
-
-function KeyboardHint({ visible }: { visible: boolean }) {
+function ShortcutKeys({ stage }: { stage: Stage }) {
   const platform = useMemo(() => detectPlatform(), []);
   const keys = useMemo(() => defaultKeys(platform), [platform]);
+  const pressed = stage === "recording";
 
   return (
-    <AnimatePresence>
-      {visible && (
-        <motion.div
-          data-promo-hide-mobile
-          className="absolute -top-12 right-0 flex items-center gap-2"
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -4 }}
-          transition={{ duration: 0.25 }}
-        >
-          <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
-            按住
-          </span>
-          {keys.map((k, i) => (
-            <Fragment key={k.label}>
-              {i > 0 && (
-                <span className="font-mono text-base text-te-light-gray/60">
-                  +
-                </span>
-              )}
-              <Kbd>
-                <span className="opacity-70">
-                  {k.label === "Command" ? <Command size={12} strokeWidth={2.5} /> : k.icon}
-                </span>
-                {k.label}
-              </Kbd>
-            </Fragment>
-          ))}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <div className="flex h-[52px] items-center gap-2">
+      {keys.map((k, i) => (
+        <Fragment key={k.label}>
+          {i > 0 && (
+            <span className="font-mono text-base text-te-light-gray/60">+</span>
+          )}
+          <ShortcutKey pressed={pressed} glyph={k.glyph} label={k.label} />
+        </Fragment>
+      ))}
+    </div>
   );
 }
 
-function RecorderBar({ stage }: { stage: Stage }) {
+function ShortcutKey({
+  pressed,
+  glyph,
+  label,
+}: {
+  pressed: boolean;
+  glyph?: ReactNode;
+  label: string;
+}) {
+  return (
+    <motion.span
+      animate={{ y: pressed ? 2 : 0, scale: pressed ? 0.97 : 1 }}
+      transition={{ duration: 0.12, ease: "easeOut" }}
+      className={
+        "inline-flex h-[52px] min-w-[64px] items-center justify-center gap-1.5 border px-3 font-mono text-xs uppercase tracking-[0.15em] transition-colors " +
+        (pressed
+          ? "border-te-accent bg-te-accent/15 text-te-accent shadow-[inset_0_-3px_0_0_var(--te-accent)]"
+          : "border-te-gray bg-te-bg text-te-fg shadow-[inset_0_-3px_0_0_var(--te-gray)]")
+      }
+    >
+      {glyph && <span className="opacity-80">{glyph}</span>}
+      <span>{label}</span>
+    </motion.span>
+  );
+}
+
+export function RecorderBar({ stage }: { stage: Stage }) {
   const canConfirm = stage === "recording";
   const canCancel = stage === "recording";
 
@@ -549,7 +547,7 @@ function SlidingProgress() {
   );
 }
 
-function Caption({ stage }: { stage: Stage }) {
+export function Caption({ stage }: { stage: Stage }) {
   return (
     <div className="relative h-4 w-full text-center">
       <AnimatePresence mode="wait">
