@@ -155,13 +155,12 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      # NOTE: 之前在这里加过 Warm up Finder 步骤想救 bundle_dmg.sh 的 osascript→Finder
-      # 通信，实测无效——GitHub macOS runner 上 osascript 返回 0 但实际不写入
-      # .DS_Store（Apple Events 在 truly headless 下是 silent no-op）。
-      # 结果是 dmg 进了 .background/background.png 但缺 .DS_Store，Finder 挂载
-      # 用默认 660×400 排列。要彻底修复需要：(a) 用 Python ds_store 库手工生成
-      # binary .DS_Store + (b) hdiutil convert UDZO→UDRW 注入 + 转回 UDZO。
-      # 单独 spike，未做。
+      # 历史背景：cargo-bundle 内置的 bundle_dmg.sh 用 AppleScript 让 Finder 写 .DS_Store，
+      # GitHub macOS runner 是 headless 的，osascript 返回 0 但 Apple Events 不实际投递，
+      # 导致 dmg 进了 .background/background.png 但缺 .DS_Store，挂载后 Finder 用默认外观。
+      # 现在的方案：tauri.conf.json 移除 dmg target，CI 自己用 appdmg 打 dmg（直接写
+      # .DS_Store 二进制，无需 Finder/AppleScript）。本地开发要打 dmg 也用同一条路径
+      # `pnpm dmg:build`，确保本地 / CI 表现一致。
 
       # 直接调 Tauri CLI；macOS 签名 / 公证 / updater 签名都靠 env 透传给 CLI 自己处理。
       # tauri-action 替你做的 keychain import 是 Tauri CLI 2.x 已经内置的能力，env 配齐即可。
@@ -180,6 +179,52 @@ jobs:
         # tauri.conf.json 默认 `createUpdaterArtifacts: false`（让本地 / 协作者裸跑 build 不需要 updater 私钥）；
         # 发版构建在这里临时 override 打开，CI 的 TAURI_SIGNING_PRIVATE_KEY 已注入。
         run: pnpm tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      # macOS 上跑 appdmg 自打 DMG（绕开 Tauri 内置 AppleScript 路径）。.app 已经被 Tauri CLI
+      # codesign + notarize + staple 了；DMG 是外壳，里面装的 .app 是已被 Apple 认证的，
+      # Gatekeeper 拿到包后会检查内部 .app 的 ticket。下面再单独给 DMG 自身签名 + 公证一遍，
+      # 避免首次打开弹"已下载自互联网"的额外 prompt。
+      - name: Build DMG (appdmg)
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: pnpm dmg:build --target "$RUST_TARGET"
+
+      # 给 DMG 本身签名（用同一张 Developer ID Application 证书，keychain 已被 Tauri build 阶段
+      # import）。没配证书的回退路径：跳过签名，CI 接受未签名 DMG（跟之前 ad-hoc .app 同等待遇）。
+      - name: Sign DMG
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_SIGNING_IDENTITY != ''
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          set -euo pipefail
+          dmg=$(ls src-tauri/target/${RUST_TARGET}/release/bundle/dmg/OpenSpeech_*.dmg | head -1)
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
+          codesign -dvvv "$dmg" 2>&1 | head -10
+
+      # 公证 DMG：把已签名 DMG 提交给 Apple 公证服务，等回执后 staple 进 DMG。
+      # 没配公证 secrets 时跳过——dmg 仍是签名的，只是首次打开会有 Gatekeeper 提示。
+      - name: Notarize DMG
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_ID != '' && env.APPLE_PASSWORD != '' && env.APPLE_TEAM_ID != ''
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          set -euo pipefail
+          dmg=$(ls src-tauri/target/${RUST_TARGET}/release/bundle/dmg/OpenSpeech_*.dmg | head -1)
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
 
       # 防 ad-hoc 倒灌：tauri-action / Tauri CLI 在 Apple secrets 缺失时会**自动跳签**，产物变 ad-hoc。
       # ad-hoc 包跑起来每次访问 Keychain 都会弹"输入登录密码"框（每次签名指纹都变 → ACL 不认）。

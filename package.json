@@ -11,7 +11,17 @@
     "tauri:dev": "tauri dev",
     "tauri:dev:staging": "tauri dev --features staging",
     "reset:permissions": "bash scripts/reset-permissions.sh",
-    "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml"
+    "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml",
+    "dmg:build": "node scripts/build-dmg.mjs"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "fs-xattr",
+      "macos-alias"
+    ],
+    "patchedDependencies": {
+      "appdmg": "patches/appdmg.patch"
+    }
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -52,6 +62,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "appdmg": "^0.6.6",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"
   }

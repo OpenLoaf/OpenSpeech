@@ -33,7 +33,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app", "deb", "rpm", "appimage", "nsis"],
+    "targets": ["app", "deb", "rpm", "appimage", "nsis"],
     "createUpdaterArtifacts": false,
     "icon": [
       "icons/32x32.png",
@@ -54,13 +54,7 @@
     "macOS": {
       "minimumSystemVersion": "10.15",
       "entitlements": "./entitlements.plist",
-      "signingIdentity": "-",
-      "dmg": {
-        "background": "dmg/background.png",
-        "windowSize": { "width": 540, "height": 380 },
-        "appPosition": { "x": 140, "y": 180 },
-        "applicationFolderPosition": { "x": 400, "y": 180 }
-      }
+      "signingIdentity": "-"
     }
   },
   "plugins": {
