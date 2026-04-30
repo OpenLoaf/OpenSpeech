@@ -191,18 +191,31 @@ jobs:
           RUST_TARGET: ${{ matrix.rust-target }}
         run: pnpm dmg:build --target "$RUST_TARGET"
 
-      # 给 DMG 本身签名（用同一张 Developer ID Application 证书，keychain 已被 Tauri build 阶段
-      # import）。没配证书的回退路径：跳过签名，CI 接受未签名 DMG（跟之前 ad-hoc .app 同等待遇）。
+      # 给 DMG 本身签名。Tauri build step 创建的临时 keychain 不进 user search list，
+      # 跨 step 后 codesign 找不到证书；这里独立 import 一遍同样的 secrets。
       - name: Sign DMG
         if: startsWith(matrix.platform, 'macos') && env.APPLE_SIGNING_IDENTITY != ''
         shell: bash
         env:
+          APPLE_CERTIFICATE: ${{ secrets.MAC_CER_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CER_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           RUST_TARGET: ${{ matrix.rust-target }}
         run: |
           set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/openspeech-dmg.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo -n "$APPLE_CERTIFICATE" | base64 -d > "$CERT_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed -e 's/^[[:space:]]*//' -e 's/"//g')
+          rm -f "$CERT_PATH"
           dmg=$(ls src-tauri/target/${RUST_TARGET}/release/bundle/dmg/OpenSpeech_*.dmg | head -1)
-          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --keychain "$KEYCHAIN_PATH" "$dmg"
           codesign -dvvv "$dmg" 2>&1 | head -10
 
       # 公证 DMG：把已签名 DMG 提交给 Apple 公证服务，等回执后 staple 进 DMG。
