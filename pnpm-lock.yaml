@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   appdmg:
-    hash: e553c7f430b17833bd0cd2f8a27297d53a050c93cb353a3cc81a475ed6e3d562
+    hash: af940030844d5c760900e7cd8f0c4617dfcb1f39f74443933b91c7895de5753b
     path: patches/appdmg.patch
 
 importers:
@@ -124,7 +124,7 @@ importers:
         version: 4.7.0(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
       appdmg:
         specifier: ^0.6.6
-        version: 0.6.6(patch_hash=e553c7f430b17833bd0cd2f8a27297d53a050c93cb353a3cc81a475ed6e3d562)
+        version: 0.6.6(patch_hash=af940030844d5c760900e7cd8f0c4617dfcb1f39f74443933b91c7895de5753b)
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
@@ -3347,7 +3347,7 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
-  appdmg@0.6.6(patch_hash=e553c7f430b17833bd0cd2f8a27297d53a050c93cb353a3cc81a475ed6e3d562):
+  appdmg@0.6.6(patch_hash=af940030844d5c760900e7cd8f0c4617dfcb1f39f74443933b91c7895de5753b):
     dependencies:
       async: 1.5.2
       ds-store: 0.1.6

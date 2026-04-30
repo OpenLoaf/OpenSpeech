@@ -1,50 +1,11 @@
-diff --git a/lib/appdmg.js b/lib/appdmg.js
 --- a/lib/appdmg.js
 +++ b/lib/appdmg.js
-@@ -206,7 +206,10 @@
-    **/
-
-   pipeline.addStep('Creating temporary image', function (next) {
--    hdiutil.create(global.opts.title, `${global.megabytes}m`, global.opts.filesystem, function (err, temporaryImagePath) {
-+    // macOS 26 (Tahoe) Endpoint Security 拒绝把 codesigned <X>.app 写到同名 /Volumes/<X>/ 下，
-+    // 所以临时 staging volume 用别名，复制完 .app 之后立即 diskutil rename 回真正的 title，
-+    // 这样后续写入 .DS_Store 的 backgroundImageAlias 才能 bake 到最终 mount 路径。
-+    global.stagingTitle = `${global.opts.title}~staging`
-+    hdiutil.create(global.stagingTitle, `${global.megabytes}m`, global.opts.filesystem, function (err, temporaryImagePath) {
-       if (err) return next(err)
-
-       pipeline.addCleanupStep('unlink-temporary-image', 'Removing temporary image', function (next) {
-@@ -227,7 +230,7 @@
-       if (err) return next(err)
-
-       pipeline.addCleanupStep('unmount-temporary-image', 'Unmounting temporary image', function (next) {
--        hdiutil.detach(temporaryMountPath, next)
-+        hdiutil.detach(global.temporaryMountPath, next)
-       })
-
-       global.temporaryMountPath = temporaryMountPath
-@@ -349,9 +352,21 @@
+@@ -349,7 +349,7 @@
        const name = entry.name || path.basename(entry.path)
        const finalPath = path.join(global.temporaryMountPath, name)
-
+ 
 -      util.sh('cp', ['-R', resolvePath(entry.path), finalPath], cb)
 +      util.sh('ditto', [resolvePath(entry.path), finalPath], cb)
      }, next)
    })
-
-   /**
-    **
-    **/
-+
-+  pipeline.addStep('Renaming volume to final title', function (next) {
-+    util.sh('diskutil', ['rename', global.temporaryMountPath, global.opts.title], function (err) {
-+      if (err) return next(err)
-+      global.temporaryMountPath = path.join('/Volumes', global.opts.title)
-+      global.bkgdir = path.join(global.temporaryMountPath, '.background')
-+      next(null)
-+    })
-+  })
-+
-+  /**
-+   **
-+   **/
+ 
