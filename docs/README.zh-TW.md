@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="../public/logo-write-bg.png" alt="OpenSpeech" width="120" />
+  <img src="images/logo-rounded.png" alt="OpenSpeech" width="120" />
 
   <h1>OpenSpeech</h1>
 
