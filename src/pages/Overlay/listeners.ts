@@ -10,6 +10,9 @@ interface FsmPayload {
   errorMessage: string | null;
   recordingId: string | null;
   liveTranscript: string;
+  /** main 在注入末尾段广播 true，让 pill 早于"全部敲完"开始 exit。可选字段：
+   *  老版本主窗发的 payload 没有这个字段，缺省 false。 */
+  pillEarlyHide?: boolean;
 }
 
 interface KeyPreviewPayload {

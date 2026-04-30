@@ -1,6 +1,7 @@
-// 文本注入：转写结果写入剪贴板后，模拟粘贴键发送到当前焦点输入框。
-// 当前仅实现"剪贴板 + 模拟粘贴"路径；逐字符模拟（enigo `text`）作为未来切换项。
-// macOS 用 Cmd+V，Windows / Linux 用 Ctrl+V。
+// 文本注入：两条路径
+//   - inject_paste：剪贴板 + Cmd/Ctrl+V，整段一次贴入。用作末尾兜底 / 失败回退。
+//   - inject_type：enigo text() 直接键入 Unicode。流式逐字符输出走这条，
+//     不污染用户剪贴板、不被 IME 拦截。
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
@@ -22,5 +23,15 @@ pub fn inject_paste() -> Result<(), String> {
     enigo
         .key(modifier, Direction::Release)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn inject_type(text: String) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    enigo.text(&text).map_err(|e| e.to_string())?;
     Ok(())
 }

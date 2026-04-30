@@ -69,6 +69,12 @@ interface RecordingStore {
    */
   liveTranscript: string;
   /**
+   * 注入末尾段提前隐藏悬浮栏：AI_REFINE 流式 token 全部敲完、只剩末尾 diff
+   * 那一小段兜底 paste 时置 true，让 overlay pill 在用户看到几乎全部文字时
+   * 同步退场，比"全部敲完 + 800ms idle 延迟"快一拍。idle / 新一轮录音都重置为 false。
+   */
+  pillEarlyHide: boolean;
+  /**
    * 临时覆盖 settings.general.asrSegmentMode——只用于"必须用 VAD 才有意义"的
    * 场景（目前是 Onboarding 第三步 Try-It：默认 MANUAL 没有 partial，
    * 用户按下快捷键后到松手前看不到任何实时文字，会以为坏了）。组件挂载时
@@ -373,7 +379,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // 拿到 transcript 后切到 "injecting"——overlay 把"思考中"切成"输出中"，
   // 反映真实进度（接下来要么走 AI_REFINE 流式逐字敲、要么末尾整段 paste）。
   if (text && IS_MAIN_WINDOW && useRecordingStore.getState().state === "transcribing") {
-    useRecordingStore.setState({ state: "injecting" });
+    useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
   }
   if (recSettled.status === "rejected") {
     console.error("[recording] stop failed:", recSettled.reason);
@@ -428,6 +434,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       );
       rememberHotwordsCacheId(hotwords, r.hotwordsCacheId);
       flushPendingInject();
+      // 流式 token 已全部排队，剩下的只是 injectChain 中的最后几次 paste +
+      // 末尾 diff 兜底。这一刻让 overlay pill 提前 exit，用户视感是"还有一点点
+      // 文字时悬浮栏淡出"，而不是"全部敲完才消失"，节奏快一拍。
+      if (IS_MAIN_WINDOW) {
+        useRecordingStore.setState({ pillEarlyHide: true });
+      }
       try {
         await injectChain;
       } catch {}
@@ -489,21 +501,19 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     if (finalText.startsWith(lastInjectedText)) {
       const remaining = finalText.slice(lastInjectedText.length);
       if (remaining) {
-        let clipboardOk = false;
+        // 末尾兜底走 inject_type 直接键入：和流式路径一致，不污染用户剪贴板。
+        // 上面 L446-450 已经把整段 refinedText 写过一次剪贴板供用户手动复用，
+        // 这里 remaining 不需要再走剪贴板。
         try {
-          await writeClipboard(remaining);
-          clipboardOk = true;
+          await invoke("inject_type", { text: remaining });
         } catch (e) {
-          console.warn("[clipboard] writeText failed:", e);
-          notifyOverlay("warning", i18n.t("overlay:toast.clipboard_failed.title"), {
-            description: String(e),
-          });
-        }
-        if (clipboardOk) {
+          console.warn("[inject] type tail failed, fallback to paste:", e);
+          // type 失败时降级到剪贴板路径，保证文字最终落得到。
           try {
+            await writeClipboard(remaining);
             await invoke("inject_paste");
-          } catch (e) {
-            console.warn("[inject] paste failed:", e);
+          } catch (e2) {
+            console.warn("[inject] paste fallback also failed:", e2);
             notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
               description: i18n.t("overlay:toast.paste_failed.description"),
             });
@@ -529,71 +539,40 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   return { rec, text: finalText };
 };
 
-// AUTO（VAD）模式下的增量注入状态：每次服务端 Final 到达，asr-final payload 是
-// 当前为止「所有已 Final 段拼起来的整段」。我们把超出 lastInjectedText 的差量
-// 写剪贴板 + 模拟 Cmd/Ctrl+V，让用户边说边看到字落到焦点输入框里。
+// 流式增量注入：每次上游产生新 delta，立即 invoke("inject_type") 把这段
+// Unicode 字符直接键入到当前焦点输入框（enigo text()，不走剪贴板、不发 Cmd+V）。
+// 多个 delta 通过 injectChain Promise 串行排队，保证字符按顺序敲下去。
 //
-// injectChain 串行化：enigo 的 Cmd+V 不会被打断，但 writeClipboard 是异步，
-// 多次 final 几乎同时到达时会撞剪贴板（后写覆盖前写、前一段没贴完就被改）。
-// 用一个 Promise 串行链兜住。
-//
-// 节流：AI_REFINE 流式 token 频率高（10–30/s），每个 delta 一次完整 IPC+Enigo+paste
-// 会让 overlay 动画肉眼可见地卡顿。把 delta 攒进 pendingDelta，INJECT_FLUSH_MS
-// 内只 flush 一次；累积超过 INJECT_FLUSH_MAX_CHARS 立即 flush，避免长 token 饿肚子。
-const INJECT_FLUSH_MS = 40;
-const INJECT_FLUSH_MAX_CHARS = 24;
+// 不再做节流 / 批量 paste：上游 token 怎么来，键盘就怎么敲，stream 节奏即视感节奏。
+// enigo text() 单字符 macOS ~5ms / Windows ~3ms / Linux X11 ~15ms，60 字符/s 完全跟得上。
 let lastInjectedText = "";
 let injectChain: Promise<void> = Promise.resolve();
-let pendingDelta = "";
-let flushTimer: number | null = null;
 
 const flushPendingInject = () => {
-  if (flushTimer !== null) {
-    window.clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  if (!pendingDelta) return;
-  const chunk = pendingDelta;
-  pendingDelta = "";
-  injectChain = injectChain.then(async () => {
-    try {
-      await writeClipboard(chunk);
-      await invoke("inject_paste");
-    } catch (e) {
-      console.warn("[stt] incremental inject failed:", e);
-    }
-  });
+  // 兼容保留：以前外部调用此函数 flush 节流 buffer，新路径无 buffer，这里成为 no-op。
+  // injectChain 本身已串行排队，调用方继续 await injectChain 即可。
 };
 
 const resetIncrementalInject = () => {
-  if (flushTimer !== null) {
-    window.clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  pendingDelta = "";
   lastInjectedText = "";
 };
 
 const injectIncremental = (fullText: string) => {
   if (!IS_MAIN_WINDOW) return;
   // 服务端纠错把已注入的前缀改写时（极少），无法回退已敲下去的字符；
-  // 跳过本轮增量，等 finalize 走原路径把"剩余的"再贴一次（用户视觉上会出现重复，
+  // 跳过本轮增量，等末尾兜底 diff 把"剩余的"再敲一次（用户视觉上会出现重复，
   // 但比反复抖动更可控）。
   if (!fullText.startsWith(lastInjectedText)) return;
   const delta = fullText.slice(lastInjectedText.length);
   if (!delta) return;
   lastInjectedText = fullText;
-  pendingDelta += delta;
-  if (pendingDelta.length >= INJECT_FLUSH_MAX_CHARS) {
-    flushPendingInject();
-    return;
-  }
-  if (flushTimer === null) {
-    flushTimer = window.setTimeout(() => {
-      flushTimer = null;
-      flushPendingInject();
-    }, INJECT_FLUSH_MS);
-  }
+  injectChain = injectChain.then(async () => {
+    try {
+      await invoke("inject_type", { text: delta });
+    } catch (e) {
+      console.warn("[stt] incremental inject failed:", e);
+    }
+  });
 };
 
 const discardRecording = () => {
@@ -770,6 +749,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     audioLevels: emptyLevels(),
     recordingId: null,
     liveTranscript: "",
+    pillEarlyHide: false,
     segmentModeOverride: null,
 
     setSegmentModeOverride: (mode) => set({ segmentModeOverride: mode }),
@@ -876,6 +856,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           errorMessage: s.errorMessage,
           recordingId: s.recordingId,
           liveTranscript: s.liveTranscript,
+          pillEarlyHide: s.pillEarlyHide,
         });
         if (snap === prevSnapshot) return;
         prevSnapshot = snap;
@@ -887,6 +868,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           errorMessage: s.errorMessage,
           recordingId: s.recordingId,
           liveTranscript: s.liveTranscript,
+          pillEarlyHide: s.pillEarlyHide,
         });
       });
 
@@ -916,6 +898,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           errorMessage: s.errorMessage,
           recordingId: s.recordingId,
           liveTranscript: s.liveTranscript,
+          pillEarlyHide: s.pillEarlyHide,
         });
         console.log("[recording] overlay-ready → resent recording-phase snapshot");
       });
@@ -1143,6 +1126,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             lastPressAt: now,
             audioLevels: emptyLevels(),
             recordingId,
+            pillEarlyHide: false,
             liveTranscript: "",
           });
           // Rust audio_level_start 现在同步等到 cpal stream 真正起来才返回。

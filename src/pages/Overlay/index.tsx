@@ -44,7 +44,13 @@ export default function OverlayPage() {
   }, [interfaceLang, settingsLoaded]);
 
   useOverlayListeners({
-    onFsm: (p) => applyFsm(p.state, p.errorMessage, p.liveTranscript),
+    onFsm: (p) =>
+      applyFsm(
+        p.state,
+        p.errorMessage,
+        p.liveTranscript,
+        p.pillEarlyHide ?? false,
+      ),
     onToast: showToast,
     // 任意非 repeat 的 Esc 按下都关 toast；录音内的双击/中止仍由主窗 FSM 收。
     onEscPressed: () => {
@@ -59,11 +65,19 @@ export default function OverlayPage() {
     if (state.main === "idle") resetWaveform();
   }, [state.main]);
 
-  const visible = state.main !== "idle" || state.toast !== null;
+  // injecting 末尾段提前隐藏：流式 token 都已敲完、只剩末尾兜底 paste 那一段
+  // 文字时，主窗会广播 pillEarlyHide=true。让用户在"看到几乎全部文字"那一刻
+  // 同时看到悬浮栏退场，比"文字全敲完 + 800ms"再消失节奏快一拍。
+  const pillEarlyHide = state.pillEarlyHide;
+  const visible =
+    (state.main !== "idle" && !pillEarlyHide) || state.toast !== null;
   // 录音活动期 = 胶囊必须显示。idle / error 时若有 toast，就让 toast 独占——
   // error 状态的红字本来就只是 toast 标题的回显，没必要在底下再挂个胶囊。
-  const pillVisible =
-    state.main !== "idle" && state.main !== "error" ? true : state.toast === null;
+  const pillVisible = pillEarlyHide
+    ? false
+    : state.main !== "idle" && state.main !== "error"
+      ? true
+      : state.toast === null;
 
   // 窗口尺寸切换走"先涨后缩"两段：要变大时立刻涨（让动画里新元素有地方画），
   // 要变小时延迟到 framer-motion exit 动画结束（约 160ms）再收，避免窗口先于
@@ -241,35 +255,19 @@ export default function OverlayPage() {
               {centerKey === "progress" && (
                 <div className="relative flex h-full w-full flex-col items-center justify-center gap-1 px-2">
                   <div className="relative h-3 w-full">
-                    <AnimatePresence initial={false}>
-                      <motion.span
-                        key={progressLabelKey}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: 0.24, ease: "easeInOut" }}
-                        className="absolute inset-0 flex items-center justify-center truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg"
-                      >
-                        {t(
-                          progressLabelKey === "injecting"
-                            ? "overlay:status.injecting"
-                            : "overlay:status.transcribing",
-                        )}
-                      </motion.span>
-                    </AnimatePresence>
+                    <span
+                      key={progressLabelKey}
+                      className="absolute inset-0 flex items-center justify-center truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg"
+                    >
+                      {t(
+                        progressLabelKey === "injecting"
+                          ? "overlay:status.injecting"
+                          : "overlay:status.transcribing",
+                      )}
+                    </span>
                   </div>
                   <div className="relative h-px w-32 overflow-hidden bg-te-gray/40">
-                    <motion.span
-                      className="absolute inset-y-0 bg-te-accent"
-                      style={{ width: "33%" }}
-                      initial={{ left: "-33%" }}
-                      animate={{ left: "100%" }}
-                      transition={{
-                        duration: 1.1,
-                        repeat: Infinity,
-                        ease: "linear",
-                      }}
-                    />
+                    <span className="te-progress-bar absolute inset-y-0 left-0 bg-te-accent" />
                   </div>
                 </div>
               )}

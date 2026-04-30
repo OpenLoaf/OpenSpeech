@@ -271,3 +271,15 @@
 .te-dialog-popup[data-ending-style] {
   opacity: 0;
 }
+
+/* overlay 进度条：用 CSS 动画跑在合成线程上，主线程被流式 token / React commit
+   占满时也不丢帧。Framer Motion 的 repeat:Infinity 走 rAF + JS 写 style，会卡。 */
+@keyframes te-progress-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.te-progress-bar {
+  width: 33%;
+  animation: te-progress-slide 1.1s linear infinite;
+  will-change: transform;
+}

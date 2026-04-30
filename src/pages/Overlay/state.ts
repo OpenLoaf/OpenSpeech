@@ -35,6 +35,8 @@ export interface OverlayState {
   liveTranscript: string;
   toast: ToastState | null;
   escArmed: boolean;
+  /** 注入末尾段 main 窗主动让 pill 提前 exit，比"全部敲完"快一拍。 */
+  pillEarlyHide: boolean;
 }
 
 const INITIAL: OverlayState = {
@@ -43,6 +45,7 @@ const INITIAL: OverlayState = {
   liveTranscript: "",
   toast: null,
   escArmed: false,
+  pillEarlyHide: false,
 };
 
 type Action =
@@ -51,6 +54,7 @@ type Action =
       state: RecordingState;
       errorMessage: string | null;
       liveTranscript: string;
+      pillEarlyHide: boolean;
     }
   | { type: "toast-show"; payload: ToastPayload; id: number }
   | { type: "toast-dismiss"; id?: number }
@@ -68,6 +72,7 @@ function reduce(s: OverlayState, a: Action): OverlayState {
         main: a.state,
         errorMessage: a.errorMessage,
         liveTranscript: a.liveTranscript,
+        pillEarlyHide: a.pillEarlyHide,
         toast: s.main === "error" && a.state !== "error" ? null : s.toast,
       };
     case "toast-show":
@@ -95,6 +100,7 @@ export interface OverlayMachine {
     state: RecordingState,
     errorMessage: string | null,
     liveTranscript: string,
+    pillEarlyHide: boolean,
   ) => void;
 }
 
@@ -143,8 +149,15 @@ export function useOverlayMachine(): OverlayMachine {
     s: RecordingState,
     errorMessage: string | null,
     liveTranscript: string,
+    pillEarlyHide: boolean,
   ) => {
-    dispatch({ type: "fsm", state: s, errorMessage, liveTranscript });
+    dispatch({
+      type: "fsm",
+      state: s,
+      errorMessage,
+      liveTranscript,
+      pillEarlyHide,
+    });
   };
 
   // 卸载时清掉所有 timer，防止 setTimeout 在组件销毁后还派发 dispatch（dev StrictMode

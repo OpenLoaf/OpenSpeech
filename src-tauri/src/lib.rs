@@ -764,6 +764,7 @@ pub fn run() {
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
             inject::inject_paste,
+            inject::inject_type,
             permissions::permission_check_microphone,
             permissions::permission_check_accessibility,
             permissions::permission_check_input_monitoring,
