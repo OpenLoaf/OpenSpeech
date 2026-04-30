@@ -6,30 +6,109 @@ import { detectPlatform, type Platform } from "@/lib/platform";
 type SegKind = "keep" | "filler" | "correction";
 type Segment = { text: string; kind: SegKind };
 
-const RAW: Segment[] = [
-  { text: "嗯，", kind: "filler" },
-  { text: "我们这周要做三件事", kind: "keep" },
-  { text: "啊", kind: "filler" },
-  { text: "。第一个，", kind: "keep" },
-  { text: "呃，", kind: "filler" },
-  { text: "把", kind: "keep" },
-  { text: "那个", kind: "filler" },
-  { text: "登录页面…不对不对，是", kind: "correction" },
-  { text: "注册页面修一下", kind: "keep" },
-  { text: "。然后", kind: "keep" },
-  { text: "呢", kind: "filler" },
-  { text: "，把数据库迁移搞完", kind: "keep" },
-  { text: "。最后，把测试覆盖率提到 80% 以上。", kind: "keep" },
-];
+type DemoLocale = {
+  raw: Segment[];
+  polishedHeader: string;
+  polishedList: string[];
+  scratchPath: string;
+  scratchFooterPrompt: string;
+  charsUnit: string;
+  liveLabel: string;
+  waiting: string;
+  listening: string;
+};
 
-const RAW_TEXT = RAW.map((s) => s.text).join("");
+const LOCALES: Record<"zh-CN" | "en" | "zh-TW", DemoLocale> = {
+  "zh-CN": {
+    raw: [
+      { text: "嗯，", kind: "filler" },
+      { text: "我们这周要做三件事", kind: "keep" },
+      { text: "啊", kind: "filler" },
+      { text: "。第一个，", kind: "keep" },
+      { text: "呃，", kind: "filler" },
+      { text: "把", kind: "keep" },
+      { text: "那个", kind: "filler" },
+      { text: "登录页面…不对不对，是", kind: "correction" },
+      { text: "注册页面修一下", kind: "keep" },
+      { text: "。然后", kind: "keep" },
+      { text: "呢", kind: "filler" },
+      { text: "，把数据库迁移搞完", kind: "keep" },
+      { text: "。最后，把测试覆盖率提到 80% 以上。", kind: "keep" },
+    ],
+    polishedHeader: "本周任务 · 共 3 项",
+    polishedList: ["修改注册页面", "完成数据库迁移", "测试覆盖率提升至 80% 以上"],
+    scratchPath: "~/scratch.md",
+    scratchFooterPrompt: "input · 按一下快捷键开始 · 再按一下结束",
+    charsUnit: "字",
+    liveLabel: "live",
+    waiting: "// 等待按键",
+    listening: "// 正在听...",
+  },
+  en: {
+    raw: [
+      { text: "Um, ", kind: "filler" },
+      { text: "we've got three things to ship this week", kind: "keep" },
+      { text: ", uh", kind: "filler" },
+      { text: ". First, ", kind: "keep" },
+      { text: "uh, ", kind: "filler" },
+      { text: "fix the ", kind: "keep" },
+      { text: "you know, ", kind: "filler" },
+      { text: "login page... wait no, the ", kind: "correction" },
+      { text: "signup page", kind: "keep" },
+      { text: ". Then ", kind: "keep" },
+      { text: "well, ", kind: "filler" },
+      { text: "finish the database migration", kind: "keep" },
+      { text: ". Finally, lift test coverage above 80%.", kind: "keep" },
+    ],
+    polishedHeader: "This week · 3 items",
+    polishedList: [
+      "Fix the signup page",
+      "Finish the database migration",
+      "Lift test coverage above 80%",
+    ],
+    scratchPath: "~/scratch.md",
+    scratchFooterPrompt: "input · press hotkey to start · press again to stop",
+    charsUnit: "chars",
+    liveLabel: "live",
+    waiting: "// awaiting hotkey",
+    listening: "// listening...",
+  },
+  "zh-TW": {
+    raw: [
+      { text: "嗯，", kind: "filler" },
+      { text: "我們這週要做三件事", kind: "keep" },
+      { text: "啊", kind: "filler" },
+      { text: "。第一個，", kind: "keep" },
+      { text: "呃，", kind: "filler" },
+      { text: "把", kind: "keep" },
+      { text: "那個", kind: "filler" },
+      { text: "登入頁面…不對不對，是", kind: "correction" },
+      { text: "註冊頁面修一下", kind: "keep" },
+      { text: "。然後", kind: "keep" },
+      { text: "呢", kind: "filler" },
+      { text: "，把資料庫遷移搞完", kind: "keep" },
+      { text: "。最後，把測試覆蓋率提到 80% 以上。", kind: "keep" },
+    ],
+    polishedHeader: "本週任務 · 共 3 項",
+    polishedList: ["修改註冊頁面", "完成資料庫遷移", "測試覆蓋率提升至 80% 以上"],
+    scratchPath: "~/scratch.md",
+    scratchFooterPrompt: "input · 按一下快捷鍵開始 · 再按一下結束",
+    charsUnit: "字",
+    liveLabel: "live",
+    waiting: "// 等待按鍵",
+    listening: "// 正在聽...",
+  },
+};
 
-const POLISHED_TITLE = "本周任务";
-const POLISHED_LIST = [
-  "修改注册页面",
-  "完成数据库迁移",
-  "测试覆盖率提升至 80% 以上",
-];
+function useDemoLocale(): DemoLocale {
+  return useMemo(() => {
+    if (typeof window === "undefined") return LOCALES["zh-CN"];
+    const lang = new URLSearchParams(window.location.search).get("lang");
+    if (lang === "en") return LOCALES.en;
+    if (lang === "zh-TW" || lang === "zhTW" || lang === "tw") return LOCALES["zh-TW"];
+    return LOCALES["zh-CN"];
+  }, []);
+}
 
 // 对齐 src/pages/Overlay 的真实 RecordingState：preparing / recording / transcribing / injecting / idle
 export type Stage =
@@ -138,11 +217,13 @@ export default function DemoSection() {
 }
 
 export function ScratchPanel({ stage }: { stage: Stage }) {
+  const locale = useDemoLocale();
+  const rawText = useMemo(() => locale.raw.map((s) => s.text).join(""), [locale]);
   const charCount =
     stage === "injecting"
-      ? POLISHED_LIST.join("").length + POLISHED_TITLE.length
+      ? locale.polishedList.join("").length + locale.polishedHeader.length
       : stage === "polishing"
-        ? RAW_TEXT.length
+        ? rawText.length
         : 0;
   const isLive = stage === "recording" || stage === "transcribing";
 
@@ -152,7 +233,7 @@ export function ScratchPanel({ stage }: { stage: Stage }) {
         <div className="flex items-center justify-between gap-3 border-b border-te-gray/30 px-5 py-3">
           <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.25em] text-te-light-gray/70">
             <span className="text-te-accent">▍</span>
-            <span>~/scratch.md</span>
+            <span>{locale.scratchPath}</span>
           </div>
           <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-te-accent">
             {STAGE_TAG[stage]}
@@ -164,7 +245,7 @@ export function ScratchPanel({ stage }: { stage: Stage }) {
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-te-gray/30 px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray/40">
-          <span>input · 按一下快捷键开始 · 再按一下结束</span>
+          <span>{locale.scratchFooterPrompt}</span>
           <span className="flex items-center gap-2">
             {isLive ? (
               <>
@@ -173,10 +254,12 @@ export function ScratchPanel({ stage }: { stage: Stage }) {
                   animate={{ opacity: [1, 0.3, 1] }}
                   transition={{ duration: 1.4, repeat: Infinity }}
                 />
-                live
+                {locale.liveLabel}
               </>
             ) : (
-              <span>{charCount} 字</span>
+              <span>
+                {charCount} {locale.charsUnit}
+              </span>
             )}
           </span>
         </div>
@@ -219,13 +302,15 @@ function ChatBody({ stage }: { stage: Stage }) {
 }
 
 function RawTranscript({ stage }: { stage: Stage }) {
+  const locale = useDemoLocale();
+  const rawText = useMemo(() => locale.raw.map((s) => s.text).join(""), [locale]);
   const [count, setCount] = useState(0);
   const reduce = useReducedMotion();
 
   useEffect(() => {
     if (stage === "transcribing") {
       setCount(0);
-      const total = RAW_TEXT.length;
+      const total = rawText.length;
       const step = Math.max(28, Math.floor(STAGE_DURATION.transcribing / total));
       const id = setInterval(() => {
         setCount((c) => {
@@ -238,13 +323,13 @@ function RawTranscript({ stage }: { stage: Stage }) {
       }, step);
       return () => clearInterval(id);
     }
-    if (stage === "polishing") setCount(RAW_TEXT.length);
+    if (stage === "polishing") setCount(rawText.length);
     if (stage === "idle" || stage === "recording") setCount(0);
-  }, [stage]);
+  }, [stage, rawText]);
 
   useEffect(() => {
-    if (reduce) setCount(RAW_TEXT.length);
-  }, [reduce]);
+    if (reduce) setCount(rawText.length);
+  }, [reduce, rawText]);
 
   const showCursor = stage === "recording" || stage === "transcribing";
 
@@ -252,7 +337,7 @@ function RawTranscript({ stage }: { stage: Stage }) {
     return (
       <div className="flex min-h-[1.6em] items-baseline">
         <span className="font-mono text-sm text-te-light-gray/40">
-          {stage === "recording" ? "// 正在听..." : "// 等待按键"}
+          {stage === "recording" ? locale.listening : locale.waiting}
         </span>
         <motion.span
           className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-te-accent"
@@ -272,7 +357,7 @@ function RawTranscript({ stage }: { stage: Stage }) {
   let consumed = 0;
   return (
     <div className="text-lg leading-relaxed text-te-fg md:text-xl">
-      {RAW.map((seg, i) => {
+      {locale.raw.map((seg, i) => {
         const start = consumed;
         consumed = start + seg.text.length;
         const visible = Math.max(0, Math.min(seg.text.length, count - start));
@@ -310,13 +395,14 @@ function RawTranscript({ stage }: { stage: Stage }) {
 }
 
 function PolishedList() {
+  const locale = useDemoLocale();
   return (
     <div className="flex flex-col gap-3 text-lg leading-relaxed text-te-fg md:text-xl">
       <div className="font-mono text-lg text-te-accent md:text-xl">
-        {POLISHED_TITLE} · 共 {POLISHED_LIST.length} 项
+        {locale.polishedHeader}
       </div>
       <ol className="flex flex-col gap-2">
-        {POLISHED_LIST.map((item, i) => (
+        {locale.polishedList.map((item, i) => (
           <motion.li
             key={item}
             className="flex items-baseline gap-3"
