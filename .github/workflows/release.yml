@@ -470,8 +470,10 @@ jobs:
       #   - cos://bucket/latest-beta.json             beta 滚动指针
       # 失败不阻塞 GitHub Release（已经在前面 publish 了），只是丢失这次的 COS 镜像。
       - name: Install coscli
+        # 上游产物文件名是 `coscli-vX.Y.Z-linux-amd64`（带版本号），不是 `coscli-linux-amd64`。
+        # 升级时同步改 URL 与文件名两处。
         run: |
-          curl -fsSL "https://github.com/tencentyun/coscli/releases/download/v1.0.7/coscli-linux-amd64" -o /tmp/coscli
+          curl -fsSL "https://github.com/tencentyun/coscli/releases/download/v1.0.8/coscli-v1.0.8-linux-amd64" -o /tmp/coscli
           chmod +x /tmp/coscli
           sudo mv /tmp/coscli /usr/local/bin/coscli
           coscli --version
