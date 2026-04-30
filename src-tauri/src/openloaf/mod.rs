@@ -141,6 +141,8 @@ impl OpenLoafState {
             base_url: DEFAULT_BASE_URL.into(),
             locale: Some("zh-CN".into()),
             auth_storage: Some(storage.clone()),
+            client_name: Some(APP_ID.into()),
+            client_version: Some(env!("CARGO_PKG_VERSION").into()),
             ..Default::default()
         });
         Self {
