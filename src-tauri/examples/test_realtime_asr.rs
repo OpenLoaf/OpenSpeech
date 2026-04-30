@@ -262,7 +262,7 @@ fn print_event(ev: &RealtimeEvent, t0: Instant) {
             ..
         } => {
             println!(
-                "[{ms:>5} ms] credits · consumed={consumed_credits} remaining={remaining_credits}"
+                "[{ms:>5} ms] credits · consumed={consumed_credits:?} remaining={remaining_credits:?}"
             );
         }
         RealtimeEvent::Closed {
@@ -270,7 +270,7 @@ fn print_event(ev: &RealtimeEvent, t0: Instant) {
             total_credits,
             ..
         } => {
-            println!("[{ms:>5} ms] closed  · reason={reason} total_credits={total_credits}");
+            println!("[{ms:>5} ms] closed  · reason={reason} total_credits={total_credits:?}");
         }
         RealtimeEvent::Error { code, message } => {
             eprintln!("[{ms:>5} ms] ERROR   · {code}: {message}");
