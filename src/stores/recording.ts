@@ -982,9 +982,25 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           // Rust audio_level_start 现在同步等到 cpal stream 真正起来才返回。
           // 失败 / 超时 → 直接退回 idle 并提示，不再走 stt_start 撞 "audio
           // stream not running"。中途用户若再按一次（state 已变），下方守卫会 skip。
+          //
+          // 异步竞态兜底：startMic 期间（macOS cpal 冷启动 ~1s）用户如果按 ESC /
+          // 再次按下快捷键 / 触发任意"回 idle"路径，那条路径里的 stopMic 跑在
+          // ref_count 还是 0 的时刻——保护到 0 实际什么都没干。等 startMic resolve
+          // 时 Rust 已经把 ref_count +1，但前端 state 已被改写、不会进入下面的正常
+          // 流程，于是 mic 永久残留在 ref_count=1（macOS 状态栏录音指示常驻）。
+          // 因此 state-mismatch 分支必须主动补一次 stopMic 把 ref_count 平回去。
           void startMic().then((ok) => {
             const s = get();
-            if (s.state !== "preparing" || s.activeId !== id) return;
+            if (s.state !== "preparing" || s.activeId !== id) {
+              if (ok) {
+                console.warn(
+                  "[recording] startMic resolved after state changed → balancing stopMic",
+                  { resolvedFor: id, curState: s.state, curActiveId: s.activeId },
+                );
+                stopMic();
+              }
+              return;
+            }
             if (!ok) {
               set({
                 state: "idle",
@@ -1042,6 +1058,42 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           set((s) => ({
             audioLevels: [...s.audioLevels.slice(1), v],
           }));
+        },
+      );
+
+      // cpal 运行时致命错误（设备拔出 / 被独占 / OS 抢占）：Rust audio thread
+      // 已自行退出 + 清 stream_info；前端这里是平衡 ref_count 与 UI 的最后一道。
+      // 若不收尾，活跃的录音会卡在 recording 态、ref_count 不归零，下次按下快捷键
+      // 撞 "audio stream not running"。
+      const u9 = await listen<string>(
+        "openspeech://audio-stream-error",
+        (evt) => {
+          const detail = String(evt.payload ?? "");
+          console.warn("[audio] stream-error:", detail);
+          const cur = get();
+          // 活跃录音中：取消当前 session、停 mic、切 error。已 idle 时仍 stopMic
+          // 一次平衡可能残留的 ref_count（设置页 mic 预览也会 hold 引用）。
+          if (
+            cur.state === "preparing" ||
+            cur.state === "recording" ||
+            cur.state === "transcribing"
+          ) {
+            discardRecording();
+            stopMic();
+            set({
+              state: "error",
+              activeId: null,
+              errorMessage: i18n.t("overlay:error.stt_mic_not_ready"),
+              audioLevels: emptyLevels(),
+              recordingId: null,
+              liveTranscript: "",
+            });
+            notifyOverlay("error", i18n.t("overlay:toast.recording_start_failed.title"), {
+              description: i18n.t("overlay:error.stt_mic_not_ready"),
+            });
+          } else {
+            stopMic();
+          }
         },
       );
 
@@ -1218,9 +1270,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u8);
+      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u8, u9);
       console.log(
-        "[recording] listeners attached (hotkey + register-failed + audio-level + asr-*)",
+        "[recording] listeners attached (hotkey + register-failed + audio-level + asr-* + stream-error)",
       );
       // 主窗自身 listeners 全部就绪后也广播一次 overlay-ready ——overlay 已经
       // 在更早时间发过的话，主窗那时还没挂 ur 听不到；这里反向重补一次让 overlay

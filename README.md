@@ -26,10 +26,10 @@
 
 OpenSpeech 是一款跨平台的桌面端语音输入工具：在任何应用、任何输入框，按一下快捷键开始说话，再按一下就把转写文字写到光标位置。Windows / macOS / Linux 三端同步发布。
 
-## 截图
+**说一段大白话，落到光标里就是结构化文档。** 录音 → 转写 → AI 清洗，口误、语气词、自我纠错全部抹平，再按你想要的格式重排：
 
 <p align="center">
-  <img src="docs/images/chinese.png" alt="OpenSpeech 中文界面" />
+  <img src="docs/images/demo-zh.gif" alt="OpenSpeech 演示：录音、转写、AI 清洗、写入光标" width="640" />
 </p>
 
 ## 功能
@@ -41,6 +41,12 @@ OpenSpeech 是一款跨平台的桌面端语音输入工具：在任何应用、
 - **个人字典**：维护专有名词、人名、术语，提高识别准确率。
 - **多语言界面**：简体中文、English；明暗主题跟随系统。
 - **托盘驻留 / 开机自启 / 应用内更新**：常规桌面应用集成。
+
+## 截图
+
+<p align="center">
+  <img src="docs/images/chinese.png" alt="OpenSpeech 中文界面" width="640" />
+</p>
 
 ## 路线图（To-Do）
 

@@ -392,6 +392,12 @@ function GeneralTab() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
+    // startAudioLevel 异步竞态兜底：cleanup 跑 stopAudioLevel 时 Rust ref_count
+    // 还没 +1（startAudioLevel 在 macOS 上要 ~1s 才 resolve），保护到 0 实际什么
+    // 都没干；等后来的 startAudioLevel resolve，ref_count = 1 永久残留 → mic 状态
+    // 栏指示常驻。这里追踪 startPromise，cleanup 时 await 它的结果，若启动成功且
+    // 已 cancelled，补一次 stopAudioLevel 把 ref_count 平回去。
+    const startPromise = startAudioLevel(general.inputDevice || null);
 
     (async () => {
       const unsub = await listen<number>(
@@ -408,9 +414,6 @@ function GeneralTab() {
       }
     })();
 
-    const device = general.inputDevice || null;
-    void startAudioLevel(device);
-
     // 若 20Hz tick 意外丢失，peak 会卡住；每 150ms 衰减避免"卡住点亮"。
     peakDecayTimer.current = window.setInterval(() => {
       setPeak((p) => (p > 0.02 ? p * 0.6 : 0));
@@ -419,7 +422,13 @@ function GeneralTab() {
     return () => {
       cancelled = true;
       unlisten?.();
+      // 同步 stopAudioLevel 兜底（startAudioLevel 已 resolve 的常规路径）+ 异步
+      // 等 startPromise 兜底（resolve 在 cleanup 后到达的竞态路径）。两次 stop 不
+      // 会重复扣减——Rust ref_count 在 0 时 stop 是 no-op。
       void stopAudioLevel();
+      void startPromise.then((ok) => {
+        if (ok) void stopAudioLevel();
+      });
       if (peakDecayTimer.current !== null) {
         clearInterval(peakDecayTimer.current);
         peakDecayTimer.current = null;
@@ -899,7 +908,12 @@ function AboutTab() {
         </button>
         <button
           type="button"
-          onClick={() => void invoke("open_log_dir")}
+          onClick={() => {
+            invoke("open_log_dir").catch((e) => {
+              void logError(`open_log_dir failed: ${String(e)}`);
+              toast.error(String(e));
+            });
+          }}
           className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
         >
           <FolderOpen className="size-3.5" />
