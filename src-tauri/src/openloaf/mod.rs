@@ -170,6 +170,25 @@ impl OpenLoafState {
         Some(self.client.clone())
     }
 
+    /// 一次性独立 SaaSClient：每次调用都新建 ureq Agent → 新连接池。
+    /// Why: 长录音（>60s）期间共享 client 的 idle keep-alive 连接会被对端 RST
+    /// （localhost 本地代理 / 上游网关），下一次 OL-TL-005 复用旧连接就吃
+    /// `Connection reset by peer (os error 54)`，回退原文，跳过 AI 优化。
+    /// How to apply: 仅给 OL-TL-005 / refine stream 这种"长 STT 之后才发请求"
+    /// 的链路使用；常规 call 继续用 `authenticated_client()` 复用连接池。
+    /// token 是 snapshot，调用方应在拿之前先 `ensure_access_token_fresh()`。
+    pub fn fresh_authenticated_client(&self) -> Option<SaaSClient> {
+        let token = self.client.access_token()?;
+        Some(SaaSClient::new(SaaSClientConfig {
+            base_url: DEFAULT_BASE_URL.into(),
+            access_token: Some(token),
+            locale: Some("zh-CN".into()),
+            auth_storage: Some(self.storage.clone()),
+            client_name: Some(APP_ID.into()),
+            client_version: Some(env!("CARGO_PKG_VERSION").into()),
+        }))
+    }
+
     /// 返回 SaaSClient 克隆（无论是否登录）。供"网络健康探针"等公开端点调用复用。
     /// 不强制登录态，因为 `system().health()` 等公开端点本身不需要 token。
     pub fn client_clone(&self) -> SaaSClient {

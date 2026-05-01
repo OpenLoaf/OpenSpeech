@@ -665,7 +665,10 @@ fn refine_speech_text_impl<R: Runtime>(
     reference_context: Option<String>,
 ) -> Result<RefineSpeechTextResult, String> {
     let ol = app.state::<SharedOpenLoaf>();
-    let client = ol.authenticated_client().ok_or_else(|| {
+    // 用 fresh client：长录音后旧连接池里的 keep-alive 连接经常已被对端 RST，
+    // 复用会吃 `Connection reset by peer` 直接降级原文。新建独立 ureq Agent
+    // 多一次 TCP 握手，但本地 5180 几乎无感，换来不再降级 AI 优化。
+    let client = ol.fresh_authenticated_client().ok_or_else(|| {
         handle_session_expired(&app, &ol);
         ERR_NOT_AUTHENTICATED.to_string()
     })?;
@@ -796,7 +799,10 @@ fn refine_speech_text_stream_impl<R: Runtime>(
     reference_context: Option<String>,
 ) -> Result<RefineSpeechTextResult, String> {
     let ol = app.state::<SharedOpenLoaf>();
-    let client = ol.authenticated_client().ok_or_else(|| {
+    // 用 fresh client：长录音后旧连接池里的 keep-alive 连接经常已被对端 RST，
+    // 复用会吃 `Connection reset by peer` 直接降级原文。新建独立 ureq Agent
+    // 多一次 TCP 握手，但本地 5180 几乎无感，换来不再降级 AI 优化。
+    let client = ol.fresh_authenticated_client().ok_or_else(|| {
         handle_session_expired(&app, &ol);
         ERR_NOT_AUTHENTICATED.to_string()
     })?;
