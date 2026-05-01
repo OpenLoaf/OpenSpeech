@@ -1,6 +1,8 @@
 import { motion } from "framer-motion";
-import { Apple, ArrowDownToLine, Monitor, Terminal } from "lucide-react";
-import { useMemo } from "react";
+import { ArrowDownToLine } from "lucide-react";
+import { useMemo, useState } from "react";
+import { FaApple, FaLinux, FaWindows } from "react-icons/fa6";
+import { SiGithub } from "react-icons/si";
 import pkg from "../../../../package.json";
 
 const RELEASES_URL = "https://github.com/OpenLoaf/OpenSpeech/releases";
@@ -20,22 +22,21 @@ type Platform = {
   os: "macOS" | "Windows" | "Linux";
   icon: React.ComponentType<{ className?: string }>;
   tagline: string;
-  primary: Variant;
-  others: Variant[];
+  variants: Variant[];
 };
 
 const PLATFORMS: Platform[] = [
   {
     os: "macOS",
-    icon: Apple,
-    tagline: "11 Big Sur 及以上",
-    primary: {
-      label: "Apple Silicon",
-      arch: "arm64",
-      ext: "DMG",
-      href: asset(`OpenSpeech-${VERSION}-macOS-arm64.dmg`),
-    },
-    others: [
+    icon: FaApple,
+    tagline: "11 Big Sur+",
+    variants: [
+      {
+        label: "Apple Silicon",
+        arch: "arm64",
+        ext: "DMG",
+        href: asset(`OpenSpeech-${VERSION}-macOS-arm64.dmg`),
+      },
       {
         label: "Intel",
         arch: "x86_64",
@@ -46,15 +47,15 @@ const PLATFORMS: Platform[] = [
   },
   {
     os: "Windows",
-    icon: Monitor,
+    icon: FaWindows,
     tagline: "10 / 11",
-    primary: {
-      label: "x64 安装包",
-      arch: "x86_64",
-      ext: "EXE",
-      href: asset(`OpenSpeech-${VERSION}-Windows-x86_64-setup.exe`),
-    },
-    others: [
+    variants: [
+      {
+        label: "x64",
+        arch: "x86_64",
+        ext: "EXE",
+        href: asset(`OpenSpeech-${VERSION}-Windows-x86_64-setup.exe`),
+      },
       {
         label: "ARM64",
         arch: "arm64",
@@ -65,15 +66,15 @@ const PLATFORMS: Platform[] = [
   },
   {
     os: "Linux",
-    icon: Terminal,
+    icon: FaLinux,
     tagline: "Ubuntu / Fedora / Arch",
-    primary: {
-      label: "AppImage",
-      arch: "x86_64",
-      ext: "APPIMAGE",
-      href: asset(`OpenSpeech-${VERSION}-Linux-x86_64.AppImage`),
-    },
-    others: [
+    variants: [
+      {
+        label: "AppImage",
+        arch: "x86_64",
+        ext: "APPIMAGE",
+        href: asset(`OpenSpeech-${VERSION}-Linux-x86_64.AppImage`),
+      },
       {
         label: "Debian",
         arch: "x86_64",
@@ -90,27 +91,130 @@ const PLATFORMS: Platform[] = [
   },
 ];
 
-function GithubIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden
-    >
-      <path d="M12 0.296c-6.627 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.6.111.793-.261.793-.577v-2.234c-3.338.726-4.043-1.61-4.043-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.84 1.236 1.84 1.236 1.07 1.835 2.807 1.305 3.492.998.108-.776.418-1.305.762-1.605-2.665-.305-5.467-1.334-5.467-5.931 0-1.31.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.984-.399 3.003-.404 1.019.005 2.046.138 3.005.404 2.292-1.552 3.299-1.23 3.299-1.23.653 1.652.242 2.873.118 3.176.769.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.371.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.085 8.199-11.385 0-6.627-5.373-12-12-12z" />
-    </svg>
-  );
-}
-
 function detectPlatform(): Platform["os"] | null {
   if (typeof navigator === "undefined") return null;
   const ua = navigator.userAgent.toLowerCase();
-  const platform = (navigator.platform ?? "").toLowerCase();
-  if (/mac|iphone|ipad|ipod/.test(ua) || /mac/.test(platform)) return "macOS";
-  if (/win/.test(ua) || /win/.test(platform)) return "Windows";
-  if (/linux|x11/.test(ua) || /linux/.test(platform)) return "Linux";
+  if (/mac|iphone|ipad|ipod/.test(ua)) return "macOS";
+  if (/win/.test(ua)) return "Windows";
+  if (/linux|x11|cros/.test(ua)) return "Linux";
   return null;
+}
+
+function PlatformCard({
+  platform,
+  isDetected,
+}: {
+  platform: Platform;
+  isDetected: boolean;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const Icon = platform.icon;
+  const open = hovered || isDetected;
+  const primary = platform.variants[0];
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      className={`group relative flex flex-col overflow-hidden border bg-te-surface/30 backdrop-blur-sm transition-[border-color,box-shadow] duration-300 ${
+        isDetected
+          ? "border-te-accent/70 shadow-[0_0_60px_-20px_rgba(255,204,0,0.4)]"
+          : hovered
+            ? "border-te-accent/40"
+            : "border-te-gray/40"
+      }`}
+    >
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-48 transition-opacity duration-500"
+        style={{
+          opacity: open ? 1 : 0.3,
+          background: isDetected
+            ? "radial-gradient(ellipse 90% 70% at 50% 0%, rgba(255,204,0,0.22) 0%, transparent 70%)"
+            : "radial-gradient(ellipse 90% 70% at 50% 0%, rgba(255,204,0,0.12) 0%, transparent 70%)",
+        }}
+      />
+
+      {isDetected && (
+        <div className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 border border-te-accent/60 bg-te-bg/80 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.25em] text-te-accent backdrop-blur">
+          <span className="size-1 rounded-full bg-te-accent" />
+          当前系统
+        </div>
+      )}
+
+      <div className="relative z-10 flex items-center gap-4 px-6 pt-7 pb-5">
+        <Icon
+          className={`size-10 shrink-0 transition-colors duration-300 ${
+            isDetected || hovered ? "text-te-accent" : "text-te-fg/85"
+          }`}
+        />
+        <div className="flex flex-col leading-tight">
+          <div className="font-mono text-xl font-bold tracking-tighter text-te-fg">
+            {platform.os}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray/50">
+            {platform.tagline}
+          </div>
+        </div>
+        <div className="ml-auto font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/40">
+          {platform.variants.length} 版本
+        </div>
+      </div>
+
+      <div className="relative z-10 px-5 pb-5">
+        <a
+          href={primary.href}
+          download
+          className={`flex items-center justify-between gap-3 border px-4 py-3 font-mono text-sm font-bold tracking-tight transition-colors duration-200 ${
+            isDetected
+              ? "border-te-accent bg-te-accent text-te-bg hover:bg-te-accent/90"
+              : "border-te-fg/50 text-te-fg hover:border-te-accent hover:bg-te-accent hover:text-te-bg"
+          }`}
+        >
+          <span className="flex flex-col items-start leading-tight">
+            <span>下载 · {primary.label}</span>
+            <span
+              className={`mt-0.5 text-[9px] font-normal uppercase tracking-[0.2em] ${
+                isDetected ? "text-te-bg/60" : "text-te-light-gray/55"
+              }`}
+            >
+              {primary.arch} · {primary.ext}
+            </span>
+          </span>
+          <ArrowDownToLine className="size-4 shrink-0" />
+        </a>
+
+        {platform.variants.length > 1 && (
+          <div
+            className="grid transition-[grid-template-rows,opacity] duration-300 ease-out"
+            style={{
+              gridTemplateRows: open ? "1fr" : "0fr",
+              opacity: open ? 1 : 0,
+            }}
+          >
+            <div className="overflow-hidden">
+              <div className="flex flex-col gap-1.5 pt-2.5">
+                {platform.variants.slice(1).map((v) => (
+                  <a
+                    key={v.label}
+                    href={v.href}
+                    download
+                    className="flex items-center justify-between gap-3 border border-te-gray/40 px-3 py-2 font-mono text-xs tracking-tight text-te-light-gray/80 transition-colors hover:border-te-accent hover:text-te-accent"
+                  >
+                    <span>{v.label}</span>
+                    <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-te-light-gray/40">
+                      {v.ext}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function CTASection() {
@@ -136,7 +240,7 @@ export default function CTASection() {
 
       <div className="relative mx-auto max-w-6xl">
         <motion.div
-          className="mb-12 flex flex-col items-center gap-3 text-center md:mb-16"
+          className="mb-14 flex flex-col items-center gap-3 text-center md:mb-20"
           initial={{ opacity: 0, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
@@ -145,110 +249,31 @@ export default function CTASection() {
           <div className="font-mono text-xs uppercase tracking-[0.3em] text-te-light-gray/50">
             [04] · DOWNLOAD
           </div>
-          <h2 className="font-mono text-[clamp(1.8rem,5.5vw,4rem)] font-bold leading-[1.05] tracking-tighter text-te-fg">
+          <h2 className="font-mono text-[clamp(2rem,5.5vw,4rem)] font-bold leading-[1.05] tracking-tighter text-te-fg">
             停止打字，开始说话。
           </h2>
           <p className="max-w-md text-balance text-sm text-te-light-gray/60">
-            点击你的系统直接下载 · 当前版本{" "}
-            <span className="font-mono text-te-fg/80">v{VERSION}</span>
+            选你的系统直接下载 · 当前版本{" "}
+            <span className="font-mono text-te-fg/85">v{VERSION}</span>
           </p>
         </motion.div>
 
         <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-          {PLATFORMS.map((p, idx) => {
-            const isDetected = detected === p.os;
-            return (
-              <motion.div
-                key={p.os}
-                initial={{ opacity: 0, y: 18 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.55, delay: 0.1 + idx * 0.08 }}
-                className={`relative flex flex-col border bg-te-bg/40 backdrop-blur-sm transition-colors ${
-                  isDetected
-                    ? "border-te-accent/60 shadow-[0_0_60px_-20px_rgba(255,204,0,0.35)]"
-                    : "border-te-gray/40 hover:border-te-light-gray/40"
-                }`}
-              >
-                {isDetected && (
-                  <div className="absolute -top-px left-0 right-0 flex justify-center">
-                    <span className="-translate-y-1/2 border border-te-accent/60 bg-te-bg px-3 py-0.5 font-mono text-[10px] uppercase tracking-[0.25em] text-te-accent">
-                      为你推荐
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex flex-col gap-1 px-7 pt-8 pb-6">
-                  <p.icon
-                    className={`size-9 ${
-                      isDetected ? "text-te-accent" : "text-te-fg/85"
-                    }`}
-                  />
-                  <div className="mt-3 font-mono text-3xl font-bold tracking-tighter text-te-fg">
-                    {p.os}
-                  </div>
-                  <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray/50">
-                    {p.tagline}
-                  </div>
-                </div>
-
-                <div className="mt-auto flex flex-col gap-3 px-7 pb-7">
-                  <a
-                    href={p.primary.href}
-                    download
-                    className={`group inline-flex items-center justify-between gap-3 border px-4 py-3.5 font-mono text-sm font-bold tracking-tight transition-all ${
-                      isDetected
-                        ? "border-te-accent bg-te-accent text-te-bg hover:bg-te-accent/90"
-                        : "border-te-fg/80 text-te-fg hover:border-te-accent hover:bg-te-accent hover:text-te-bg"
-                    }`}
-                  >
-                    <span className="flex flex-col items-start leading-tight">
-                      <span className="text-base">下载 · {p.primary.label}</span>
-                      <span
-                        className={`mt-0.5 text-[10px] font-normal uppercase tracking-[0.2em] ${
-                          isDetected
-                            ? "text-te-bg/60"
-                            : "text-te-light-gray/60 group-hover:text-te-bg/60"
-                        }`}
-                      >
-                        {p.primary.ext} · {p.primary.arch}
-                      </span>
-                    </span>
-                    <ArrowDownToLine className="size-5 shrink-0 transition-transform group-hover:translate-y-0.5" />
-                  </a>
-
-                  {p.others.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/40">
-                        其他
-                      </span>
-                      {p.others.map((v) => (
-                        <a
-                          key={v.label}
-                          href={v.href}
-                          download
-                          className="inline-flex items-center gap-1.5 border border-te-gray/40 px-2.5 py-1 font-mono text-[11px] tracking-tight text-te-light-gray/70 transition-colors hover:border-te-accent hover:text-te-accent"
-                        >
-                          {v.label}
-                          <span className="text-te-light-gray/40">
-                            · {v.ext}
-                          </span>
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            );
-          })}
+          {PLATFORMS.map((p) => (
+            <PlatformCard
+              key={p.os}
+              platform={p}
+              isDetected={detected === p.os}
+            />
+          ))}
         </div>
 
         <motion.div
-          className="mt-12 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
+          className="mt-14 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
           initial={{ opacity: 0, y: 10 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.5, delay: 0.5 }}
+          transition={{ duration: 0.5, delay: 0.4 }}
         >
           <a
             href={RELEASES_URL}
@@ -264,17 +289,17 @@ export default function CTASection() {
             rel="noreferrer"
             className="inline-flex items-center gap-2 border border-te-gray/40 px-6 py-2.5 font-mono text-xs uppercase tracking-[0.15em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
           >
-            <GithubIcon className="size-4" />
+            <SiGithub className="size-4" />
             查看源码
           </a>
         </motion.div>
 
         <motion.div
-          className="mt-10 text-center font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray/40"
+          className="mt-10 text-center font-mono text-[11px] uppercase tracking-[0.25em] text-te-light-gray/40"
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.6, delay: 0.6 }}
+          transition={{ duration: 0.6, delay: 0.5 }}
         >
           开源 · MIT License · 永久免费
         </motion.div>
