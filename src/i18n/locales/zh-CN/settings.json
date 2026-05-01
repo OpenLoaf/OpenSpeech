@@ -7,8 +7,8 @@
     "dialog_sr": "OpenSpeech 设置"
   },
   "tabs": {
-    "account": "账户",
     "general": "通用",
+    "dictation": "听写",
     "model": "模型",
     "personalization": "个性化",
     "about": "关于"
@@ -24,14 +24,10 @@
     "asr_segment": "听写模式",
     "text_injection": "文本注入",
     "behavior": "行为",
-    "history": "历史记录",
     "model_rest": "大模型（REST）",
     "ai_enhance": "AI 增强",
     "dictionary_learning": "词典学习",
-    "identity": "身份",
-    "session": "会话",
-    "build": "构建",
-    "third_party": "第三方依赖"
+    "build": "构建"
   },
   "general": {
     "interface_lang": "界面语言",
@@ -48,16 +44,19 @@
     "show_dock_hint": "在 macOS Dock 中显示 OpenSpeech 图标，便于快速访问。关闭后应用作为纯菜单栏应用运行（仍可通过系统托盘打开主窗口）",
     "close_to_tray": "关闭时最小化到托盘",
     "close_to_tray_hint": "开启后关闭主窗口直接隐藏到托盘；关闭时每次弹确认对话框",
-    "auto_update": "自动更新",
-    "auto_update_hint": "启动时静默检查并安装新版本；关闭后只能通过托盘「检查更新」手动触发",
-    "history_retention": "历史保留时长",
-    "history_retention_hint": "控制本机数据库中的历史记录保留时间；缩短只在下次启动生效，不即时删除已有记录",
-    "history_retention_options": {
-      "forever": "永远",
-      "90d": "90 天",
-      "30d": "30 天",
-      "7d": "7 天",
-      "off": "不保存"
+    "update_policy": "自动更新",
+    "update_policy_hint": "选择后台发现新版本时的处理方式",
+    "update_policy_options": {
+      "prompt": "提示我安装（推荐）",
+      "auto": "空闲时自动安装",
+      "disabled": "关闭"
+    },
+    "update_check_interval": "检查更新间隔",
+    "update_check_interval_hint": "后台多久检查一次新版本；启动时无论如何都会先查一次",
+    "update_check_interval_options": {
+      "1h": "1 小时",
+      "6h": "6 小时",
+      "24h": "24 小时"
     },
     "loading": "// loading settings…"
   },
@@ -101,14 +100,6 @@
     "low": "低",
     "normal": "标准",
     "high": "高"
-  },
-  "account": {
-    "email": "电子邮件",
-    "subscription": "订阅",
-    "subscription_hint": "使用自带的模型 Key",
-    "free_byo_badge": "免费 / 自带模型",
-    "sign_out": "退出登录",
-    "sign_out_hint": "退出后将清除本地登录状态。本地录音、历史与词典将保留。"
   },
   "about": {
     "version": "版本",

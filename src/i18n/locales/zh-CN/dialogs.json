@@ -68,8 +68,8 @@
     "body_1_suffix": " 运行，全局快捷键仍然可用。",
     "body_2": "可通过系统托盘图标重新打开主窗口，或选择「退出」完全结束进程。",
     "remember": "不再提醒",
-    "quit": "退出 OpenSpeech",
-    "stay": "继续在后台运行"
+    "quit": "退出",
+    "stay": "后台运行"
   },
   "no_internet": {
     "title": "没有互联网连接",
@@ -91,7 +91,7 @@
   "hotkey_preview": {
     "default_title": "听写快捷键 / PUSH-TO-TALK",
     "unbound": "未绑定",
-    "default_hint": "单击开始 · 再按一次结束"
+    "default_hint": "按一下开始 · 再按一次结束"
   },
   "loading_screen": {
     "initializing": "INITIALIZING",

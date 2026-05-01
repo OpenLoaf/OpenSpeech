@@ -5,7 +5,7 @@ import SettingsContent from "@/components/SettingsContent";
 export default function SettingsPage() {
   const { t } = useTranslation("settings");
   return (
-    <section className="h-full overflow-y-auto bg-te-bg px-[4vw] py-[clamp(4rem,10vw,8rem)]">
+    <section className="h-full overflow-y-auto bg-te-bg px-[4vw] pt-3 pb-[clamp(2rem,5vw,4rem)]">
       <div className="mx-auto max-w-6xl">
         {/* Header */}
         <motion.div

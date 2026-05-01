@@ -7,7 +7,9 @@ import {
   Coins,
   History,
   Home,
+  Infinity as InfinityIcon,
   Settings,
+  Timer,
   UserCircle,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
@@ -101,6 +103,9 @@ export default function Layout() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
   const profile = useAuthStore((s) => s.profile);
+  const realtimeAsrCreditsPerMinute = useAuthStore(
+    (s) => s.realtimeAsrCreditsPerMinute,
+  );
   // SettingsDialog / LoginDialog 的 open 状态搬到 ui store，让 recording.ts gate /
   // LoginDialog 的"使用自己的 STT 端点"按钮也能直接调用，无需 prop drilling 或 emit。
   const loginOpen = useUIStore((s) => s.loginOpen);
@@ -505,32 +510,75 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Credits rail：账号积分仪表，仅登录 + profile 拉回后渲染。
+        {/* Time-left rail：把"剩余积分"折算成"剩余可用分钟"。
             放在 nav 与底部按钮之间，避免把账户按钮撑成双行破坏对称。
-            Pro 及以上套餐 SaaS 调用无限（见 docs/subscription.md），积分数不再是瓶颈，
-            这里换成 UNLIMITED 标记，避免误导用户"积分会减少"。 */}
-        {isAuthenticated && profile ? (
-          <div className="flex items-baseline justify-between gap-2 border-t border-te-gray px-5 py-3">
-            <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-              Credits
-            </span>
-            {profile.membershipLevel === "pro" ||
-            profile.membershipLevel === "premium" ? (
-              <span className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-[0.25em] text-te-accent">
-                <Coins className="size-2.5 shrink-0" strokeWidth={2} />
-                UNLIMITED
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 font-mono text-xs font-bold tracking-tighter text-te-fg tabular-nums">
-                <Coins
-                  className="size-2.5 shrink-0 text-te-accent"
-                  strokeWidth={2}
-                />
-                {Math.round(profile.creditsBalance).toLocaleString("zh-CN")}
-              </span>
-            )}
-          </div>
-        ) : null}
+            Pro / Premium / Infinity 套餐 SaaS 调用不扣费（见 docs/subscription.md），
+            直接展示 ∞ UNLIMITED，避免误导用户"分钟会扣完"。
+
+            ⚠️ 折算依赖 V3 capabilities 的 realtimeAsrLlm.creditsPerMinute，假设
+            其与 V4 OL-TL-RT-002（src-tauri/src/stt/mod.rs 实际跑的通道）同价。
+            **V4 通道改了计费规则（换模型/换通道/改单价/改成按字符或分档）必须立刻
+            把 fetchRealtimeAsrPricing 的数据源换掉**，否则这里的分钟数会与真实
+            扣费偏离。 */}
+        {isAuthenticated && profile
+          ? (() => {
+              const isUnlimited =
+                profile.membershipLevel === "pro" ||
+                profile.membershipLevel === "premium" ||
+                profile.membershipLevel === "infinity";
+              const hasPricing =
+                !!realtimeAsrCreditsPerMinute &&
+                realtimeAsrCreditsPerMinute > 0;
+              // 拉到单价才显示"剩余分钟"；否则整行回退到旧的"积分"展示
+              // （label / 图标 / 数字 全部回到 Credits 视觉），避免误导用户。
+              const showAsTime = isUnlimited || hasPricing;
+              return (
+                <div className="flex items-baseline justify-between gap-2 border-t border-te-gray px-5 py-3">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
+                    {showAsTime
+                      ? t("pages:layout.time_left")
+                      : t("pages:layout.credits")}
+                  </span>
+                  {isUnlimited ? (
+                    <span className="flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-[0.25em] text-te-accent">
+                      <InfinityIcon
+                        className="size-2.5 shrink-0"
+                        strokeWidth={2.5}
+                      />
+                      {t("pages:layout.time_unlimited")}
+                    </span>
+                  ) : hasPricing ? (
+                    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] font-bold uppercase text-te-fg tabular-nums">
+                      <Timer
+                        className="size-2.5 shrink-0 text-te-accent"
+                        strokeWidth={2}
+                      />
+                      {t("pages:layout.time_minutes", {
+                        minutes: Math.max(
+                          0,
+                          Math.floor(
+                            profile.creditsBalance /
+                              (realtimeAsrCreditsPerMinute as number),
+                          ),
+                        ).toLocaleString("en-US"),
+                      })}
+                    </span>
+                  ) : (
+                    // 单价还没拉回 / 拉失败 → 整行退回旧版 Credits 视觉。
+                    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] font-bold tracking-tighter text-te-fg tabular-nums">
+                      <Coins
+                        className="size-2.5 shrink-0 text-te-accent"
+                        strokeWidth={2}
+                      />
+                      {Math.round(profile.creditsBalance).toLocaleString(
+                        "en-US",
+                      )}
+                    </span>
+                  )}
+                </div>
+              );
+            })()
+          : null}
 
         {/* Bottom actions: 账户 / 设置 */}
         <div className="flex items-center justify-around border-t border-te-gray px-2 py-2">

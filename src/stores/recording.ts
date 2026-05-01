@@ -1032,16 +1032,22 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
           if (!saasReady && !byoReady) {
             console.log("[recording] gate blocked: no STT backend available");
-            // 主窗聚焦时（用户正在主程序里按快捷键），overlay 实际不可见，
-            // toast 推过去也看不到——直接在主窗弹 LoginDialog 才合理。
-            // 主窗失焦时（用户在别的 app 里按快捷键）才走悬浮条 toast + 动作按钮，
-            // 避免被强行拉前台。
-            const mainFocused = IS_MAIN_WINDOW
-              ? await getCurrentWebviewWindow()
-                  .isFocused()
-                  .catch(() => false)
-              : false;
-            if (mainFocused) {
+            // 只有主窗"完全藏起来"（hide 到 tray / 最小化）时才推悬浮条 toast——
+            // 此时用户多半在别的 app 里输入，强行拉前台打扰。其余只要主窗 visible
+            // 且未最小化（无论 input focus 是否在主窗 webview——子 dialog / 边栏
+            // 控件 / 拖拽都会让 isFocused 短暂为 false），都直接弹 LoginDialog，
+            // 否则用户在主程序里按快捷键却只看到悬浮条提示，体验割裂。
+            let mainActive = false;
+            if (IS_MAIN_WINDOW) {
+              const w = getCurrentWebviewWindow();
+              const [focused, visible, minimized] = await Promise.all([
+                w.isFocused().catch(() => false),
+                w.isVisible().catch(() => false),
+                w.isMinimized().catch(() => false),
+              ]);
+              mainActive = focused || (visible && !minimized);
+            }
+            if (mainActive) {
               useUIStore.getState().openLogin();
             } else {
               notifyOverlay("error", i18n.t("overlay:toast.not_logged_in.title"), {

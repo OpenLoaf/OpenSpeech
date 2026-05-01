@@ -59,17 +59,19 @@ Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idl
 2. 当 OpenSpeech 主窗口处于焦点时，快捷键依然生效。
 3. 当麦克风权限未授予时，触发快捷键必须引导用户前往系统权限设置，不得静默失败。
 4. **必须存在可写入的光标焦点**才会开始录音；若系统焦点在不可编辑的区域（桌面、菜单栏、只读窗口），触发时给出轻提示"当前位置无输入框"，不进入 Recording。
-5. **后端可用性 Gate（Idle → Preparing 之前）**：必须存在至少一条可用的转写后端，否则**不进入 Recording**，主窗回前台并弹 LoginDialog。判定：
+5. **后端可用性 Gate（Idle → Preparing 之前）**：必须存在至少一条可用的转写后端，否则**不进入 Recording**。判定：
    - `saasReady = isAuthenticated`（`dictationSource=SAAS` 默认走 OpenLoaf SaaS realtime ASR，需登录）
    - `byoReady  = dictationSource === "BYO" && endpoint.trim() !== ""`（用户自带 REST STT 端点，不经云端）
-   - `!saasReady && !byoReady` ⇒ 拦截 → `useUIStore.openLogin()`（同时 `invoke("show_main_window_cmd")` 把主窗从托盘拉回）。
+   - `!saasReady && !byoReady` ⇒ 拦截，按主窗激活与否分两条路径：
+     - **主窗激活**（`isFocused() || (isVisible() && !isMinimized())`，覆盖 input focus 在子 dialog / 边栏控件 / 拖拽时短暂失焦的情况）⇒ `useUIStore.openLogin()` 直接弹 LoginDialog，同时 `invoke("show_main_window_cmd")` 兜底拉前台。
+     - **主窗已隐藏到 tray 或最小化** ⇒ 走悬浮条 toast + "去登录"动作按钮，避免用户在别的 app 里输入时被强行拉前台打扰。
    LoginDialog 内除两个 OAuth 入口外，提供一个"使用自己的 STT 端点"按钮，点击后关闭登录窗、`openSettings("MODEL")` 跳到设置→大模型 tab 让用户填 endpoint+API Key。Toggle 模式"再按一次停止"路径不受 Gate 影响（已经在录音中，只走停止逻辑）。
 
 ### 录音
 1. 采样率 / 声道数**跟随系统默认输入设备**（多数 Mac/Win 会是 44.1 kHz 或 48 kHz 立体声）；**不做重采样**，采集到的 f32 原样进 WAV（16-bit PCM 编码）。送到 SaaS realtime ASR 的帧在 cpal 回调里临时做 mono downmix + PCM16 量化，不影响落盘文件。
 2. **录音时长无客户端硬上限**——用户一直按着就一直录。唯一的终止条件是服务端 realtime 会话的 2 小时上限（`closed{reason:"max_duration"}`），正常听写远低于此。内存与磁盘占用：`Zeroizing<Vec<f32>>` 按帧追加，2 小时 48kHz 立体声约 1.4 GB RAM + 落盘 WAV 约 700 MB——MVP 不做 early-dump，接近 2h 时用户几乎都主动松手了。
 3. 录音过程中按 `Esc` 立即取消：同时 `audio_recording_cancel`（丢 PCM buffer）+ `stt_cancel`（关 realtime WebSocket，丢弃已到达的 Partial / Final）；**本次不写 history**。
-4. 录音采集阶段在内存缓冲（`Zeroizing<Vec<f32>>`），**松开快捷键时并行**：Rust 落盘 `recordings/<id>.wav` + realtime session 发 `send_finish` 等 Final。路径与 DB schema 见 [privacy.md](./privacy.md#录音文件落盘路径) 与 [history.md](./history.md#录音文件)。
+4. 录音采集阶段在内存缓冲（`Zeroizing<Vec<f32>>`），**松开快捷键时并行**：Rust 落盘 `recordings/<yyyy-MM-dd>/<id>.ogg`（按本地日期分子目录） + realtime session 发 `send_finish` 等 Final。路径与 DB schema 见 [privacy.md](./privacy.md#录音文件落盘路径) 与 [history.md](./history.md#录音文件)。
 5. **内存音频必须 zeroize**：`Zeroizing<Vec<u8>>` 容器承载采集期的 PCM；落盘到 WAV 文件后，内存副本立即 drop（zeroize 自动触发）。panic/崩溃 handler 同样显式清零，避免 crash dump / swap 泄露。
 6. **松开事件丢失兜底**：PTT 模式下若用户按下后立即 Cmd+Tab 切走应用，`tauri-plugin-global-shortcut` 的 Released 事件可能丢失。应用在进入 Recording 时，全局键事件监听线程（`rdev`）同时订阅所有已注册快捷键的修饰键 keystate；每 200 ms 查询一次当前物理键状态，若检测到原组合已全部释放则主动触发"松开"逻辑。无客户端时长硬上限，松开事件兜底只靠 keystate 轮询 + 服务端 2h max-duration。
 7. **录音设备变更**：录音中若系统默认输入设备切换（拔耳机 / 切蓝牙），cpal 会发出 device change 事件；静默 rebind 到新默认设备，悬浮条闪一下 `DEVICE SWITCHED` 提示，录音不中断；若 rebind 失败则进入 Error。

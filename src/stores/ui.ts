@@ -10,8 +10,8 @@ import type { Update } from "@tauri-apps/plugin-updater";
 const IS_MAIN_WINDOW = getCurrentWebviewWindow().label === "main";
 
 export type SettingsTabId =
-  | "ACCOUNT"
   | "GENERAL"
+  | "DICTATION"
   | "PERSONALIZATION"
   | "ABOUT";
 

@@ -286,12 +286,15 @@ export function HotkeyPreview({
   index = "01",
   title,
   stack = false,
+  hintPlacement = "row",
 }: {
   hint?: string;
   index?: string;
   title?: string;
   /** 强制纵向排版（hint 在快捷键下方换行）。默认 false，宽松容器里走横向。 */
   stack?: boolean;
+  /** "row" = hint 在底部黄字行；"header" = hint 替换右上角 index 位置。 */
+  hintPlacement?: "row" | "header";
 }) {
   const { t } = useTranslation();
   const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
@@ -313,21 +316,29 @@ export function HotkeyPreview({
   const resolvedTitle = title ?? t("dialogs:hotkey_preview.default_title");
   const modeHint = hint ?? t("dialogs:hotkey_preview.default_hint");
 
+  const hintInHeader = hintPlacement === "header";
+
   return (
     <div>
       <div className="flex items-start justify-between">
         <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
           {resolvedTitle}
         </span>
-        <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
-          {index}
-        </span>
+        {hintInHeader ? (
+          <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+            {modeHint}
+          </span>
+        ) : (
+          <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
+            {index}
+          </span>
+        )}
       </div>
 
       <div
         className={cn(
           "mt-3 flex flex-col gap-3",
-          !stack && "md:flex-row md:items-center md:justify-between",
+          !stack && !hintInHeader && "md:flex-row md:items-center md:justify-between",
         )}
       >
         <div className="flex items-center gap-3">
@@ -363,9 +374,11 @@ export function HotkeyPreview({
           )}
         </div>
 
-        <div className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
-          {modeHint}
-        </div>
+        {!hintInHeader && (
+          <div className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+            {modeHint}
+          </div>
+        )}
       </div>
     </div>
   );

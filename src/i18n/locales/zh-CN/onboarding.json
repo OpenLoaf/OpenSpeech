@@ -104,7 +104,7 @@
       "今天天气真好，我打开了 OpenSpeech 试试看。"
     ],
     "hotkey_title": "你的听写快捷键",
-    "hotkey_hint": "单击开始 · 再按一次结束",
+    "hotkey_hint": "按一下开始 · 再按一次结束",
     "samples_label": "AUDIO · {{count}} SAMPLES",
     "live_transcript_tag": "// LIVE TRANSCRIPT",
     "transcript_chars": "{{count}} CHARS",

@@ -186,28 +186,37 @@
     overflow: hidden;
   }
 
-  /* 统一跨平台滚动条样式 — TE 工业风：细条、方形、hover 时加深 */
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: var(--te-gray) transparent;
-  }
+  /* 统一跨平台滚动条样式 — TE 工业风：细条、方形、常驻、hover 加深。
+     不要写 scrollbar-width / scrollbar-color：CSS Scrollbars 标准属性
+     会让新版 WebKit / Chromium 走系统 overlay 风格，并屏蔽下面的伪元素规则。 */
   *::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
+    background: transparent;
   }
   *::-webkit-scrollbar-track {
     background: transparent;
+    border: none;
   }
   *::-webkit-scrollbar-thumb {
     background: var(--te-gray);
-    border: none;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 0;
   }
   *::-webkit-scrollbar-thumb:hover {
     background: var(--te-light-gray);
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:active {
+    background: var(--te-fg);
+    background-clip: padding-box;
   }
   *::-webkit-scrollbar-corner {
     background: transparent;
   }
+  /* 显式声明 overflow 容器才会启用上面的伪元素（WKWebView 对默认 overlay 不画），
+     交互元素 input/textarea 等不受影响。 */
   /* overlay 窗口（label="overlay"，main.tsx 给 html 加 .overlay-window）：
      透明背景必须从 NSWindow 一路传到 root 元素，胶囊 / 提示条之外的区域保持透明，
      避免 hide 与 React 卸载时序错乱时露出实心矩形。 */

@@ -68,8 +68,8 @@
     "body_1_suffix": ". Global hotkeys remain available.",
     "body_2": "Reopen the main window from the tray icon, or choose \"Quit\" to fully exit.",
     "remember": "Don't ask again",
-    "quit": "Quit OpenSpeech",
-    "stay": "Keep running in background"
+    "quit": "Quit",
+    "stay": "Run in background"
   },
   "no_internet": {
     "title": "No internet connection",

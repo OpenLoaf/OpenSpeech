@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use openloaf_saas::{
     AuthClientInfo, AuthStorage, AuthUser, OAuthStartOptions, SaaSClient, SaaSClientConfig,
-    SaaSError, SaaSResult, UserMembershipLevel, UserSelf,
+    SaaSError, SaaSResult, UserMembershipLevel, UserSelf, V3ToolFeature,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
@@ -630,6 +630,60 @@ pub async fn openloaf_fetch_profile(
         .await
         .map_err(saas_err_to_string)?;
     Ok(UserProfile::from(resp.user))
+}
+
+// ⚠️ 计费换算的隐性耦合：
+// 客户端 sidebar 拿这里返回的 `credits_per_minute` 把"剩余积分"折算成"剩余分钟"。
+// 我们调的是 V3 capabilities 端点的 `realtimeAsrLlm`，但 OpenSpeech 实际跑的是
+// V4 通道 `OL-TL-RT-002`（Qwen3-ASR-Flash-Realtime, 见 src/stt/mod.rs）。
+// 假设服务端 V3 realtimeAsrLlm 与 V4 OL-TL-RT-002 走相同 credits/min 单价。
+//
+// **若 V4 OL-TL-RT-002 改了计费规则（换模型 / 换通道 / 改单价 / 改成按字符 /
+// 按秒分档），必须立刻把这里换成正确的来源**：
+//   - 优先方案：SDK 暴露 V4 capabilities 接口直接拉真单价；
+//   - 兜底方案：在客户端从 `credits` 事件里 `consumed_credits / consumed_seconds`
+//     反推出实际单价并缓存。
+// 否则 sidebar 的"剩余分钟"会与真实扣费偏离，误导用户。
+#[tauri::command]
+pub async fn openloaf_fetch_realtime_asr_pricing(
+    app: AppHandle,
+    state: State<'_, SharedOpenLoaf>,
+) -> Result<f64, String> {
+    let ol = state.inner().clone();
+    let resp = call_authed(&app, &ol, |client| {
+        client.ai().tools_capabilities(Some("realtimeAsrLlm"))
+    })
+    .await
+    .map_err(saas_err_to_string)?;
+
+    log::info!(
+        "openloaf: V3 capabilities response (realtimeAsrLlm): category={}, features={}",
+        resp.data.category,
+        serde_json::to_string(&resp.data.features).unwrap_or_else(|_| "<unserializable>".into())
+    );
+
+    let credits_per_minute = resp.data.features.iter().find_map(|f| match f {
+        V3ToolFeature::Realtime(rt) => Some(rt.credits_per_minute),
+        V3ToolFeature::Sync(_) => None,
+    });
+
+    match credits_per_minute {
+        Some(cpm) => {
+            log::info!(
+                "openloaf: V3 realtimeAsrLlm.credits_per_minute = {cpm} (used as proxy for V4 OL-TL-RT-002)"
+            );
+            Ok(cpm)
+        }
+        None => {
+            log::warn!(
+                "openloaf: V3 realtimeAsrLlm capability has no Realtime feature with credits_per_minute; sidebar will fall back to raw credits"
+            );
+            Err(
+                "realtimeAsrLlm capability missing realtime feature with credits_per_minute"
+                    .to_string(),
+            )
+        }
+    }
 }
 
 // ─── 自动 refresh 包装器 ─────────────────────────────────────────

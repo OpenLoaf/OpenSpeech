@@ -23,6 +23,7 @@ use tauri::ActivationPolicy;
 mod audio;
 mod db;
 mod hotkey;
+mod idle;
 mod inject;
 mod openloaf;
 mod overlay;
@@ -205,6 +206,21 @@ fn open_log_dir(app: tauri::AppHandle) -> Result<(), String> {
     let path = log_dir
         .to_str()
         .ok_or_else(|| format!("log dir contains non-utf8 chars: {log_dir:?}"))?
+        .to_string();
+
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| format!("open_path failed: {e:?}"))
+}
+
+/// 打开 `app_data_dir/recordings/`（不存在则先创建）。给历史记录页"打开存储
+/// 文件夹"按钮用——按日期子目录拆分后，用户从这里翻历史 OGG 最方便。
+#[tauri::command]
+fn open_recordings_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = db::ensure_recordings_dir(&app)?;
+    let path = dir
+        .to_str()
+        .ok_or_else(|| format!("recordings dir contains non-utf8 chars: {dir:?}"))?
         .to_string();
 
     app.opener()
@@ -762,6 +778,7 @@ pub fn run() {
             sync_dock_icon,
             open_network_settings,
             open_log_dir,
+            open_recordings_dir,
             hotkey::apply_hotkey_config,
             hotkey::set_hotkey_recording,
             hotkey::hotkey_init_listener,
@@ -780,6 +797,7 @@ pub fn run() {
             openloaf::openloaf_is_authenticated,
             openloaf::openloaf_try_recover,
             openloaf::openloaf_fetch_profile,
+            openloaf::openloaf_fetch_realtime_asr_pricing,
             openloaf::openloaf_web_url,
             openloaf::openloaf_health_check,
             openloaf::feedback::openloaf_submit_feedback,
@@ -811,6 +829,7 @@ pub fn run() {
             update_channel::get_update_channel,
             update_channel::set_update_channel,
             update_channel::check_for_update,
+            idle::system_idle_seconds,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

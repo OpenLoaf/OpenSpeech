@@ -3,9 +3,10 @@
 // 职责：
 // 1. 声明 schema 迁移：history（转写记录） / dictionary（自定义词汇）。
 // 2. 暴露 `recordings_dir()` —— 每次真实录音（task #13）落盘的 OGG 目录。
-//    数据库里 history.audio_path 仅存 **相对路径**（如 `recordings/<id>.ogg`，
-//    迁移前老记录可能仍是 `.wav`），跨平台 / 备份还原更友好，运行时拼上
-//    app_data_dir 即可。
+//    数据库里 history.audio_path 仅存 **相对路径**：
+//    - 新版：`recordings/<yyyy-MM-dd>/<id>.ogg`（按本地日期分子目录）
+//    - 迁移前老记录：`recordings/<id>.ogg` 或 `.wav`（继续兼容读取/导出/重转写）
+//    跨平台 / 备份还原更友好，运行时拼上 app_data_dir 即可。
 //
 // DB 文件名：openspeech.db，由 tauri-plugin-sql 默认落在 app_data_dir 下。
 // 前端通过 `Database.load("sqlite:openspeech.db")` 使用（见 src/lib/db.ts）。

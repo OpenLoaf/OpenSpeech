@@ -22,13 +22,13 @@ import {
 import {
   ChevronDown,
   ExternalLink,
-  User2,
   Sliders,
   Sparkles,
   Info,
   Rocket,
   MessageSquare,
   FolderOpen,
+  Mic,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { syncAutostart } from "@/lib/autostart";
@@ -56,21 +56,21 @@ type TabId = SettingsTabId;
 type TabDef = {
   id: TabId;
   label: string;
-  icon: typeof User2;
+  icon: typeof Sliders;
 };
 
 type SubNavAction = {
   id: string;
   label: string;
-  icon: typeof User2;
+  icon: typeof Sliders;
   onClick: () => void;
 };
 
 function useTabs(): TabDef[] {
   const { t } = useTranslation("settings");
   return [
-    { id: "ACCOUNT", label: t("tabs.account"), icon: User2 },
     { id: "GENERAL", label: t("tabs.general"), icon: Sliders },
+    { id: "DICTATION", label: t("tabs.dictation"), icon: Mic },
     { id: "PERSONALIZATION", label: t("tabs.personalization"), icon: Sparkles },
     { id: "ABOUT", label: t("tabs.about"), icon: Info },
   ];
@@ -375,6 +375,119 @@ function GeneralTab() {
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const loaded = useSettingsStore((s) => s.loaded);
 
+  return (
+    <div>
+      {/* Language */}
+      <SectionTitle>{t("section.language")}</SectionTitle>
+      <Row label={t("general.interface_lang")}>
+        <Select
+          value={general.interfaceLang}
+          onChange={(v) => void setGeneral("interfaceLang", v)}
+          options={[
+            { value: "system", label: t("common:lang.system") },
+            { value: "zh-CN", label: t("common:lang.zh-CN") },
+            { value: "zh-TW", label: t("common:lang.zh-TW") },
+            { value: "en", label: t("common:lang.en") },
+          ]}
+        />
+      </Row>
+      <Row label={t("general.dictation_lang")}>
+        <Select
+          value={general.dictationLang}
+          onChange={(v) => void setGeneral("dictationLang", v)}
+          options={[
+            { value: "自动检测", label: t("common:value.auto_detect") },
+            { value: "ZH", label: "ZH" },
+            { value: "EN", label: "EN" },
+            { value: "JA", label: "JA" },
+          ]}
+        />
+      </Row>
+
+      {/* Behavior */}
+      <SectionTitle>{t("section.behavior")}</SectionTitle>
+      <Row label={t("general.launch_startup")}>
+        <Switch
+          checked={general.launchStartup}
+          onChange={(v) => {
+            void setGeneral("launchStartup", v);
+            void syncAutostart(v);
+          }}
+        />
+      </Row>
+      {detectPlatform() === "macos" ? (
+        <Row
+          label={t("general.show_dock")}
+          hint={t("general.show_dock_hint")}
+        >
+          <Switch
+            checked={general.showDockIcon}
+            onChange={(v) => {
+              void setGeneral("showDockIcon", v);
+              void invoke("sync_dock_icon").catch((e) =>
+                console.warn("[dock] sync failed:", e),
+              );
+            }}
+          />
+        </Row>
+      ) : null}
+      <Row
+        label={t("general.close_to_tray")}
+        hint={t("general.close_to_tray_hint")}
+      >
+        <Switch
+          checked={general.closeBehavior === "HIDE"}
+          onChange={(v) =>
+            void setGeneral("closeBehavior", v ? "HIDE" : "ASK")
+          }
+        />
+      </Row>
+      <Row
+        label={t("general.update_policy")}
+        hint={t("general.update_policy_hint")}
+      >
+        <Select
+          value={general.updatePolicy}
+          onChange={(v) => void setGeneral("updatePolicy", v)}
+          options={[
+            { value: "PROMPT", label: t("general.update_policy_options.prompt") },
+            { value: "AUTO", label: t("general.update_policy_options.auto") },
+            { value: "DISABLED", label: t("general.update_policy_options.disabled") },
+          ]}
+        />
+      </Row>
+      <Row
+        label={t("general.update_check_interval")}
+        hint={t("general.update_check_interval_hint")}
+      >
+        <Select
+          value={String(general.updateCheckIntervalHours)}
+          onChange={(v) =>
+            void setGeneral("updateCheckIntervalHours", Number(v))
+          }
+          options={[
+            { value: "1", label: t("general.update_check_interval_options.1h") },
+            { value: "6", label: t("general.update_check_interval_options.6h") },
+            { value: "24", label: t("general.update_check_interval_options.24h") },
+          ]}
+        />
+      </Row>
+
+      {!loaded ? (
+        <div className="mt-6 font-mono text-xs text-te-light-gray/70">
+          {t("general.loading")}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DictationTab() {
+  const { t } = useTranslation("settings");
+  const general = useSettingsStore((s) => s.general);
+  const setGeneral = useSettingsStore((s) => s.setGeneral);
+  const loaded = useSettingsStore((s) => s.loaded);
+
   // 真实输入设备列表（cpal 枚举）
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
   useEffect(() => {
@@ -491,32 +604,31 @@ function GeneralTab() {
       <SectionTitle>{t("section.shortcuts")}</SectionTitle>
       <HotkeysSection />
 
-      {/* Language */}
-      <SectionTitle>{t("section.language")}</SectionTitle>
-      <Row label={t("general.interface_lang")}>
-        <Select
-          value={general.interfaceLang}
-          onChange={(v) => void setGeneral("interfaceLang", v)}
+      {/* Dictation mode */}
+      <SectionTitle>{t("section.asr_segment")}</SectionTitle>
+      <div className="py-3">
+        <RadioBlock
+          value={general.asrSegmentMode}
+          onChange={(v) => void setGeneral("asrSegmentMode", v)}
           options={[
-            { value: "system", label: t("common:lang.system") },
-            { value: "zh-CN", label: t("common:lang.zh-CN") },
-            { value: "zh-TW", label: t("common:lang.zh-TW") },
-            { value: "en", label: t("common:lang.en") },
+            {
+              value: "REALTIME",
+              label: t("asr_segment.realtime_label"),
+              hint: t("asr_segment.realtime_hint"),
+            },
+            {
+              value: "UTTERANCE",
+              label: t("asr_segment.utterance_label"),
+              hint: t("asr_segment.utterance_hint"),
+            },
+            {
+              value: "AI_REFINE",
+              label: t("asr_segment.ai_refine_label"),
+              hint: t("asr_segment.ai_refine_hint"),
+            },
           ]}
         />
-      </Row>
-      <Row label={t("general.dictation_lang")}>
-        <Select
-          value={general.dictationLang}
-          onChange={(v) => void setGeneral("dictationLang", v)}
-          options={[
-            { value: "自动检测", label: t("common:value.auto_detect") },
-            { value: "ZH", label: "ZH" },
-            { value: "EN", label: "EN" },
-            { value: "JA", label: "JA" },
-          ]}
-        />
-      </Row>
+      </div>
 
       {/* Audio */}
       <SectionTitle>{t("section.audio")}</SectionTitle>
@@ -545,32 +657,6 @@ function GeneralTab() {
         />
       </Row>
 
-      {/* Dictation mode */}
-      <SectionTitle>{t("section.asr_segment")}</SectionTitle>
-      <div className="py-3">
-        <RadioBlock
-          value={general.asrSegmentMode}
-          onChange={(v) => void setGeneral("asrSegmentMode", v)}
-          options={[
-            {
-              value: "REALTIME",
-              label: t("asr_segment.realtime_label"),
-              hint: t("asr_segment.realtime_hint"),
-            },
-            {
-              value: "UTTERANCE",
-              label: t("asr_segment.utterance_label"),
-              hint: t("asr_segment.utterance_hint"),
-            },
-            {
-              value: "AI_REFINE",
-              label: t("asr_segment.ai_refine_label"),
-              hint: t("asr_segment.ai_refine_hint"),
-            },
-          ]}
-        />
-      </div>
-
       {/* Text injection */}
       <SectionTitle>{t("section.text_injection")}</SectionTitle>
       <Row
@@ -583,72 +669,6 @@ function GeneralTab() {
         />
       </Row>
 
-      {/* Behavior */}
-      <SectionTitle>{t("section.behavior")}</SectionTitle>
-      <Row label={t("general.launch_startup")}>
-        <Switch
-          checked={general.launchStartup}
-          onChange={(v) => {
-            void setGeneral("launchStartup", v);
-            void syncAutostart(v);
-          }}
-        />
-      </Row>
-      {detectPlatform() === "macos" ? (
-        <Row
-          label={t("general.show_dock")}
-          hint={t("general.show_dock_hint")}
-        >
-          <Switch
-            checked={general.showDockIcon}
-            onChange={(v) => {
-              void setGeneral("showDockIcon", v);
-              void invoke("sync_dock_icon").catch((e) =>
-                console.warn("[dock] sync failed:", e),
-              );
-            }}
-          />
-        </Row>
-      ) : null}
-      <Row
-        label={t("general.close_to_tray")}
-        hint={t("general.close_to_tray_hint")}
-      >
-        <Switch
-          checked={general.closeBehavior === "HIDE"}
-          onChange={(v) =>
-            void setGeneral("closeBehavior", v ? "HIDE" : "ASK")
-          }
-        />
-      </Row>
-      <Row
-        label={t("general.auto_update")}
-        hint={t("general.auto_update_hint")}
-      >
-        <Switch
-          checked={general.autoUpdate}
-          onChange={(v) => void setGeneral("autoUpdate", v)}
-        />
-      </Row>
-
-      {/* History */}
-      <SectionTitle>{t("section.history")}</SectionTitle>
-      <Row
-        label={t("general.history_retention")}
-        hint={t("general.history_retention_hint")}
-      >
-        <Select
-          value={general.historyRetention}
-          onChange={(v) => void setGeneral("historyRetention", v)}
-          options={[
-            { value: "forever", label: t("general.history_retention_options.forever") },
-            { value: "90d", label: t("general.history_retention_options.90d") },
-            { value: "30d", label: t("general.history_retention_options.30d") },
-            { value: "7d", label: t("general.history_retention_options.7d") },
-            { value: "off", label: t("general.history_retention_options.off") },
-          ]}
-        />
-      </Row>
       {!loaded ? (
         <div className="mt-6 font-mono text-xs text-te-light-gray/70">
           {t("general.loading")}
@@ -700,39 +720,6 @@ function PersonalizationTab() {
           ]}
         />
       </Row>
-    </div>
-  );
-}
-
-function AccountTab() {
-  const { t } = useTranslation("settings");
-  return (
-    <div>
-      <SectionTitle>{t("section.identity")}</SectionTitle>
-      <Row label={t("account.email")}>
-        <span className="font-mono text-sm text-te-fg">
-          dynamicoct@gmail.com
-        </span>
-      </Row>
-      <Row label={t("account.subscription")} hint={t("account.subscription_hint")}>
-        <span className="inline-flex items-center gap-2 border border-te-accent/60 bg-te-accent/8 px-3 py-1 font-mono text-xs uppercase tracking-[0.15em] text-te-accent">
-          <span className="size-1.5 bg-te-accent" />
-          {t("account.free_byo_badge")}
-        </span>
-      </Row>
-
-      <SectionTitle>{t("section.session")}</SectionTitle>
-      <div className="py-4">
-        <button
-          type="button"
-          className="w-full border border-te-gray px-5 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent md:w-auto md:min-w-[16rem]"
-        >
-          {t("account.sign_out")}
-        </button>
-        <p className="mt-3 font-sans text-xs text-te-light-gray">
-          {t("account.sign_out_hint")}
-        </p>
-      </div>
     </div>
   );
 }
@@ -817,15 +804,6 @@ function AboutTab() {
       setCheckingUpdate(false);
     }
   };
-
-  const deps = [
-    { name: "Tauri", version: "2.x" },
-    { name: "React", version: "19" },
-    { name: "Tailwind CSS", version: "v4" },
-    { name: "cpal", version: "audio i/o" },
-    { name: "enigo", version: "planned" },
-    { name: "framer-motion", version: "latest" },
-  ];
 
   return (
     <div>
@@ -919,21 +897,6 @@ function AboutTab() {
           <FolderOpen className="size-3.5" />
           {t("about.open_log_dir")}
         </button>
-      </div>
-
-      <SectionTitle>{t("section.third_party")}</SectionTitle>
-      <div className="grid grid-cols-1 gap-px border border-te-gray/30 bg-te-gray/30 md:grid-cols-2">
-        {deps.map((d) => (
-          <div
-            key={d.name}
-            className="flex items-center justify-between bg-te-bg px-4 py-3"
-          >
-            <span className="font-mono text-sm text-te-fg">{d.name}</span>
-            <span className="font-mono text-xs text-te-light-gray">
-              {d.version}
-            </span>
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -1032,8 +995,8 @@ export default function SettingsContent({
         transition={{ duration: 0.3 }}
       >
         {tab === "GENERAL" && <GeneralTab />}
+        {tab === "DICTATION" && <DictationTab />}
         {tab === "PERSONALIZATION" && <PersonalizationTab />}
-        {tab === "ACCOUNT" && <AccountTab />}
         {tab === "ABOUT" && <AboutTab />}
       </motion.div>
     </div>

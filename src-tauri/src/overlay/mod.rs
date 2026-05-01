@@ -13,7 +13,13 @@ use tauri::{
 pub const OVERLAY_LABEL: &str = "overlay";
 const WIDTH: f64 = 200.0;
 const HEIGHT: f64 = 36.0;
-const BOTTOM_MARGIN: f64 = 32.0;
+// macOS 的 visibleFrame 在 Dock 上方多让出一段缓冲（约 10–20px），负值吃掉这段
+// 让胶囊真正贴近 Dock 顶边；Windows / Linux 的 work_area 已经精确排除任务栏，
+// 再压负值会盖在任务栏之上，所以保留几像素留白即可。
+#[cfg(target_os = "macos")]
+const BOTTOM_MARGIN: f64 = -8.0;
+#[cfg(not(target_os = "macos"))]
+const BOTTOM_MARGIN: f64 = 4.0;
 // hide 时把窗口先挪到屏幕外——任何一帧 webview 没合成到位也看不到残影。
 const OFFSCREEN_POSITION: f64 = -10000.0;
 
@@ -45,8 +51,92 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     position_to_bottom_center(&window)?;
 
+    #[cfg(target_os = "macos")]
+    enable_accepts_first_mouse(&window);
+
     log::warn!("[overlay] window created (hidden, transparent)");
     Ok(())
+}
+
+// 让悬浮条按钮在 OpenSpeech 不是前台 app 时一次点击就响应。
+// 默认 NSView.acceptsFirstMouse: 返回 NO —— 用户在别的 app 里按快捷键触发未登录
+// toast、点击「登录」时，第一次点击会被 AppKit 消化为"激活 app / key window"，
+// 第二次点击才派发给 webview button。
+//
+// wry 的层级结构：NSWindow.contentView 是 wry 自己的 wrapper view，里面挂了
+// WKWebView，WKWebView 内部还有真正接收 mouseDown 的 hit-test view。任何一层
+// 没 patch，AppKit 都会回退到默认 NO。所以这里递归把整棵 view 树的类都加上
+// acceptsFirstMouse: 永远 YES。class_addMethod 幂等：同一类被多次 add 同 selector
+// 时会失败但不 crash，因此 root 节点和子节点共享同一类时也安全。
+#[cfg(target_os = "macos")]
+fn enable_accepts_first_mouse<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    use objc::runtime::{
+        class_addMethod, class_getInstanceMethod, method_setImplementation, Class, Imp, Object,
+        Sel, BOOL, YES,
+    };
+    use objc::{msg_send, sel, sel_impl};
+    use std::os::raw::c_char;
+
+    extern "C" fn accepts_first_mouse(_: &Object, _: Sel, _: *mut Object) -> BOOL {
+        YES
+    }
+
+    unsafe fn force_yes(class: *mut Class) {
+        unsafe {
+            let sel = sel!(acceptsFirstMouse:);
+            let imp_fn: extern "C" fn(&Object, Sel, *mut Object) -> BOOL = accepts_first_mouse;
+            let imp: Imp = std::mem::transmute(imp_fn);
+            // 已有实现 → method_setImplementation 强制替换；未实现 → class_addMethod。
+            // objc 0.2.7 没暴露 class_replaceMethod，组合这两个达到等价效果。
+            let method = class_getInstanceMethod(class, sel);
+            if !method.is_null() {
+                let _ = method_setImplementation(method as *mut _, imp);
+            } else {
+                let types = b"c@:@\0".as_ptr() as *const c_char;
+                let _: BOOL = class_addMethod(class, sel, imp, types);
+            }
+        }
+    }
+
+    unsafe fn patch_view_tree(view: *mut Object) {
+        unsafe {
+            if view.is_null() {
+                return;
+            }
+            let view_class: *mut Class = msg_send![view, class];
+            force_yes(view_class);
+            // 递归子 view —— wry contentView → WKWebView → WKContentView 这条链都要打到。
+            let subviews: *mut Object = msg_send![view, subviews];
+            if subviews.is_null() {
+                return;
+            }
+            let count: usize = msg_send![subviews, count];
+            for i in 0..count {
+                let child: *mut Object = msg_send![subviews, objectAtIndex: i];
+                patch_view_tree(child);
+            }
+        }
+    }
+
+    let ptr = match window.ns_window() {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("[overlay] ns_window() failed: {e:?}");
+            return;
+        }
+    };
+    let ns_window = ptr as *mut Object;
+    if ns_window.is_null() {
+        return;
+    }
+    unsafe {
+        // NSWindow 自己也实现了 acceptsFirstMouse: —— 给 window 类也补上一层兜底。
+        let win_class: *mut Class = msg_send![ns_window, class];
+        force_yes(win_class);
+        let content_view: *mut Object = msg_send![ns_window, contentView];
+        patch_view_tree(content_view);
+        log::warn!("[overlay] acceptsFirstMouse patched on window + content view tree");
+    }
 }
 
 fn position_to_bottom_center<R: Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {

@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
-import { Apple, Download, Monitor, Terminal } from "lucide-react";
+import { Apple, ArrowDownToLine, Monitor, Terminal } from "lucide-react";
+import { useMemo } from "react";
 import pkg from "../../../../package.json";
 
 const RELEASES_URL = "https://github.com/OpenLoaf/OpenSpeech/releases";
@@ -9,28 +10,36 @@ const VERSION = pkg.version;
 const asset = (name: string) =>
   `${RELEASES_URL}/download/v${VERSION}/${name}`;
 
-type Variant = { label: string; arch: string; ext: string; href: string };
+type Variant = {
+  label: string;
+  arch: string;
+  ext: string;
+  href: string;
+};
 type Platform = {
-  os: string;
+  os: "macOS" | "Windows" | "Linux";
   icon: React.ComponentType<{ className?: string }>;
-  variants: Variant[];
+  tagline: string;
+  primary: Variant;
+  others: Variant[];
 };
 
 const PLATFORMS: Platform[] = [
   {
     os: "macOS",
     icon: Apple,
-    variants: [
-      {
-        label: "Apple Silicon",
-        arch: "arm64",
-        ext: ".dmg",
-        href: asset(`OpenSpeech-${VERSION}-macOS-arm64.dmg`),
-      },
+    tagline: "11 Big Sur 及以上",
+    primary: {
+      label: "Apple Silicon",
+      arch: "arm64",
+      ext: "DMG",
+      href: asset(`OpenSpeech-${VERSION}-macOS-arm64.dmg`),
+    },
+    others: [
       {
         label: "Intel",
         arch: "x86_64",
-        ext: ".dmg",
+        ext: "DMG",
         href: asset(`OpenSpeech-${VERSION}-macOS-intel.dmg`),
       },
     ],
@@ -38,17 +47,18 @@ const PLATFORMS: Platform[] = [
   {
     os: "Windows",
     icon: Monitor,
-    variants: [
-      {
-        label: "x64",
-        arch: "x86_64",
-        ext: ".exe",
-        href: asset(`OpenSpeech-${VERSION}-Windows-x86_64-setup.exe`),
-      },
+    tagline: "10 / 11",
+    primary: {
+      label: "x64 安装包",
+      arch: "x86_64",
+      ext: "EXE",
+      href: asset(`OpenSpeech-${VERSION}-Windows-x86_64-setup.exe`),
+    },
+    others: [
       {
         label: "ARM64",
         arch: "arm64",
-        ext: ".exe",
+        ext: "EXE",
         href: asset(`OpenSpeech-${VERSION}-Windows-arm64-setup.exe`),
       },
     ],
@@ -56,23 +66,24 @@ const PLATFORMS: Platform[] = [
   {
     os: "Linux",
     icon: Terminal,
-    variants: [
-      {
-        label: "AppImage",
-        arch: "x86_64",
-        ext: ".AppImage",
-        href: asset(`OpenSpeech-${VERSION}-Linux-x86_64.AppImage`),
-      },
+    tagline: "Ubuntu / Fedora / Arch",
+    primary: {
+      label: "AppImage",
+      arch: "x86_64",
+      ext: "APPIMAGE",
+      href: asset(`OpenSpeech-${VERSION}-Linux-x86_64.AppImage`),
+    },
+    others: [
       {
         label: "Debian",
         arch: "x86_64",
-        ext: ".deb",
+        ext: "DEB",
         href: asset(`OpenSpeech-${VERSION}-Linux-x86_64.deb`),
       },
       {
         label: "Red Hat",
         arch: "x86_64",
-        ext: ".rpm",
+        ext: "RPM",
         href: asset(`OpenSpeech-${VERSION}-Linux-x86_64.rpm`),
       },
     ],
@@ -92,7 +103,19 @@ function GithubIcon({ className }: { className?: string }) {
   );
 }
 
+function detectPlatform(): Platform["os"] | null {
+  if (typeof navigator === "undefined") return null;
+  const ua = navigator.userAgent.toLowerCase();
+  const platform = (navigator.platform ?? "").toLowerCase();
+  if (/mac|iphone|ipad|ipod/.test(ua) || /mac/.test(platform)) return "macOS";
+  if (/win/.test(ua) || /win/.test(platform)) return "Windows";
+  if (/linux|x11/.test(ua) || /linux/.test(platform)) return "Linux";
+  return null;
+}
+
 export default function CTASection() {
+  const detected = useMemo(detectPlatform, []);
+
   return (
     <section
       id="download"
@@ -111,85 +134,117 @@ export default function CTASection() {
         }}
       />
 
-      <div className="relative mx-auto max-w-5xl">
+      <div className="relative mx-auto max-w-6xl">
         <motion.div
-          className="text-center"
-          initial={{ opacity: 0, y: 12 }}
+          className="mb-12 flex flex-col items-center gap-3 text-center md:mb-16"
+          initial={{ opacity: 0, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
         >
-          <img
-            src="/logo-write.png"
-            alt="OpenSpeech"
-            className="mx-auto h-12 w-12 opacity-90"
-          />
+          <div className="font-mono text-xs uppercase tracking-[0.3em] text-te-light-gray/50">
+            [04] · DOWNLOAD
+          </div>
+          <h2 className="font-mono text-[clamp(1.8rem,5.5vw,4rem)] font-bold leading-[1.05] tracking-tighter text-te-fg">
+            停止打字，开始说话。
+          </h2>
+          <p className="max-w-md text-balance text-sm text-te-light-gray/60">
+            点击你的系统直接下载 · 当前版本{" "}
+            <span className="font-mono text-te-fg/80">v{VERSION}</span>
+          </p>
         </motion.div>
 
-        <motion.h2
-          className="mt-8 text-center font-mono text-[clamp(1.8rem,5.5vw,4rem)] font-bold tracking-tighter text-te-fg"
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6 }}
-        >
-          停止打字，开始说话。
-        </motion.h2>
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+          {PLATFORMS.map((p, idx) => {
+            const isDetected = detected === p.os;
+            return (
+              <motion.div
+                key={p.os}
+                initial={{ opacity: 0, y: 18 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.55, delay: 0.1 + idx * 0.08 }}
+                className={`relative flex flex-col border bg-te-bg/40 backdrop-blur-sm transition-colors ${
+                  isDetected
+                    ? "border-te-accent/60 shadow-[0_0_60px_-20px_rgba(255,204,0,0.35)]"
+                    : "border-te-gray/40 hover:border-te-light-gray/40"
+                }`}
+              >
+                {isDetected && (
+                  <div className="absolute -top-px left-0 right-0 flex justify-center">
+                    <span className="-translate-y-1/2 border border-te-accent/60 bg-te-bg px-3 py-0.5 font-mono text-[10px] uppercase tracking-[0.25em] text-te-accent">
+                      为你推荐
+                    </span>
+                  </div>
+                )}
 
-        <motion.p
-          className="mt-4 text-center text-sm text-te-light-gray/70"
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-        >
-          选择对应平台直接下载 · 当前版本 v{VERSION}
-        </motion.p>
+                <div className="flex flex-col gap-1 px-7 pt-8 pb-6">
+                  <p.icon
+                    className={`size-9 ${
+                      isDetected ? "text-te-accent" : "text-te-fg/85"
+                    }`}
+                  />
+                  <div className="mt-3 font-mono text-3xl font-bold tracking-tighter text-te-fg">
+                    {p.os}
+                  </div>
+                  <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray/50">
+                    {p.tagline}
+                  </div>
+                </div>
 
-        <div className="mt-12 grid grid-cols-1 gap-px border border-te-gray/30 md:grid-cols-3">
-          {PLATFORMS.map((p, idx) => (
-            <motion.div
-              key={p.os}
-              className="bg-te-bg p-6"
-              initial={{ opacity: 0, y: 12 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: 0.25 + idx * 0.08 }}
-            >
-              <div className="flex items-center gap-3 border-b border-te-gray/30 pb-4">
-                <p.icon className="size-5 text-te-accent" />
-                <span className="font-mono text-base font-bold tracking-tighter text-te-fg">
-                  {p.os}
-                </span>
-              </div>
+                <div className="mt-auto flex flex-col gap-3 px-7 pb-7">
+                  <a
+                    href={p.primary.href}
+                    download
+                    className={`group inline-flex items-center justify-between gap-3 border px-4 py-3.5 font-mono text-sm font-bold tracking-tight transition-all ${
+                      isDetected
+                        ? "border-te-accent bg-te-accent text-te-bg hover:bg-te-accent/90"
+                        : "border-te-fg/80 text-te-fg hover:border-te-accent hover:bg-te-accent hover:text-te-bg"
+                    }`}
+                  >
+                    <span className="flex flex-col items-start leading-tight">
+                      <span className="text-base">下载 · {p.primary.label}</span>
+                      <span
+                        className={`mt-0.5 text-[10px] font-normal uppercase tracking-[0.2em] ${
+                          isDetected
+                            ? "text-te-bg/60"
+                            : "text-te-light-gray/60 group-hover:text-te-bg/60"
+                        }`}
+                      >
+                        {p.primary.ext} · {p.primary.arch}
+                      </span>
+                    </span>
+                    <ArrowDownToLine className="size-5 shrink-0 transition-transform group-hover:translate-y-0.5" />
+                  </a>
 
-              <ul className="mt-4 flex flex-col">
-                {p.variants.map((v) => (
-                  <li key={v.label}>
-                    <a
-                      href={v.href}
-                      download
-                      className="group flex items-center justify-between gap-3 border-b border-te-gray/20 py-3 transition-colors last:border-b-0 hover:border-te-accent/40"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-sm font-bold tracking-tight text-te-fg transition-colors group-hover:text-te-accent">
+                  {p.others.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/40">
+                        其他
+                      </span>
+                      {p.others.map((v) => (
+                        <a
+                          key={v.label}
+                          href={v.href}
+                          download
+                          className="inline-flex items-center gap-1.5 border border-te-gray/40 px-2.5 py-1 font-mono text-[11px] tracking-tight text-te-light-gray/70 transition-colors hover:border-te-accent hover:text-te-accent"
+                        >
                           {v.label}
-                        </div>
-                        <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/50">
-                          {v.arch} · {v.ext}
-                        </div>
-                      </div>
-                      <Download className="size-4 shrink-0 text-te-light-gray/40 transition-colors group-hover:text-te-accent" />
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </motion.div>
-          ))}
+                          <span className="text-te-light-gray/40">
+                            · {v.ext}
+                          </span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
 
         <motion.div
-          className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
+          className="mt-12 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
           initial={{ opacity: 0, y: 10 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}

@@ -40,6 +40,16 @@ interface AuthState {
   user: AuthUser | null;
   /** 含会员等级 / 积分的扩展 profile，登录后异步拉回。 */
   profile: UserProfile | null;
+  /**
+   * 实时 ASR 单价（积分/分钟）。登录后由 fetchRealtimeAsrPricing 拉一次。
+   * Sidebar 用它把 creditsBalance 折算成"剩余可用分钟"。
+   * 拉失败 / 未登录 → null，UI 回落到展示原始积分。
+   *
+   * ⚠️ 当前从 V3 capabilities 的 realtimeAsrLlm 取，假设与 V4 OL-TL-RT-002
+   * 实际跑的通道单价一致。V4 通道改了计费规则就要换数据源——见
+   * src-tauri/src/openloaf/mod.rs 中 openloaf_fetch_realtime_asr_pricing 的注释。
+   */
+  realtimeAsrCreditsPerMinute: number | null;
   isAuthenticated: boolean;
   loaded: boolean;
   /** 登录流状态：idle 空闲 | opening 正在打开浏览器 | polling 已打开等待回调 | error */
@@ -58,6 +68,8 @@ interface AuthState {
   logout: () => Promise<void>;
   /** 主动拉一次 profile（登录事件 / 恢复会话后自动触发；其他地方也可手动用） */
   fetchProfile: () => Promise<void>;
+  /** 拉一次实时 ASR 单价（积分/分钟），通常与 fetchProfile 同时触发 */
+  fetchRealtimeAsrPricing: () => Promise<void>;
 }
 
 // listen 事件订阅一次（模块级），解绑函数保留以便热更新场景解绑。
@@ -86,6 +98,7 @@ async function ensureLoginListener() {
           });
           // 登录成功后立即把 profile 拉回（会员等级 / 积分等）。
           void useAuthStore.getState().fetchProfile();
+          void useAuthStore.getState().fetchRealtimeAsrPricing();
         } else {
           useAuthStore.setState({
             loginStatus: "error",
@@ -121,6 +134,7 @@ async function ensureLoginListener() {
           loaded: true,
         });
         void useAuthStore.getState().fetchProfile();
+        void useAuthStore.getState().fetchRealtimeAsrPricing();
       },
     );
   }
@@ -129,6 +143,7 @@ async function ensureLoginListener() {
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   profile: null,
+  realtimeAsrCreditsPerMinute: null,
   isAuthenticated: false,
   loaded: false,
   loginStatus: "idle",
@@ -144,8 +159,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         invoke<boolean>("openloaf_is_authenticated"),
       ]);
       set({ user, isAuthenticated: authed, loaded: true });
-      // bootstrap 自动恢复成功 → 顺便把 profile 拉一次。
-      if (authed) void get().fetchProfile();
+      // bootstrap 自动恢复成功 → 顺便把 profile + 单价拉一次。
+      if (authed) {
+        void get().fetchProfile();
+        void get().fetchRealtimeAsrPricing();
+      }
     } catch {
       set({ loaded: true });
     }
@@ -224,7 +242,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     await invoke("openloaf_logout");
-    set({ user: null, profile: null, isAuthenticated: false });
+    set({
+      user: null,
+      profile: null,
+      realtimeAsrCreditsPerMinute: null,
+      isAuthenticated: false,
+    });
   },
 
   fetchProfile: async () => {
@@ -234,6 +257,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ profile });
     } catch {
       // 静默失败：profile 拉不到不影响登录态本身，UI 用 fallback。
+    }
+  },
+
+  fetchRealtimeAsrPricing: async () => {
+    if (!get().isAuthenticated) return;
+    try {
+      const cpm = await invoke<number>("openloaf_fetch_realtime_asr_pricing");
+      // 防御：服务端返回 0 / 负数会让分钟数除爆 → 当成"未知"丢弃。
+      const safe = cpm > 0 ? cpm : null;
+      console.info(
+        "[auth] realtime ASR pricing (V3 realtimeAsrLlm proxy):",
+        cpm,
+        "credits/min →",
+        safe ?? "ignored",
+      );
+      set({ realtimeAsrCreditsPerMinute: safe });
+    } catch (e) {
+      // 静默失败：拉不到 sidebar 退化到展示原始积分。
+      console.warn("[auth] fetchRealtimeAsrPricing failed:", e);
     }
   },
 }));

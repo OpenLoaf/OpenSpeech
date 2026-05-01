@@ -68,8 +68,8 @@
     "body_1_suffix": " 執行，全域快速鍵仍然可用。",
     "body_2": "可透過系統工具列圖示重新開啟主視窗，或選擇「結束」完全結束處理程序。",
     "remember": "不再提示",
-    "quit": "結束 OpenSpeech",
-    "stay": "繼續在背景執行"
+    "quit": "結束",
+    "stay": "背景執行"
   },
   "no_internet": {
     "title": "沒有網際網路連線",
@@ -91,7 +91,7 @@
   "hotkey_preview": {
     "default_title": "聽寫快速鍵 / PUSH-TO-TALK",
     "unbound": "未繫結",
-    "default_hint": "單擊開始 · 再按一次結束"
+    "default_hint": "按一下開始 · 再按一次結束"
   },
   "loading_screen": {
     "initializing": "INITIALIZING",

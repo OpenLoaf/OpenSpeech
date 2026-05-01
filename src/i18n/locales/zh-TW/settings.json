@@ -7,8 +7,8 @@
     "dialog_sr": "OpenSpeech 設定"
   },
   "tabs": {
-    "account": "帳戶",
     "general": "一般",
+    "dictation": "聽寫",
     "model": "模型",
     "personalization": "個人化",
     "about": "關於"
@@ -24,14 +24,10 @@
     "asr_segment": "聽寫模式",
     "text_injection": "文字注入",
     "behavior": "行為",
-    "history": "歷史記錄",
     "model_rest": "大型模型（REST）",
     "ai_enhance": "AI 增強",
     "dictionary_learning": "詞典學習",
-    "identity": "身份",
-    "session": "工作階段",
-    "build": "建置",
-    "third_party": "第三方依賴"
+    "build": "建置"
   },
   "general": {
     "interface_lang": "介面語言",
@@ -48,16 +44,19 @@
     "show_dock_hint": "在 macOS Dock 顯示 OpenSpeech 圖示，方便快速存取。關閉後應用程式作為純選單列應用程式執行（仍可透過系統列開啟主視窗）",
     "close_to_tray": "關閉時最小化至系統列",
     "close_to_tray_hint": "開啟後關閉主視窗會直接隱藏至系統列；關閉時每次都會跳出確認對話框",
-    "auto_update": "自動更新",
-    "auto_update_hint": "啟動時靜默檢查並安裝新版本；關閉後僅能透過系統列「檢查更新」手動觸發",
-    "history_retention": "歷史保留時長",
-    "history_retention_hint": "控制本機資料庫中歷史記錄的保留時間；縮短時長只在下次啟動生效，不會立即刪除已有記錄",
-    "history_retention_options": {
-      "forever": "永遠",
-      "90d": "90 天",
-      "30d": "30 天",
-      "7d": "7 天",
-      "off": "不保存"
+    "update_policy": "自動更新",
+    "update_policy_hint": "選擇背景發現新版本時的處理方式",
+    "update_policy_options": {
+      "prompt": "提示我安裝（推薦）",
+      "auto": "閒置時自動安裝",
+      "disabled": "關閉"
+    },
+    "update_check_interval": "檢查更新間隔",
+    "update_check_interval_hint": "背景多久檢查一次新版本；啟動時一定會先檢查一次",
+    "update_check_interval_options": {
+      "1h": "1 小時",
+      "6h": "6 小時",
+      "24h": "24 小時"
     },
     "loading": "// loading settings…"
   },
@@ -101,14 +100,6 @@
     "low": "低",
     "normal": "標準",
     "high": "高"
-  },
-  "account": {
-    "email": "電子郵件",
-    "subscription": "訂閱",
-    "subscription_hint": "使用自備的模型 Key",
-    "free_byo_badge": "免費 / 自備模型",
-    "sign_out": "登出",
-    "sign_out_hint": "登出後會清除本機登入狀態。本機錄音、歷史紀錄與詞典將保留。"
   },
   "about": {
     "version": "版本",

@@ -7,8 +7,8 @@
     "dialog_sr": "OpenSpeech settings"
   },
   "tabs": {
-    "account": "Account",
     "general": "General",
+    "dictation": "Dictation",
     "model": "Model",
     "personalization": "Personalization",
     "about": "About"
@@ -24,14 +24,10 @@
     "asr_segment": "Dictation mode",
     "text_injection": "Text injection",
     "behavior": "Behavior",
-    "history": "History",
     "model_rest": "Large model (REST)",
     "ai_enhance": "AI enhancement",
     "dictionary_learning": "Dictionary learning",
-    "identity": "Identity",
-    "session": "Session",
-    "build": "Build",
-    "third_party": "Third-party dependencies"
+    "build": "Build"
   },
   "general": {
     "interface_lang": "Interface language",
@@ -48,16 +44,19 @@
     "show_dock_hint": "Show the OpenSpeech icon in the macOS Dock for quick access. When off, the app runs as a menu-bar-only app (you can still open the main window from the tray).",
     "close_to_tray": "Minimize to tray on close",
     "close_to_tray_hint": "When on, closing the main window hides it to the tray; otherwise a confirm dialog appears each time.",
-    "auto_update": "Auto update",
-    "auto_update_hint": "Silently check and install new versions on launch. When off, you can only check manually from the tray.",
-    "history_retention": "History retention",
-    "history_retention_hint": "How long history records are kept in the local database. Shortening the window takes effect on next launch and does not delete existing records immediately.",
-    "history_retention_options": {
-      "forever": "Forever",
-      "90d": "90 days",
-      "30d": "30 days",
-      "7d": "7 days",
-      "off": "Don't save"
+    "update_policy": "Updates",
+    "update_policy_hint": "Choose how OpenSpeech handles new versions discovered in the background.",
+    "update_policy_options": {
+      "prompt": "Notify me (recommended)",
+      "auto": "Auto-install when idle",
+      "disabled": "Off"
+    },
+    "update_check_interval": "Check for updates every",
+    "update_check_interval_hint": "How often the app polls in the background. The first check still runs at launch.",
+    "update_check_interval_options": {
+      "1h": "1 hour",
+      "6h": "6 hours",
+      "24h": "24 hours"
     },
     "loading": "// loading settings…"
   },
@@ -101,14 +100,6 @@
     "low": "Low",
     "normal": "Normal",
     "high": "High"
-  },
-  "account": {
-    "email": "Email",
-    "subscription": "Subscription",
-    "subscription_hint": "Using your own model key",
-    "free_byo_badge": "Free / BYO model",
-    "sign_out": "Sign out",
-    "sign_out_hint": "Signing out clears the local login state. Local recordings, history and dictionary stay intact."
   },
   "about": {
     "version": "Version",

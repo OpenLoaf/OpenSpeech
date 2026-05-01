@@ -51,12 +51,24 @@ export default function FAQSection() {
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
         >
-          <div className="mb-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray/50">
-            [03] FAQ
+          <div className="mb-3 font-mono text-xs uppercase tracking-[0.3em] text-te-light-gray/50">
+            [03] · FAQ
           </div>
-          <h2 className="font-mono text-2xl font-bold tracking-tighter text-te-fg md:text-3xl">
+          <h2 className="font-mono text-3xl font-bold leading-[1.05] tracking-tighter text-te-fg md:text-5xl">
             常见问题
           </h2>
+          <p className="mt-4 max-w-xl text-sm leading-relaxed text-te-light-gray/60">
+            没找到答案？打开{" "}
+            <a
+              href="https://github.com/OpenLoaf/OpenSpeech/issues"
+              target="_blank"
+              rel="noreferrer"
+              className="text-te-accent underline-offset-4 hover:underline"
+            >
+              GitHub Issues
+            </a>{" "}
+            提问。
+          </p>
         </motion.div>
 
         <div className="divide-y divide-te-gray/30">

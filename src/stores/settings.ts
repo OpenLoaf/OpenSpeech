@@ -6,7 +6,7 @@ import type { LanguagePref } from "@/i18n";
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
 export type Sensitivity = "LOW" | "NORMAL" | "HIGH";
@@ -25,6 +25,11 @@ export type AsrSegmentMode = "REALTIME" | "UTTERANCE" | "AI_REFINE";
 // 历史记录保留时长。off = 不写入数据库（仅当前会话内存可见）；其它按天数清理。
 // 真正的清理任务由后端启动期 sweeper 执行（见 docs/history.md，TODO 实现）。
 export type HistoryRetention = "forever" | "90d" | "30d" | "7d" | "off";
+// 自动更新策略：
+//   PROMPT   — 周期检查，发现新版静默下载提示用户安装（默认）
+//   AUTO     — 周期检查，发现新版且系统空闲 + 非录音中时静默安装并重启
+//   DISABLED — 不做任何后台检查；仅托盘/关于页手动检查
+export type UpdatePolicy = "PROMPT" | "AUTO" | "DISABLED";
 
 export interface GeneralSettings {
   interfaceLang: LanguagePref;
@@ -44,10 +49,11 @@ export interface GeneralSettings {
   // 仅 macOS：是否在 Dock 中显示应用图标。off ⇒ 应用变成纯菜单栏应用（Accessory
   // activation policy），仍可通过托盘打开主窗口。其他平台无效果。
   showDockIcon: boolean;
-  // 自动更新：启动时静默 check + 下载；发现新版本直接 downloadAndInstall
-  // 触发一次 relaunch，用户感知 ≈ 启动时多了一小段"升级中"。off 则完全不检查，
-  // 只能手动通过托盘"检查更新"触发。
-  autoUpdate: boolean;
+  // 自动更新策略：决定后台周期检查命中新版后的行为。详见 UpdatePolicy 注释。
+  // 默认 PROMPT：下载完毕后弹 toast 让用户决定何时安装。
+  updatePolicy: UpdatePolicy;
+  // 周期检查间隔（小时）。boot 触发一次，之后每 N 小时再触发一次。
+  updateCheckIntervalHours: number;
   // 用户在自动检测到新版的 toast 上点了"跳过此版本"——记下版本号，下次启动 check
   // 命中同一版本时静默掉提示。空串 = 未跳过任何版本；用户主动点托盘 / 关于页的
   // "检查更新"时不消费这个值，仍会正常提示。
@@ -93,7 +99,8 @@ const DEFAULT_GENERAL: GeneralSettings = {
   restoreClipboard: true,
   launchStartup: false,
   showDockIcon: true,
-  autoUpdate: true,
+  updatePolicy: "PROMPT",
+  updateCheckIntervalHours: 6,
   skippedUpdateVersion: "",
   closeBehavior: "ASK",
   onboardingCompleted: false,
@@ -204,6 +211,22 @@ function migrateV6(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
   return cleaned as Partial<GeneralSettings>;
 }
 
+// v7 → v8：autoUpdate(boolean) → updatePolicy(枚举) + 新增 updateCheckIntervalHours。
+// true ⇒ PROMPT（保持现有"提示后才装"的行为，不做用户没要求过的自动安装）；
+// false ⇒ DISABLED。老用户没设过就走默认 PROMPT。
+function migrateV7(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
+  const cleaned = { ...oldGeneral };
+  const legacy = cleaned.autoUpdate;
+  delete cleaned.autoUpdate;
+  let policy: UpdatePolicy = "PROMPT";
+  if (legacy === false) policy = "DISABLED";
+  return {
+    ...(cleaned as Partial<GeneralSettings>),
+    updatePolicy: policy,
+    updateCheckIntervalHours: 6,
+  };
+}
+
 async function readPersisted(): Promise<PersistShape> {
   const s = await store();
   const raw = await s.get<unknown>("root");
@@ -223,9 +246,10 @@ async function readPersisted(): Promise<PersistShape> {
     const v5 = migrateV4(v4 as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
+    const v8 = migrateV7(v7 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v7 },
+      general: { ...DEFAULT_GENERAL, ...v8 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -238,9 +262,10 @@ async function readPersisted(): Promise<PersistShape> {
     const v5 = migrateV4(v4 as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
+    const v8 = migrateV7(v7 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v7 },
+      general: { ...DEFAULT_GENERAL, ...v8 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -252,9 +277,10 @@ async function readPersisted(): Promise<PersistShape> {
     const v5 = migrateV4(v4 as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
+    const v8 = migrateV7(v7 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v7 },
+      general: { ...DEFAULT_GENERAL, ...v8 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -265,9 +291,10 @@ async function readPersisted(): Promise<PersistShape> {
     const v5 = migrateV4((r.general ?? {}) as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
+    const v8 = migrateV7(v7 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v7 },
+      general: { ...DEFAULT_GENERAL, ...v8 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -277,9 +304,10 @@ async function readPersisted(): Promise<PersistShape> {
   if (r.schemaVersion === 5) {
     const v6 = migrateV5((r.general ?? {}) as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
+    const v8 = migrateV7(v7 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v7 },
+      general: { ...DEFAULT_GENERAL, ...v8 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),
@@ -288,9 +316,21 @@ async function readPersisted(): Promise<PersistShape> {
   }
   if (r.schemaVersion === 6) {
     const v7 = migrateV6((r.general ?? {}) as Record<string, unknown>);
+    const v8 = migrateV7(v7 as Record<string, unknown>);
     return {
       schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v7 },
+      general: { ...DEFAULT_GENERAL, ...v8 },
+      personalization: {
+        ...DEFAULT_PERSONALIZATION,
+        ...(r.personalization ?? {}),
+      },
+    };
+  }
+  if (r.schemaVersion === 7) {
+    const v8 = migrateV7((r.general ?? {}) as Record<string, unknown>);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...v8 },
       personalization: {
         ...DEFAULT_PERSONALIZATION,
         ...(r.personalization ?? {}),

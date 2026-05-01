@@ -4,7 +4,9 @@
 // 1. 采集麦克风 peak 电平，~20Hz emit 到前端供 overlay 波形 + 设置页电平表消费。
 // 2. 录音会话（task #13 的第一步）：同一个 stream callback 内，在激活 session
 //    时把 PCM 归一化为 f32 [-1, 1] 累积到 Zeroizing<Vec<f32>>；
-//    `audio_recording_stop` 时编码为 OGG Vorbis 落到 app_data_dir/recordings/<id>.ogg。
+//    `audio_recording_stop` 时编码为 OGG Vorbis 落到
+//    app_data_dir/recordings/<yyyy-MM-dd>/<id>.ogg（按本地日期分子目录，方便
+//    用户翻历史录音）。
 //    STT 和文本注入尚未接入；stop 返回 { audio_path, duration_ms, sample_rate,
 //    channels } 供前端写 history 记录。
 //    历史落盘的 .wav 文件继续支持读取 / 导出 / 重转写——只是不再新写。
@@ -94,6 +96,9 @@ const OGG_ENCODE_BLOCK_FRAMES: usize = 1024;
 // 的"内存音频必须 zeroize"条款。
 struct RecordingSession {
     id: String,
+    /// 本地日期 yyyy-MM-dd，由前端 start 时传入；落盘路径形如
+    /// `recordings/<date>/<id>.ogg`，方便用户按日期翻文件夹。
+    date: String,
     started_at: Instant,
     sample_rate: u32,
     channels: u16,
@@ -920,7 +925,7 @@ pub async fn audio_level_stop() {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RecordingResult {
-    /// 相对 app_data_dir 的路径（如 "recordings/<id>.ogg"），直接写进 history.audio_path
+    /// 相对 app_data_dir 的路径（如 "recordings/<yyyy-MM-dd>/<id>.ogg"），直接写进 history.audio_path
     pub audio_path: String,
     pub duration_ms: u64,
     pub sample_rate: u32,
@@ -929,13 +934,18 @@ pub struct RecordingResult {
 }
 
 /// 前端按下快捷键、进入 recording 前调用。传入的 id 就是 history.id，
-/// 也作为录音文件名（`recordings/<id>.ogg`）。
+/// 也作为录音文件名（`recordings/<date>/<id>.ogg`）。`date` 由前端按本地时区
+/// 生成（`yyyy-MM-dd`），Rust 端只校验格式合法。
 ///
 /// 要求调用方已经通过 `audio_level_start` 把 stream 拉起来（前端 recording
 /// store 的 startMic() 已经保证了这一点）；否则 session 创建了但 callback
 /// 不会跑，OGG 会是空的。
 #[tauri::command]
-pub fn audio_recording_start(id: String) -> Result<(), String> {
+pub fn audio_recording_start(id: String, date: String) -> Result<(), String> {
+    if !is_valid_date_segment(&date) {
+        return Err(format!("invalid date format (need yyyy-MM-dd): {date}"));
+    }
+
     let (sample_rate, channels) = stream_info()
         .lock()
         .map_err(|e| e.to_string())?
@@ -945,6 +955,7 @@ pub fn audio_recording_start(id: String) -> Result<(), String> {
     // 旧 session 未 stop 就又 start——丢弃旧 samples（Zeroizing 会清零）
     *slot = Some(RecordingSession {
         id,
+        date,
         started_at: Instant::now(),
         sample_rate,
         channels,
@@ -953,8 +964,8 @@ pub fn audio_recording_start(id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 前端 finalize 时调用。把 session 取出，编码 OGG Vorbis 写到 recordings/<id>.ogg，
-/// 返回 RecordingResult 供前端写 history 记录。
+/// 前端 finalize 时调用。把 session 取出，编码 OGG Vorbis 写到
+/// recordings/<yyyy-MM-dd>/<id>.ogg，返回 RecordingResult 供前端写 history 记录。
 ///
 /// 若无激活 session（用户快速双击误触 / 没调 start 就 stop）返回 Err；前端
 /// 据此走"不写历史"分支。
@@ -982,10 +993,12 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
     let duration_ms = session.started_at.elapsed().as_millis() as u64;
     let samples_len = session.samples.len();
 
-    // 确保 recordings 目录存在
-    let dir = db::ensure_recordings_dir(&app)?;
-    let rel_path = format!("recordings/{}.ogg", session.id);
-    let abs_path = dir.join(format!("{}.ogg", session.id));
+    // 按日期分子目录落盘：recordings/<yyyy-MM-dd>/<id>.ogg；目录不存在时 mkdir_p。
+    let day_dir = db::ensure_recordings_dir(&app)?.join(&session.date);
+    std::fs::create_dir_all(&day_dir)
+        .map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
+    let rel_path = format!("recordings/{}/{}.ogg", session.date, session.id);
+    let abs_path = day_dir.join(format!("{}.ogg", session.id));
 
     encode_ogg_vorbis(&abs_path, &session.samples, session.sample_rate, session.channels)?;
 
@@ -1075,33 +1088,62 @@ fn encode_ogg_vorbis(
     Ok(())
 }
 
-/// 校验 history.audio_path：必须是 `recordings/<filename>` 形式，filename 不允许
-/// 路径分隔符 / `..` / 空串，扩展名只接受 `.ogg`（新版）或 `.wav`（兼容旧库）。
-/// 返回纯 filename，由调用方拼到 recordings_dir 下。
-fn validated_recording_filename(audio_path: &str) -> Result<&str, String> {
-    let Some(filename) = audio_path.strip_prefix("recordings/") else {
+/// 检查 `yyyy-MM-dd` 形式：固定 10 位、`-` 在 4/7 位、其余全是数字。
+/// 不验语义（13 月、32 日也算合法）——只防 `..` / 路径分隔符之类的注入。
+pub(crate) fn is_valid_date_segment(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[..4].iter().all(|c| c.is_ascii_digit())
+        && b[5..7].iter().all(|c| c.is_ascii_digit())
+        && b[8..10].iter().all(|c| c.is_ascii_digit())
+}
+
+/// 校验 history.audio_path 并返回相对 recordings_dir 的子路径。
+///
+/// 支持两种形态（都拒绝绝对路径 / `..` / 反斜杠 / 多级目录嵌套，防任意文件读取）：
+/// - 新版：`recordings/<yyyy-MM-dd>/<id>.ogg`
+/// - 旧版（迁移前已落盘）：`recordings/<id>.ogg` 或 `recordings/<id>.wav`
+pub(crate) fn validated_recording_subpath(audio_path: &str) -> Result<std::path::PathBuf, String> {
+    let Some(rest) = audio_path.strip_prefix("recordings/") else {
         return Err("audio_path must start with recordings/".to_string());
     };
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains("..")
-    {
+    if rest.is_empty() || rest.contains('\\') || rest.contains("..") {
+        return Err("invalid audio_path".to_string());
+    }
+    let segs: Vec<&str> = rest.split('/').collect();
+    let (date, filename) = match segs.as_slice() {
+        [filename] => (None, *filename),
+        [date, filename] => (Some(*date), *filename),
+        _ => return Err("invalid audio_path".to_string()),
+    };
+    if let Some(d) = date {
+        if !is_valid_date_segment(d) {
+            return Err("invalid date segment in audio_path".to_string());
+        }
+    }
+    if filename.is_empty() {
         return Err("invalid filename in audio_path".to_string());
     }
     let lower = filename.to_ascii_lowercase();
     if !(lower.ends_with(".ogg") || lower.ends_with(".wav")) {
         return Err("audio_path must end with .ogg or .wav".to_string());
     }
-    Ok(filename)
+    let mut p = std::path::PathBuf::new();
+    if let Some(d) = date {
+        p.push(d);
+    }
+    p.push(filename);
+    Ok(p)
 }
 
 /// 读取一条历史记录对应的录音字节，供前端 `<audio>` 元素播放。
 ///
-/// 入参 `audio_path` 必须形如 `"recordings/<id>.ogg"`（新录音）或
-/// `"recordings/<id>.wav"`（迁移前已落盘的老录音）——这是 DB 里
-/// `history.audio_path` 的存储约定；其他形式（绝对路径 / 含 `..` / 含多级子目录
-/// / 非音频后缀）一律拒绝，防止被构造成任意文件读取漏洞。
+/// 入参 `audio_path` 必须形如 `"recordings/<yyyy-MM-dd>/<id>.ogg"`（新录音）
+/// 或 `"recordings/<id>.{ogg,wav}"`（迁移前已落盘的老录音）——这是 DB 里
+/// `history.audio_path` 的存储约定；其他形式（绝对路径 / 含 `..` / 多级目录
+/// 嵌套 / 非音频后缀）一律拒绝，防止被构造成任意文件读取漏洞。
 ///
 /// 返回 `tauri::ipc::Response`，让 Tauri 以原始二进制通道回传——前端收到的是
 /// `ArrayBuffer`，而不是 `Vec<u8>` 默认序列化的 JSON number 数组（那会让几 MB
@@ -1111,26 +1153,24 @@ pub fn audio_recording_load<R: Runtime>(
     app: AppHandle<R>,
     audio_path: String,
 ) -> Result<Response, String> {
-    let filename = validated_recording_filename(&audio_path)?;
-    let dir = db::recordings_dir(&app)?;
-    let abs = dir.join(filename);
+    let sub = validated_recording_subpath(&audio_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
     let bytes = std::fs::read(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
     Ok(Response::new(bytes))
 }
 
 /// 把 history 中某条录音另存到用户在系统对话框里选的位置。
-/// `audio_path` 沿用 `audio_recording_load` 的相对路径约定（`recordings/<id>.ogg`
-/// 或迁移前的 `recordings/<id>.wav`），`dest_path` 来自前端 `plugin-dialog::save()`
-/// 的绝对路径——交给 std::fs::copy 由 OS 自行处理覆盖 / 权限。
+/// `audio_path` 沿用 `audio_recording_load` 的相对路径约定，`dest_path` 来自
+/// 前端 `plugin-dialog::save()` 的绝对路径——交给 std::fs::copy 由 OS 自行
+/// 处理覆盖 / 权限。
 #[tauri::command]
 pub fn audio_recording_export<R: Runtime>(
     app: AppHandle<R>,
     audio_path: String,
     dest_path: String,
 ) -> Result<(), String> {
-    let filename = validated_recording_filename(&audio_path)?;
-    let dir = db::recordings_dir(&app)?;
-    let src = dir.join(filename);
+    let sub = validated_recording_subpath(&audio_path)?;
+    let src = db::recordings_dir(&app)?.join(sub);
     std::fs::copy(&src, &dest_path)
         .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dest_path))?;
     Ok(())
@@ -1144,9 +1184,8 @@ pub fn audio_recording_delete<R: Runtime>(
     app: AppHandle<R>,
     audio_path: String,
 ) -> Result<(), String> {
-    let filename = validated_recording_filename(&audio_path)?;
-    let dir = db::recordings_dir(&app)?;
-    let abs = dir.join(filename);
+    let sub = validated_recording_subpath(&audio_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
     match std::fs::remove_file(&abs) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

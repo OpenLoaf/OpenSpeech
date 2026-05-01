@@ -57,7 +57,7 @@ export default function DictionaryPage() {
       >
         <div
           data-tauri-drag-region
-          className="mx-auto max-w-5xl px-[4vw] py-[clamp(1rem,2vw,2rem)]"
+          className="mx-auto max-w-5xl px-[4vw] pt-3 pb-[clamp(1rem,2vw,2rem)]"
         >
           <motion.div
             data-tauri-drag-region

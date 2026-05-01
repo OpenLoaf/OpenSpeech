@@ -38,9 +38,9 @@ const LOCALES: Record<"zh-CN" | "en" | "zh-TW", DemoLocale> = {
     polishedHeader: "本周任务 · 共 3 项",
     polishedList: ["修改注册页面", "完成数据库迁移", "测试覆盖率提升至 80% 以上"],
     scratchPath: "~/scratch.md",
-    scratchFooterPrompt: "input · 按一下快捷键开始 · 再按一下结束",
+    scratchFooterPrompt: "输入 · 按一下快捷键开始 · 再按一下结束",
     charsUnit: "字",
-    liveLabel: "live",
+    liveLabel: "实时",
     waiting: "// 等待按键",
     listening: "// 正在听...",
   },
@@ -92,9 +92,9 @@ const LOCALES: Record<"zh-CN" | "en" | "zh-TW", DemoLocale> = {
     polishedHeader: "本週任務 · 共 3 項",
     polishedList: ["修改註冊頁面", "完成資料庫遷移", "測試覆蓋率提升至 80% 以上"],
     scratchPath: "~/scratch.md",
-    scratchFooterPrompt: "input · 按一下快捷鍵開始 · 再按一下結束",
+    scratchFooterPrompt: "輸入 · 按一下快捷鍵開始 · 再按一下結束",
     charsUnit: "字",
-    liveLabel: "live",
+    liveLabel: "即時",
     waiting: "// 等待按鍵",
     listening: "// 正在聽...",
   },
@@ -153,19 +153,19 @@ export function useStageCycle(active: boolean): Stage {
 
 // 对齐 LiveDictationPanel.statusCopy 的工业 tag 风格
 const STAGE_TAG: Record<Stage, string> = {
-  idle: "// IDLE",
-  recording: "// LISTENING",
-  transcribing: "// TRANSCRIBING",
-  polishing: "// POLISHING",
-  injecting: "// INJECTING",
+  idle: "// 待机",
+  recording: "// 收音中",
+  transcribing: "// 转写中",
+  polishing: "// 清洗中",
+  injecting: "// 注入中",
 };
 
 const CAPTIONS: Record<Stage, string> = {
-  idle: "// IDLE · 按一下快捷键开始",
-  recording: "// LISTENING · 再按一次快捷键 结束并转写",
-  transcribing: "// TRANSCRIBING · 正在转写…",
-  polishing: "// POLISHING · AI 清洗口误并重排",
-  injecting: "// INJECTING · 正在写入输入框…",
+  idle: "// 待机 · 按一下快捷键开始",
+  recording: "// 收音中 · 再按一次快捷键结束并转写",
+  transcribing: "// 转写中 · 正在转写…",
+  polishing: "// 清洗中 · AI 抹平口误并重排",
+  injecting: "// 注入中 · 写入光标位置…",
 };
 
 export default function DemoSection() {
@@ -173,22 +173,41 @@ export default function DemoSection() {
   const stage = useStageCycle(active);
 
   return (
-    <section id="demo" className="bg-te-bg px-[4vw] py-[clamp(5rem,11vw,9rem)]">
-      <div className="mx-auto max-w-6xl">
+    <section
+      id="demo"
+      data-promo-section
+      className="relative bg-te-bg px-[4vw] py-[clamp(5rem,11vw,9rem)]"
+    >
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.35]"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
+          backgroundSize: "80px 80px",
+          maskImage:
+            "radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 90%)",
+          WebkitMaskImage:
+            "radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 90%)",
+        }}
+      />
+      <div className="relative mx-auto max-w-6xl">
         <motion.div
-          className="mb-14 md:mb-20"
+          className="mb-14 flex flex-col gap-6 border-b border-te-gray/30 pb-8 md:mb-20 md:flex-row md:items-end md:justify-between"
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
         >
-          <div className="mb-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray/50">
-            [02] CORE DEMO
+          <div className="flex flex-col gap-3">
+            <span className="font-mono text-xs uppercase tracking-[0.3em] text-te-light-gray/50">
+              [02] · Core Demo
+            </span>
+            <h2 className="max-w-2xl font-mono text-3xl font-bold leading-[1.05] tracking-tighter text-te-fg md:text-5xl">
+              说一段大白话，落到光标里就是
+              <span className="text-te-accent">结构化文档</span>。
+            </h2>
           </div>
-          <h2 className="font-mono text-3xl font-bold tracking-tighter text-te-fg md:text-4xl">
-            说一段大白话，落到光标里就是结构化文档。
-          </h2>
-          <p className="mt-4 max-w-2xl text-sm leading-relaxed text-te-light-gray/60 md:text-base">
+          <p className="max-w-sm text-sm leading-relaxed text-te-light-gray/60 md:text-right">
             录音 → 转写 → AI 清洗。口误、语气词、自我纠错全部抹平，再按你想要的格式重排。
           </p>
         </motion.div>
@@ -453,7 +472,7 @@ function WinIcon() {
   );
 }
 
-function ShortcutKeys({ stage }: { stage: Stage }) {
+export function ShortcutKeys({ stage }: { stage: Stage }) {
   const platform = useMemo(() => detectPlatform(), []);
   const keys = useMemo(() => defaultKeys(platform), [platform]);
   const pressed = stage === "recording";
@@ -533,15 +552,15 @@ export function RecorderBar({ stage }: { stage: Stage }) {
           )}
 
           {stage === "transcribing" && (
-            <CapsuleStatus key="transcribing" label="// TRANSCRIBING" />
+            <CapsuleStatus key="transcribing" label="// 转写中" />
           )}
 
           {stage === "polishing" && (
-            <CapsuleStatus key="polishing" label="// POLISHING" />
+            <CapsuleStatus key="polishing" label="// 清洗中" />
           )}
 
           {stage === "injecting" && (
-            <CapsuleStatus key="injecting" label="// INJECTING" />
+            <CapsuleStatus key="injecting" label="// 注入中" />
           )}
 
           {stage === "idle" && (
@@ -554,7 +573,7 @@ export function RecorderBar({ stage }: { stage: Stage }) {
               transition={{ duration: 0.12 }}
             >
               <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-te-light-gray/50">
-                // IDLE
+                // 待机
               </span>
             </motion.div>
           )}

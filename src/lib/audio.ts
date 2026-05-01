@@ -46,7 +46,7 @@ export async function stopAudioLevel(): Promise<void> {
 }
 
 export interface RecordingResult {
-  /** 相对 app_data_dir 的路径（如 "recordings/<id>.ogg"）——直接写进 history.audio_path */
+  /** 相对 app_data_dir 的路径（如 "recordings/<yyyy-MM-dd>/<id>.ogg"）——直接写进 history.audio_path */
   audio_path: string;
   duration_ms: number;
   sample_rate: number;
@@ -54,12 +54,20 @@ export interface RecordingResult {
   samples: number;
 }
 
+/** 取当前本地日期 yyyy-MM-dd（用于把录音按天分子目录保存）。 */
+function localDateYmd(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 /**
  * 开始采集 PCM 到内存 buffer。调用前必须已经 `startAudioLevel`（stream 需要在跑）。
- * id 同时作为 history.id 与录音文件名，由调用方从 `newId()` 生成后传入。
+ * id 同时作为 history.id 与录音文件名（`recordings/<yyyy-MM-dd>/<id>.ogg`），
+ * 由调用方从 `newId()` 生成后传入；日期取本地时区，方便用户翻文件夹。
  */
 export async function startRecordingToFile(id: string): Promise<void> {
-  await invoke("audio_recording_start", { id });
+  await invoke("audio_recording_start", { id, date: localDateYmd() });
 }
 
 /**
@@ -83,8 +91,9 @@ export async function cancelRecording(): Promise<void> {
  * 读取一条历史记录的录音字节用于回放。Rust 端返回 `tauri::ipc::Response`，
  * 前端收到的是 `ArrayBuffer`，直接 new Blob 丢给 `<audio>` 即可，无需 base64。
  *
- * `audioPath` 必须形如 `"recordings/<id>.ogg"`（新版）或 `"recordings/<id>.wav"`
- * （迁移前老记录）——Rust 侧只接受这两种后缀，避免变成任意文件读取漏洞。
+ * `audioPath` 必须形如 `"recordings/<yyyy-MM-dd>/<id>.ogg"`（新版）或
+ * `"recordings/<id>.{ogg,wav}"`（迁移前老记录）——Rust 侧只接受这几种形态，
+ * 避免变成任意文件读取漏洞。
  */
 export async function loadRecordingBytes(audioPath: string): Promise<ArrayBuffer> {
   return await invoke<ArrayBuffer>("audio_recording_load", { audioPath });
@@ -93,7 +102,8 @@ export async function loadRecordingBytes(audioPath: string): Promise<ArrayBuffer
 /**
  * 把一条历史录音另存为到用户选的位置。`destPath` 是绝对路径——通常来自
  * `@tauri-apps/plugin-dialog` 的 `save()`，由系统 Save 对话框得到。
- * Rust 侧只校验 src 形如 `"recordings/<id>.{ogg,wav}"`，dest 交给 OS 处理。
+ * Rust 侧只校验 src 形如 `"recordings/<yyyy-MM-dd>/<id>.ogg"` 或老库的
+ * `"recordings/<id>.{ogg,wav}"`，dest 交给 OS 处理。
  */
 export async function exportRecordingTo(
   audioPath: string,

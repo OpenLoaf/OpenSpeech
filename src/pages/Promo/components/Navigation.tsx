@@ -1,5 +1,5 @@
 const NAV_LINKS = [
-  { label: "演示", href: "#demo" },
+  { label: "特性", href: "#features" },
   { label: "常见问题", href: "#faq" },
   { label: "下载", href: "#download" },
 ];

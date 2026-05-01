@@ -157,7 +157,7 @@ export default function HomePage() {
         }}
       />
 
-      <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden px-[clamp(1rem,4vw,2.5rem)] pt-[clamp(2rem,6vh,5rem)] pb-[clamp(1rem,3vw,2rem)]">
+      <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden px-[clamp(1rem,4vw,2.5rem)] pt-[clamp(0.5rem,2vh,1.5rem)] pb-[clamp(1rem,3vw,2rem)]">
         <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
           {/* HERO */}
           <motion.div
@@ -188,7 +188,6 @@ export default function HomePage() {
                 className="size-5 shrink-0 select-none"
               />
               <span>{t("pages:home.hero.feature_push_to_talk")}</span>
-              <span>{t("pages:home.hero.feature_byo")}</span>
               <span>{t("pages:home.hero.feature_cross_platform")}</span>
             </div>
           </motion.div>
@@ -229,7 +228,7 @@ export default function HomePage() {
                     exit={{ opacity: 0, y: -4 }}
                     transition={{ duration: 0.18 }}
                   >
-                    <HotkeyPreview />
+                    <HotkeyPreview hintPlacement="header" />
                     <p className="mt-3 max-w-2xl font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
                       <Trans
                         i18nKey="pages:home.hotkey_hint"

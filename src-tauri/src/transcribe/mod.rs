@@ -5,9 +5,9 @@
 // - > 5 分钟 ⇒ `OL-TL-004` (asrLong)：上游只接受公网 URL，本地音频走不通；
 //   暂不支持，返回明确错误让 UI 提示用户。后续若加上传服务再接通查询轮询路径。
 //
-// 路径安全：复用 audio::audio_recording_load 的同款校验——只接受
-// `recordings/<id>.ogg`（新版）或 `recordings/<id>.wav`（老库），
-// 拒绝绝对路径 / 多级目录 / `..`，防任意文件读取。
+// 路径安全：复用 audio 模块的统一校验——只接受
+// `recordings/<yyyy-MM-dd>/<id>.ogg`（新版）或 `recordings/<id>.{ogg,wav}`
+// （老库），拒绝绝对路径 / 多级嵌套 / `..`，防任意文件读取。
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::audio;
 use crate::db;
 use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
 
@@ -46,22 +47,8 @@ fn read_recording_bytes<R: Runtime>(
     app: &AppHandle<R>,
     audio_path: &str,
 ) -> Result<Vec<u8>, String> {
-    let Some(filename) = audio_path.strip_prefix("recordings/") else {
-        return Err("audio_path must start with recordings/".into());
-    };
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains("..")
-    {
-        return Err("invalid filename in audio_path".into());
-    }
-    let lower = filename.to_ascii_lowercase();
-    if !(lower.ends_with(".ogg") || lower.ends_with(".wav")) {
-        return Err("audio_path must end with .ogg or .wav".into());
-    }
-    let dir = db::recordings_dir(app)?;
-    let abs = dir.join(filename);
+    let sub = audio::validated_recording_subpath(audio_path)?;
+    let abs = db::recordings_dir(app)?.join(sub);
     std::fs::read(&abs).map_err(|e| format!("read {}: {e}", abs.display()))
 }
 

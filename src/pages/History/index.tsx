@@ -4,8 +4,10 @@ import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
   Check,
+  ChevronDown,
   Copy,
   Download,
+  FolderOpen,
   Loader2,
   Minus,
   MoreHorizontal,
@@ -16,6 +18,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -37,6 +40,8 @@ import {
   type HistoryType,
 } from "@/stores/history";
 import { usePlaybackStore } from "@/stores/playback";
+import { useSettingsStore } from "@/stores/settings";
+import type { HistoryRetention } from "@/stores/settings";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -137,6 +142,42 @@ function FilterTabs({
         );
       })}
     </div>
+  );
+}
+
+function RetentionSelect() {
+  const { t } = useTranslation();
+  const retention = useSettingsStore((s) => s.general.historyRetention);
+  const setGeneral = useSettingsStore((s) => s.setGeneral);
+  const options: HistoryRetention[] = ["forever", "90d", "30d", "7d", "off"];
+  return (
+    <label
+      className="inline-flex items-center gap-2"
+      title={t("pages:history.retention.title")}
+    >
+      <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+        {t("pages:history.retention.label")}
+      </span>
+      <div className="relative inline-flex items-center border border-te-gray/40 bg-te-surface transition-colors focus-within:border-te-accent hover:border-te-gray">
+        <select
+          value={retention}
+          onChange={(e) =>
+            void setGeneral(
+              "historyRetention",
+              e.target.value as HistoryRetention,
+            )
+          }
+          className="cursor-pointer appearance-none bg-transparent py-1.5 pr-7 pl-2 font-mono text-xs text-te-fg focus:outline-none"
+        >
+          {options.map((o) => (
+            <option key={o} value={o}>
+              {t(`pages:history.retention.options.${o}`)}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-2 size-3 text-te-light-gray" />
+      </div>
+    </label>
   );
 }
 
@@ -607,20 +648,6 @@ export default function HistoryPage() {
     });
   }, [items, filter, query]);
 
-  const exportJson = () => {
-    const blob = new Blob([JSON.stringify(items, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `openspeech-history-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const clearAll = async () => {
     usePlaybackStore.getState().stop();
     await clearAllInDb();
@@ -650,42 +677,61 @@ export default function HistoryPage() {
       <div data-tauri-drag-region className="shrink-0 bg-te-bg">
         <div
           data-tauri-drag-region
-          className="mx-auto max-w-5xl px-[4vw] pt-[clamp(1rem,2vw,2rem)] pb-4"
+          className="mx-auto max-w-5xl px-[4vw] pt-3 pb-4"
         >
           <motion.div
             data-tauri-drag-region
-            className="flex items-start justify-between gap-4"
+            className="flex flex-col gap-2"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
           >
-            <div data-tauri-drag-region>
+            <div
+              data-tauri-drag-region
+              className="flex items-center justify-between gap-4"
+            >
               <h1 className="font-mono text-3xl font-bold tracking-tighter text-te-fg">
                 {t("pages:history.title")}
               </h1>
-              <p className="mt-2 text-xs leading-relaxed text-te-light-gray">
+              <div
+                className="flex items-center gap-2"
+                data-tauri-drag-region="false"
+              >
+                <button
+                  type="button"
+                  onClick={() => void handleRefresh()}
+                  disabled={refreshing}
+                  className="inline-flex size-9 items-center justify-center border border-te-gray/40 text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-te-gray/40 disabled:hover:text-te-light-gray"
+                  title={t("pages:history.refresh")}
+                  aria-label={t("pages:history.refresh")}
+                >
+                  <RefreshCw
+                    className={`size-4 ${refreshing ? "animate-spin" : ""}`}
+                    strokeWidth={2}
+                  />
+                </button>
+                <MoreMenu
+                  onClear={() => setConfirmClearOpen(true)}
+                  onOpenFolder={() => {
+                    void invoke("open_recordings_dir").catch((e) => {
+                      console.warn("[history] open recordings dir failed:", e);
+                      toast.error(t("pages:history.open_folder_failed"));
+                    });
+                  }}
+                  clearDisabled={items.length === 0}
+                />
+              </div>
+            </div>
+            <div
+              data-tauri-drag-region
+              className="flex items-center justify-between gap-4"
+            >
+              <p className="text-xs leading-relaxed text-te-light-gray">
                 {t("pages:history.subtitle")}
               </p>
-            </div>
-            <div className="flex items-center gap-2" data-tauri-drag-region="false">
-              <button
-                type="button"
-                onClick={() => void handleRefresh()}
-                disabled={refreshing}
-                className="inline-flex size-9 items-center justify-center border border-te-gray/40 text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-te-gray/40 disabled:hover:text-te-light-gray"
-                title={t("pages:history.refresh")}
-                aria-label={t("pages:history.refresh")}
-              >
-                <RefreshCw
-                  className={`size-4 ${refreshing ? "animate-spin" : ""}`}
-                  strokeWidth={2}
-                />
-              </button>
-              <MoreMenu
-                onClear={() => setConfirmClearOpen(true)}
-                onExport={exportJson}
-                disabled={items.length === 0}
-              />
+              <div data-tauri-drag-region="false">
+                <RetentionSelect />
+              </div>
             </div>
           </motion.div>
         </div>
@@ -751,12 +797,12 @@ export default function HistoryPage() {
 
 function MoreMenu({
   onClear,
-  onExport,
-  disabled,
+  onOpenFolder,
+  clearDisabled,
 }: {
   onClear: () => void;
-  onExport: () => void;
-  disabled?: boolean;
+  onOpenFolder: () => void;
+  clearDisabled?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -801,7 +847,7 @@ function MoreMenu({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.15 }}
-            className="absolute right-0 z-20 mt-2 min-w-[12rem] border border-te-gray/60 bg-te-bg py-1"
+            className="absolute right-0 z-20 mt-2 w-max border border-te-gray/60 bg-te-bg py-1"
           >
             <li>
               <button
@@ -809,13 +855,12 @@ function MoreMenu({
                 role="menuitem"
                 onClick={() => {
                   setOpen(false);
-                  onExport();
+                  onOpenFolder();
                 }}
-                disabled={disabled}
-                className="flex w-full items-center gap-2 px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-te-fg transition-colors hover:bg-te-surface-hover hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-te-fg"
+                className="flex w-full items-center gap-2 whitespace-nowrap px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-te-fg transition-colors hover:bg-te-surface-hover hover:text-te-accent"
               >
-                <Download className="size-3.5" />
-                <span>{t("pages:history.export")}</span>
+                <FolderOpen className="size-3.5" />
+                <span>{t("pages:history.open_folder")}</span>
               </button>
             </li>
             <li>
@@ -826,8 +871,8 @@ function MoreMenu({
                   setOpen(false);
                   onClear();
                 }}
-                disabled={disabled}
-                className="flex w-full items-center gap-2 px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-[#ff4d4d] transition-colors hover:bg-[#ff4d4d]/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                disabled={clearDisabled}
+                className="flex w-full items-center gap-2 whitespace-nowrap px-4 py-2 font-mono text-xs uppercase tracking-[0.15em] text-[#ff4d4d] transition-colors hover:bg-[#ff4d4d]/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
               >
                 <Trash2 className="size-3.5" />
                 <span>{t("pages:history.delete_all")}</span>

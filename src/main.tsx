@@ -4,12 +4,8 @@ import { RouterProvider } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { checkForUpdateForChannel } from "@/lib/updaterInstall";
-import {
-  attachConsole,
-  info as logInfo,
-  warn as logWarn,
-} from "@tauri-apps/plugin-log";
+import { startUpdateScheduler } from "@/lib/updateScheduler";
+import { attachConsole } from "@tauri-apps/plugin-log";
 import { router } from "./router";
 import { Toaster } from "@/components/ui/sonner";
 import { LoadingScreen } from "@/components/LoadingScreen";
@@ -119,50 +115,11 @@ const bootPromise = (async () => {
     // 用户在 dev 环境自负盈亏。
     void syncAutostart(useSettingsStore.getState().general.launchStartup);
 
-    // 自动更新：默认开。check() 异步触发，**不 await downloadAndInstall**——
-    // 历史 bug：之前在这里 await，下载几十 MB 期间 boot 主流程被卡住，
-    // LoadingScreen 永远不消失，用户表现就是"启动卡死"。改成只发现新版后写入
-    // useUIStore.pendingUpdate，由 Layout 弹 toast 让用户主动点"立即安装"再
-    // 走下载。整段不 await，boot 立刻继续走 listeners 注册等步骤。
-    // 走 plugin-log 而不是 console.log——生产包打不开 devtools，必须把 updater
-    // 的诊断信号写到日志文件（macOS: ~/Library/Application Support/com.openspeech.app/logs/）。
-    if (useSettingsStore.getState().general.autoUpdate) {
-      void (async () => {
-        void logInfo("[updater] boot check start, autoUpdate=on");
-        try {
-          // 30s 而非 5s——走代理 / 跨境 CDN 时 GitHub releases 一次 TLS 握手 +
-          // /latest/download/ 重定向常见 6~12s。5s 几乎必超时。
-          const upd = await Promise.race([
-            checkForUpdateForChannel(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error("updater check timeout")), 30_000),
-            ),
-          ]);
-          if (upd) {
-            const skipped =
-              useSettingsStore.getState().general.skippedUpdateVersion;
-            if (skipped && skipped === upd.version) {
-              void logInfo(
-                `[updater] update ${upd.version} matches skippedUpdateVersion, suppressing prompt`,
-              );
-            } else {
-              void logInfo(
-                `[updater] update available: ${upd.version}, prompting user (no auto-install)`,
-              );
-              useUIStore
-                .getState()
-                .setPendingUpdate({ version: upd.version, update: upd });
-            }
-          } else {
-            void logInfo("[updater] no update available");
-          }
-        } catch (e) {
-          void logWarn(`[updater] boot check skipped: ${String((e as Error)?.message ?? e)}`);
-        }
-      })();
-    } else {
-      void logInfo("[updater] boot check skipped: autoUpdate=off");
-    }
+    // 自动更新：交给 updateScheduler 统一调度——boot 触发一次 + 之后按
+    // updateCheckIntervalHours 周期检查；命中新版后按 updatePolicy 决定是
+    // PROMPT 弹 toast 还是 AUTO 等空闲再静默安装。整段 fire-and-forget，
+    // 不阻塞 boot；DISABLED 由 scheduler 内部判定，无需在此 if。
+    startUpdateScheduler();
 
     await useRecordingStore.getState().initListeners();
     console.log("[boot] recording listeners attached");

@@ -2,7 +2,7 @@ import { motion, useScroll } from "framer-motion";
 import Navigation from "./components/Navigation";
 import Footer from "./components/Footer";
 import HeroSection from "./sections/HeroSection";
-import DemoSection from "./sections/DemoSection";
+import FeaturesSection from "./sections/FeaturesSection";
 import FAQSection from "./sections/FAQSection";
 import CTASection from "./sections/CTASection";
 
@@ -17,7 +17,7 @@ export default function PromoPage() {
       <Navigation />
       <main>
         <HeroSection />
-        <DemoSection />
+        <FeaturesSection />
         <FAQSection />
         <CTASection />
       </main>

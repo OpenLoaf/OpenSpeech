@@ -5,7 +5,6 @@
       "title_line2": "就成文。",
       "description": "按一下快捷鍵，開口說話，再按一下結束——文字即刻出現在任意應用程式中。不綁定編輯器，錄音只留本機，無任何遙測。",
       "feature_push_to_talk": "// PUSH-TO-TALK 按鍵聽寫",
-      "feature_byo": "// 模型自選 SAAS · BYO",
       "feature_cross_platform": "// 跨平台 WIN · MAC · LINUX"
     },
     "hotkey_hint": "按一下快捷鍵開始錄音，再按一下結束並把文字寫入目前輸入框。按 <esc>Esc</esc> 取消；焦點必須在可編輯區域。",
@@ -28,7 +27,19 @@
     "search_placeholder": "搜尋歷史...",
     "more": "更多",
     "refresh": "重新整理",
-    "export": "匯出",
+    "retention": {
+      "label": "保留時長",
+      "title": "本機歷史記錄保留多久",
+      "options": {
+        "forever": "永遠",
+        "90d": "90 天",
+        "30d": "30 天",
+        "7d": "7 天",
+        "off": "不保存"
+      }
+    },
+    "open_folder": "開啟錄音資料夾",
+    "open_folder_failed": "開啟錄音資料夾失敗",
     "delete_all": "刪除全部歷史",
     "filters": {
       "all": "全部",
@@ -125,6 +136,9 @@
     "login": "登入",
     "credits": "Credits",
     "credits_unlimited": "UNLIMITED",
+    "time_left": "LEFT",
+    "time_minutes": "{{minutes}} MIN",
+    "time_unlimited": "UNLIMITED",
     "settings": "設定",
     "tray": {
       "update_found_title": "發現新版本",

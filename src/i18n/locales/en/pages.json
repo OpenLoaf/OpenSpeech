@@ -5,7 +5,6 @@
       "title_line2": "It becomes text.",
       "description": "Press the hotkey, talk, press again to finish — your words appear in any app, instantly. No editor lock-in, audio stays on-device, zero telemetry.",
       "feature_push_to_talk": "// PUSH-TO-TALK DICTATION",
-      "feature_byo": "// PICK YOUR MODEL · SAAS · BYO",
       "feature_cross_platform": "// CROSS-PLATFORM WIN · MAC · LINUX"
     },
     "hotkey_hint": "Press the hotkey to start recording, press again to stop and inject the text into the focused field. Press <esc>Esc</esc> to cancel; an editable field must be focused.",
@@ -28,7 +27,19 @@
     "search_placeholder": "Search history...",
     "more": "More",
     "refresh": "Refresh",
-    "export": "Export",
+    "retention": {
+      "label": "Keep history",
+      "title": "How long history is kept on this device",
+      "options": {
+        "forever": "Forever",
+        "90d": "90 days",
+        "30d": "30 days",
+        "7d": "7 days",
+        "off": "Don't save"
+      }
+    },
+    "open_folder": "Open recordings folder",
+    "open_folder_failed": "Failed to open recordings folder",
     "delete_all": "Delete all history",
     "filters": {
       "all": "All",
@@ -125,6 +136,9 @@
     "login": "LOGIN",
     "credits": "Credits",
     "credits_unlimited": "UNLIMITED",
+    "time_left": "LEFT",
+    "time_minutes": "{{minutes}} MIN",
+    "time_unlimited": "UNLIMITED",
     "settings": "Settings",
     "tray": {
       "update_found_title": "Update available",

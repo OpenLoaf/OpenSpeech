@@ -16,14 +16,14 @@
 | duration_ms | 录音时长 |
 | created_at | Unix 时间戳（毫秒） |
 | target_app | 注入目标应用的可识别名称（如 "VSCode"、"Chrome"）；若无法获取则为空 |
-| audio_path | 录音 WAV 文件的**相对路径**（如 `recordings/<id>.wav`，相对 `app_data_dir`）。未保存音频的记录（如 `cancelled`、或未来"关闭音频保存"设置开启时）该字段为 NULL |
+| audio_path | 录音文件的**相对路径**（相对 `app_data_dir`），新版形如 `recordings/<yyyy-MM-dd>/<id>.ogg`，迁移前老记录可能仍是 `recordings/<id>.{ogg,wav}`。未保存音频的记录（如 `cancelled`、或"关闭音频保存"设置开启时）该字段为 NULL |
 
 **不保存**：模型请求/响应的完整内容（仅保留最终 `text`）。
 
 ## 录音文件
 
-- 每条 `success` / `failed` 记录对应一个 WAV 文件，路径由 `audio_path` 指向；实际文件落在 `app_data_dir/recordings/` 下。
-- 文件名即 `id`（带 `.wav` 后缀），因此文件系统和数据库始终通过同一 ID 对齐。
+- 每条 `success` / `failed` 记录对应一个 OGG 文件（迁移前老记录可能是 WAV），路径由 `audio_path` 指向；新版实际文件落在 `app_data_dir/recordings/<yyyy-MM-dd>/` 下，按本地日期分子目录方便用户翻历史。
+- 文件名即 `id`（新版带 `.ogg` 后缀，老库可能 `.wav`），因此文件系统和数据库始终通过同一 ID 对齐。
 - `cancelled` 记录按规则"请求未发出 ⇒ 不生成记录；请求已发出 ⇒ 生成记录但保留 text 不注入"；音频是否落盘取决于录音是否持续到 stop 点（当前实现：cancelled 不落盘，保留灵活度）。
 - 删除一条记录 / 清空历史 / retention 到期清理时，对应的 WAV 文件必须同步删除（由后端清理 orchestrator 负责，见 task #13）。
 
