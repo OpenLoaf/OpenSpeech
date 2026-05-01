@@ -25,6 +25,7 @@ import {
   checkForUpdateForChannel,
   installUpdateWithProgress,
 } from "@/lib/updaterInstall";
+import { showUpdateAvailableToast } from "@/components/UpdateAvailableToast";
 import { AccountDialog } from "@/components/AccountDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { CloseToBackgroundDialog } from "@/components/CloseToBackgroundDialog";
@@ -140,45 +141,35 @@ export default function Layout() {
     if (!pendingUpdate) return;
     const upd = pendingUpdate.update;
     const version = pendingUpdate.version;
-    const id = toast.message(i18next.t("pages:layout.tray.update_found_title"), {
-      description: version,
-      duration: Infinity,
-      action: {
-        label: i18next.t("settings:about.install_now"),
-        onClick: () => {
-          void (async () => {
-            toast.dismiss(id);
-            try {
-              await installUpdateWithProgress(upd, "boot-prompt");
-            } catch {
-              // helper 已 toast + log，这里只负责把 pendingUpdate 清掉
-            } finally {
-              setPendingUpdate(null);
-            }
-          })();
-        },
+    showUpdateAvailableToast({
+      version,
+      onInstall: () => {
+        void (async () => {
+          try {
+            await installUpdateWithProgress(upd, "boot-prompt");
+          } catch {
+            // helper 已 toast + log，这里只负责把 pendingUpdate 清掉
+          } finally {
+            setPendingUpdate(null);
+          }
+        })();
       },
-      // sonner 的 cancel 渲染成次要按钮：写入 skippedUpdateVersion 后下次启动 check
-      // 命中同一版本静默；用户仍可通过托盘 / 关于页"检查更新"重新触发提示并安装。
-      cancel: {
-        label: i18next.t("settings:about.skip_version"),
-        onClick: () => {
-          void (async () => {
-            toast.dismiss(id);
-            try {
-              await useSettingsStore
-                .getState()
-                .setGeneral("skippedUpdateVersion", version);
-              void logInfo(
-                `[updater] user skipped version ${version}; will not prompt again on boot`,
-              );
-            } finally {
-              setPendingUpdate(null);
-            }
-          })();
-        },
+      // 写入 skippedUpdateVersion 后下次启动 check 命中同一版本静默；
+      // 用户仍可通过托盘 / 关于页"检查更新"重新触发提示并安装。
+      onSkip: () => {
+        void (async () => {
+          try {
+            await useSettingsStore
+              .getState()
+              .setGeneral("skippedUpdateVersion", version);
+            void logInfo(
+              `[updater] user skipped version ${version}; will not prompt again on boot`,
+            );
+          } finally {
+            setPendingUpdate(null);
+          }
+        })();
       },
-      onDismiss: () => setPendingUpdate(null),
     });
   }, [pendingUpdate, setPendingUpdate]);
 
@@ -313,16 +304,13 @@ export default function Layout() {
           const upd = await checkForUpdateForChannel();
           if (upd) {
             void logInfo(`[updater] tray check found: ${upd.version}`);
-            toast.message(i18next.t("pages:layout.tray.update_found_title"), {
-              description: upd.version,
+            showUpdateAvailableToast({
+              version: upd.version,
               duration: 30_000,
-              action: {
-                label: i18next.t("settings:about.install_now"),
-                onClick: () => {
-                  void installUpdateWithProgress(upd, "tray").catch(() => {
-                    // helper 已处理错误 toast / log
-                  });
-                },
+              onInstall: () => {
+                void installUpdateWithProgress(upd, "tray").catch(() => {
+                  // helper 已处理错误 toast / log
+                });
               },
             });
           } else {
