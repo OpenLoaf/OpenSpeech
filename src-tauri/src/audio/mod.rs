@@ -251,6 +251,78 @@ impl Biquad {
     }
 }
 
+// 一阶 IIR DC blocker：y[n] = x[n] - x[n-1] + R*y[n-1]。R=0.995 在 48k 下截止 ≈38Hz、
+// 收敛 ≈7ms。专治麦克风/驱动级 DC 偏移（实测车载场景 -0.65 这种致命值），让后续
+// HPF 不被直流冲击产生几十毫秒拖尾，limiter 也不会被偏移伪峰误触发。
+#[derive(Clone, Copy)]
+struct DcBlocker {
+    x_prev: f32,
+    y_prev: f32,
+}
+
+impl DcBlocker {
+    fn new() -> Self {
+        Self { x_prev: 0.0, y_prev: 0.0 }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let y = x - self.x_prev + 0.995 * self.y_prev;
+        self.x_prev = x;
+        self.y_prev = y;
+        y
+    }
+}
+
+// 阈值外软压，阈值内透明（不动良性信号水平）。
+#[inline]
+fn soft_clip(x: f32) -> f32 {
+    const T: f32 = 0.97;
+    if x > T {
+        T + (1.0 - T) * ((x - T) / (1.0 - T)).tanh()
+    } else if x < -T {
+        -T - (1.0 - T) * ((-x - T) / (1.0 - T)).tanh()
+    } else {
+        x
+    }
+}
+
+const PREPROC_HPF_HZ: f32 = 80.0;
+const PREPROC_HPF_Q: f32 = 0.707;
+
+// 录音/STT 通路的物理损伤修复链：DC blocker → 80Hz HPF → 软限幅。
+// 服务端 Qwen3-ASR-Flash 自带车噪鲁棒性训练，**禁止**在此叠加任何神经降噪
+// （RNNoise / DeepFilterNet 等）——前置降噪改变频谱分布会反伤识别率。
+struct Preprocessor {
+    chans: Vec<(DcBlocker, Biquad)>,
+}
+
+impl Preprocessor {
+    fn new(sample_rate: f32, channels: u16) -> Self {
+        let n = channels.max(1) as usize;
+        let fc = PREPROC_HPF_HZ.min(sample_rate * 0.125);
+        let mut chans = Vec::with_capacity(n);
+        for _ in 0..n {
+            chans.push((
+                DcBlocker::new(),
+                Biquad::highpass(sample_rate, fc, PREPROC_HPF_Q),
+            ));
+        }
+        Self { chans }
+    }
+
+    fn process_in_place(&mut self, data: &mut [f32]) {
+        let n = self.chans.len();
+        if n == 0 || data.is_empty() {
+            return;
+        }
+        for (i, s) in data.iter_mut().enumerate() {
+            let (dc, hpf) = &mut self.chans[i % n];
+            *s = soft_clip(hpf.process(dc.process(*s)));
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct VoiceBandFilter {
     hp: Biquad,
@@ -514,21 +586,30 @@ fn spawn_monitor_thread<R: Runtime>(
                 cpal::SampleFormat::F32 => {
                     let mut filter = VoiceBandFilter::new(cb_sample_rate as f32);
                     let mut vad_gate = VadGate::new();
+                    let mut preproc = Preprocessor::new(cb_sample_rate as f32, cb_channels);
                     let voice_marker_cb = voice_marker.clone();
                     device.build_input_stream(
                         &stream_config,
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                            // UI peak 取原始电平：用户看到的是麦克风真实输入水平
                             let p = voice_band_peak(data, cb_channels, &mut filter);
                             peak_cb.store(p.to_bits(), Ordering::Relaxed);
-                            push_samples(data);
-                            push_to_stt_pcm16(data, cb_channels, cb_sample_rate);
-                            vad_gate.feed(
-                                data,
-                                cb_channels,
-                                cb_sample_rate,
-                                stream_start,
-                                &voice_marker_cb,
-                            );
+                            // 栈上分块预处理：避免 callback 内堆分配
+                            let mut buf: [f32; 1024] = [0.0; 1024];
+                            for chunk in data.chunks(buf.len()) {
+                                buf[..chunk.len()].copy_from_slice(chunk);
+                                let slice = &mut buf[..chunk.len()];
+                                preproc.process_in_place(slice);
+                                push_samples(slice);
+                                push_to_stt_pcm16(slice, cb_channels, cb_sample_rate);
+                                vad_gate.feed(
+                                    slice,
+                                    cb_channels,
+                                    cb_sample_rate,
+                                    stream_start,
+                                    &voice_marker_cb,
+                                );
+                            }
                         },
                         make_err_fn(),
                         None,
@@ -537,24 +618,24 @@ fn spawn_monitor_thread<R: Runtime>(
                 cpal::SampleFormat::I16 => {
                     let mut filter = VoiceBandFilter::new(cb_sample_rate as f32);
                     let mut vad_gate = VadGate::new();
+                    let mut preproc = Preprocessor::new(cb_sample_rate as f32, cb_channels);
                     let voice_marker_cb = voice_marker.clone();
                     device.build_input_stream(
                         &stream_config,
                         move |data: &[i16], _: &cpal::InputCallbackInfo| {
                             let scale = 1.0 / i16::MAX as f32;
                             let mut p = 0f32;
-                            // 归一化一次，同时喂给 peak / 录音 / STT / VAD——避免多次
-                            // i16→f32 转换，降低 callback 里的 CPU 峰值。
                             let mut buf: [f32; 1024] = [0.0; 1024];
                             for chunk in data.chunks(buf.len()) {
                                 for (i, s) in chunk.iter().enumerate() {
                                     buf[i] = *s as f32 * scale;
                                 }
-                                let slice = &buf[..chunk.len()];
+                                let slice = &mut buf[..chunk.len()];
                                 let chunk_peak = voice_band_peak(slice, cb_channels, &mut filter);
                                 if chunk_peak > p {
                                     p = chunk_peak;
                                 }
+                                preproc.process_in_place(slice);
                                 push_samples(slice);
                                 push_to_stt_pcm16(slice, cb_channels, cb_sample_rate);
                                 vad_gate.feed(
@@ -574,6 +655,7 @@ fn spawn_monitor_thread<R: Runtime>(
                 cpal::SampleFormat::U16 => {
                     let mut filter = VoiceBandFilter::new(cb_sample_rate as f32);
                     let mut vad_gate = VadGate::new();
+                    let mut preproc = Preprocessor::new(cb_sample_rate as f32, cb_channels);
                     let voice_marker_cb = voice_marker.clone();
                     device.build_input_stream(
                         &stream_config,
@@ -584,11 +666,12 @@ fn spawn_monitor_thread<R: Runtime>(
                                 for (i, s) in chunk.iter().enumerate() {
                                     buf[i] = (*s as f32 - 32768.0) / 32768.0;
                                 }
-                                let slice = &buf[..chunk.len()];
+                                let slice = &mut buf[..chunk.len()];
                                 let chunk_peak = voice_band_peak(slice, cb_channels, &mut filter);
                                 if chunk_peak > p {
                                     p = chunk_peak;
                                 }
+                                preproc.process_in_place(slice);
                                 push_samples(slice);
                                 push_to_stt_pcm16(slice, cb_channels, cb_sample_rate);
                                 vad_gate.feed(
