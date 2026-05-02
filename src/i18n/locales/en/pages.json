@@ -77,7 +77,18 @@
       "failed_placeholder": "Your transcription was interrupted. OpenSpeech can still retry it for you.",
       "cancelled_placeholder": "{{duration}} recording cancelled · not transcribed · retry available",
       "view_refined": "AI enhanced",
-      "view_raw": "Raw text"
+      "view_raw": "Raw text",
+      "view_details": "View details"
+    },
+    "detail": {
+      "title": "Record details",
+      "description": "View full content of the history record and run actions",
+      "meta": {
+        "duration": "Duration",
+        "target": "Target app",
+        "error": "Error"
+      },
+      "empty_text": "(no text content)"
     },
     "toast": {
       "copy_success": "Copied to clipboard",
@@ -129,16 +140,15 @@
   "layout": {
     "nav": {
       "home": "Home",
+      "toolbox": "AI Tools",
       "history": "History",
       "dictionary": "Dictionary"
     },
     "account_fallback": "ACCOUNT",
     "login": "LOGIN",
     "credits": "Credits",
-    "credits_unlimited": "UNLIMITED",
     "time_left": "LEFT",
     "time_minutes": "{{minutes}} MIN",
-    "time_unlimited": "UNLIMITED",
     "settings": "Settings",
     "tray": {
       "update_found_title": "Update available",
@@ -150,5 +160,94 @@
     "placeholder": "Search...",
     "clear": "Clear search",
     "open": "Search"
+  },
+  "toolbox": {
+    "title": "AI Tools",
+    "subtitle": "Speak or type. Polish, translate, or read it aloud.",
+    "flow_hint": "Provide input above · pick a tool below · get the processed result inline",
+    "input": {
+      "section_label": "// 01 · INPUT",
+      "tabs": {
+        "text": "Text",
+        "voice": "Voice",
+        "history": "History",
+        "file": "Audio file"
+      },
+      "text_placeholder": "Type or paste text here…",
+      "voice_hint": "Hold the button and speak — release to transcribe.",
+      "voice_button_idle": "Hold to talk",
+      "voice_button_recording": "Listening…",
+      "voice_recorded": "Recorded · 0:08",
+      "history_hint": "Pick a previous transcription.",
+      "history_empty": "No history yet.",
+      "file_hint": "Drop an audio file (mp3 / wav / m4a) or click to choose.",
+      "file_button": "Choose audio file",
+      "file_loaded": "demo.mp3 · 12s · 1.2 MB",
+      "char_count": "{{count}} chars",
+      "right_label": "Text",
+      "right_hint_voice": "Transcribed from voice",
+      "right_hint_history": "From history",
+      "right_hint_file": "Transcribed from audio",
+      "right_empty": "Provide an input on the left first.",
+      "use_sample": "Use sample text"
+    },
+    "tools": {
+      "section_label": "// 02 · TOOLS",
+      "tabs": {
+        "polish": "Polish",
+        "translate": "Translate",
+        "tts": "Read aloud"
+      },
+      "tutorial": {
+        "polish": {
+          "title": "Polish",
+          "headline": "Smooth spoken text into clean writing."
+        },
+        "translate": {
+          "title": "Translate",
+          "headline": "Convert your text to another language while keeping its tone."
+        },
+        "tts": {
+          "title": "Read aloud",
+          "headline": "Generate natural-sounding audio from any text."
+        }
+      },
+      "polish": {
+        "style_label": "Style",
+        "styles": {
+          "smooth": "Smooth",
+          "formal": "Formal",
+          "concise": "Concise"
+        }
+      },
+      "translate": {
+        "target_label": "To",
+        "languages": {
+          "en": "English",
+          "zh": "中文",
+          "ja": "日本語",
+          "ko": "한국어"
+        }
+      },
+      "tts": {
+        "voice_label": "Voice",
+        "speed_label": "Speed",
+        "voices": {
+          "natural_f": "Natural · F",
+          "natural_m": "Natural · M",
+          "calm_f": "Calm · F"
+        },
+        "audio_placeholder": "▶  ━━━━━━━━━━━━━━━━━━━━  0:08 / 0:12"
+      },
+      "rerun": "Rerun",
+      "copy": "Copy",
+      "save_history": "Save",
+      "use_as_input": "Use as input",
+      "download": "Download",
+      "elapsed": "{{seconds}}s"
+    },
+    "footer": {
+      "ui_only_notice": "// UI PREVIEW — actions are not wired up yet"
+    }
   }
 }

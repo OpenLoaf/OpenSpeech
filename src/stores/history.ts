@@ -2,17 +2,17 @@ import { create } from "zustand";
 import { db } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { deleteRecordingFile } from "@/lib/audio";
-import { refineSpeechText, transcribeRecordingFile } from "@/lib/stt";
-import {
-  getHotwordsForRefine,
-  rememberHotwordsCacheId,
-} from "@/lib/hotwordsCache";
-import { buildRefineContext } from "@/lib/refineContext";
+import { transcribeRecordingFile } from "@/lib/stt";
+import { refineTextViaChatStream } from "@/lib/ai-refine";
+import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { useAuthStore } from "@/stores/auth";
 import {
   useSettingsStore,
+  getEffectiveAiSystemPrompt,
   type HistoryRetention,
 } from "@/stores/settings";
+import { resolveLang } from "@/i18n";
+import i18n from "@/i18n";
 import { useUIStore } from "@/stores/ui";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -46,7 +46,7 @@ export interface HistoryItem {
   id: string;
   type: HistoryType;
   text: string;
-  /** OL-TL-005 整理后的书面化文本；仅 AI_REFINE 模式产生，其它模式为 null。 */
+  /** AI 整理后的书面化文本；仅 AI_REFINE 模式产生，其它模式为 null。 */
   refined_text?: string | null;
   status: HistoryStatus;
   error?: string | null;
@@ -277,25 +277,70 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       });
       const text = r.text ?? "";
 
-      // 跟随当前用户偏好——AI_REFINE 时再调 OL-TL-005 整理；refine 失败回退原文，
+      // 跟随当前用户偏好——AI_REFINE 时走新 chat 通道整理；refine 失败回退原文，
       // 与 recording.ts::finalizeAndWriteHistory 的两步行为对齐。
       const segmentMode = useSettingsStore.getState().general.asrSegmentMode;
       let refinedText: string | null = null;
       if (text && segmentMode === "AI_REFINE") {
-        const { hotwords, hotwordsCacheId } = getHotwordsForRefine();
-        // 重试当前条时把这条排除掉，避免把"自己尚未刷新的旧文本"塞进上下文。
-        const referenceContext = buildRefineContext(get().items, {
-          excludeId: id,
-        });
-        try {
-          const rr = await refineSpeechText({
-            text,
-            hotwords: hotwords || undefined,
-            hotwordsCacheId,
-            referenceContext,
+        const aiSettings = useSettingsStore.getState().aiRefine;
+        const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
+        const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
+        const hotwords = getHotwordsArray();
+        const requestTimeMs = Date.now();
+        const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
+        let historyEntries: string[] | undefined;
+        if (aiSettings.includeHistory) {
+          const minutesAgoLabel = i18n.t("ai.minutes_ago", {
+            ns: "settings",
+            defaultValue: "minutes ago",
           });
+          const lines = get()
+            .items.filter((it) => it.id !== id && it.status === "success")
+            .slice(0, 5)
+            .reverse()
+            .map((it) => {
+              const content = (it.refined_text ?? it.text ?? "").trim();
+              if (!content) return "";
+              const mins = Math.max(
+                1,
+                Math.floor((requestTimeMs - it.created_at) / 60000),
+              );
+              return `[${mins} ${minutesAgoLabel}] ${content}`;
+            })
+            .filter((s) => s.length > 0);
+          if (lines.length > 0) historyEntries = lines;
+        }
+        let activeProvider = null as
+          | { id: string; name: string; baseUrl: string; model: string }
+          | null;
+        if (aiSettings.mode === "custom") {
+          activeProvider =
+            aiSettings.customProviders.find(
+              (p) => p.id === aiSettings.activeCustomProviderId,
+            ) ?? null;
+        }
+        try {
+          if (aiSettings.mode === "custom" && !activeProvider) {
+            throw new Error("no_active_custom_provider");
+          }
+          const rr = await refineTextViaChatStream(
+            {
+              mode: aiSettings.mode,
+              systemPrompt,
+              userText: text,
+              hotwords: hotwords.length > 0 ? hotwords : undefined,
+              historyEntries,
+              requestTime,
+              customBaseUrl: activeProvider?.baseUrl,
+              customModel: activeProvider?.model,
+              customKeyringId: activeProvider
+                ? `ai_provider_${activeProvider.id}`
+                : undefined,
+              taskId: id,
+            },
+            () => {},
+          );
           refinedText = rr.refinedText;
-          rememberHotwordsCacheId(hotwords, rr.hotwordsCacheId);
         } catch (e) {
           const raw = e instanceof Error ? e.message : String(e);
           if (raw.includes("not authenticated") || raw.includes("unauthorized")) {

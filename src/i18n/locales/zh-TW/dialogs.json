@@ -35,7 +35,6 @@
     "row": {
       "email": "電子郵件",
       "subscription": "訂閱",
-      "saas_calls": "SaaS 呼叫",
       "credits_balance": "剩餘積分"
     },
     "membership": {
@@ -44,16 +43,12 @@
       "pro": "PRO / 專業",
       "premium": "PREMIUM / 旗艦"
     },
-    "unlimited": "無限 · 不扣積分",
     "subscribe_button": {
       "default": "訂閱 / 升級方案",
       "upgrade_to_premium": "升級到 PREMIUM",
       "manage": "管理訂閱"
     },
-    "subscribe_hint": {
-      "default": "在 OpenLoaf 網站購買 Pro 或 Premium 方案後，OpenSpeech 雲端呼叫即變為無限。",
-      "unlimited": "目前方案在 OpenLoaf 站點統一管理。"
-    },
+    "subscribe_hint": "在 OpenLoaf 網站完成訂閱與方案管理。",
     "recharge_button": "儲值",
     "recharge_hint": "1 元 = 100 積分。不訂閱方案也可直接儲值。",
     "logout_button": "登出",

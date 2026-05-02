@@ -7,8 +7,8 @@ import {
   Coins,
   History,
   Home,
-  Infinity as InfinityIcon,
   Settings,
+  Sparkles,
   Timer,
   UserCircle,
 } from "lucide-react";
@@ -53,6 +53,7 @@ type NavItem = {
 
 const MAIN_NAV: NavItem[] = [
   { to: "/", i18nKey: "home", icon: Home },
+  { to: "/toolbox", i18nKey: "toolbox", icon: Sparkles },
   { to: "/history", i18nKey: "history", icon: History },
   { to: "/dictionary", i18nKey: "dictionary", icon: BookOpen },
 ];
@@ -498,44 +499,27 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Time-left rail：把"剩余积分"折算成"剩余可用分钟"。
-            放在 nav 与底部按钮之间，避免把账户按钮撑成双行破坏对称。
-            Pro / Premium / Infinity 套餐 SaaS 调用不扣费（见 docs/subscription.md），
-            直接展示 ∞ UNLIMITED，避免误导用户"分钟会扣完"。
+        {/* Time-left rail：把"剩余积分"折算成"剩余可用分钟"，放在 nav 与底部按钮之间，
+            避免把账户按钮撑成双行破坏对称。
 
             ⚠️ 折算依赖 V3 capabilities 的 realtimeAsrLlm.creditsPerMinute，假设
-            其与 V4 OL-TL-RT-002（src-tauri/src/stt/mod.rs 实际跑的通道）同价。
-            **V4 通道改了计费规则（换模型/换通道/改单价/改成按字符或分档）必须立刻
-            把 fetchRealtimeAsrPricing 的数据源换掉**，否则这里的分钟数会与真实
+            其与 src-tauri/src/stt/mod.rs 实际跑的通道同价。**通道改了计费规则
+            （换模型/换通道/改单价/改成按字符或分档）必须立刻把
+            fetchRealtimeAsrPricing 的数据源换掉**，否则这里的分钟数会与真实
             扣费偏离。 */}
         {isAuthenticated && profile
           ? (() => {
-              const isUnlimited =
-                profile.membershipLevel === "pro" ||
-                profile.membershipLevel === "premium" ||
-                profile.membershipLevel === "infinity";
               const hasPricing =
                 !!realtimeAsrCreditsPerMinute &&
                 realtimeAsrCreditsPerMinute > 0;
-              // 拉到单价才显示"剩余分钟"；否则整行回退到旧的"积分"展示
-              // （label / 图标 / 数字 全部回到 Credits 视觉），避免误导用户。
-              const showAsTime = isUnlimited || hasPricing;
               return (
                 <div className="flex items-baseline justify-between gap-2 border-t border-te-gray px-5 py-3">
                   <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                    {showAsTime
+                    {hasPricing
                       ? t("pages:layout.time_left")
                       : t("pages:layout.credits")}
                   </span>
-                  {isUnlimited ? (
-                    <span className="flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-[0.25em] text-te-accent">
-                      <InfinityIcon
-                        className="size-2.5 shrink-0"
-                        strokeWidth={2.5}
-                      />
-                      {t("pages:layout.time_unlimited")}
-                    </span>
-                  ) : hasPricing ? (
+                  {hasPricing ? (
                     <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] font-bold uppercase text-te-fg tabular-nums">
                       <Timer
                         className="size-2.5 shrink-0 text-te-accent"
@@ -552,7 +536,6 @@ export default function Layout() {
                       })}
                     </span>
                   ) : (
-                    // 单价还没拉回 / 拉失败 → 整行退回旧版 Credits 视觉。
                     <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] font-bold tracking-tighter text-te-fg tabular-nums">
                       <Coins
                         className="size-2.5 shrink-0 text-te-accent"

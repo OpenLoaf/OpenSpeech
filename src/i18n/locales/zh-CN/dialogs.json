@@ -35,7 +35,6 @@
     "row": {
       "email": "电子邮件",
       "subscription": "订阅",
-      "saas_calls": "SaaS 调用",
       "credits_balance": "剩余积分"
     },
     "membership": {
@@ -44,16 +43,12 @@
       "pro": "PRO / 专业",
       "premium": "PREMIUM / 旗舰"
     },
-    "unlimited": "无限 · 不扣积分",
     "subscribe_button": {
       "default": "订阅 / 升级套餐",
       "upgrade_to_premium": "升级到 PREMIUM",
       "manage": "管理订阅"
     },
-    "subscribe_hint": {
-      "default": "在 OpenLoaf 网站购买 Pro 或 Premium 套餐后，OpenSpeech 云端调用即变为无限。",
-      "unlimited": "当前套餐在 OpenLoaf 站点统一管理。"
-    },
+    "subscribe_hint": "在 OpenLoaf 网站完成订阅与套餐管理。",
     "recharge_button": "充值",
     "recharge_hint": "1 元 = 100 积分。不订阅套餐也可直接充值。",
     "logout_button": "退出登录",

@@ -26,11 +26,6 @@ function membershipKey(level: string | undefined): string {
   }
 }
 
-/** Pro 及以上：SaaS 调用无限，不扣积分。见 docs/subscription.md。 */
-function isUnlimited(level: string | undefined): boolean {
-  return level === "pro" || level === "premium";
-}
-
 /** 通用：打开 OpenLoaf Web 页面（订阅 / 充值） */
 async function openWebPage(path: string) {
   const url = await invoke<string>("openloaf_web_url", { path });
@@ -64,7 +59,6 @@ export function AccountDialog({ open, onOpenChange }: Props) {
   const { user, profile, isAuthenticated, init, loaded, logout } = useAuthStore();
   const [loggingOut, setLoggingOut] = useState(false);
   const level = profile?.membershipLevel;
-  const unlimited = isUnlimited(level);
   const subscribeButtonLabel =
     level === "premium"
       ? t("dialogs:account.subscribe_button.manage")
@@ -139,21 +133,13 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                     {t(membershipKey(level))}
                   </span>
                 </Row>
-                {unlimited ? (
-                  <Row label={t("dialogs:account.row.saas_calls")}>
-                    <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-te-accent">
-                      {t("dialogs:account.unlimited")}
-                    </span>
-                  </Row>
-                ) : (
-                  <Row label={t("dialogs:account.row.credits_balance")}>
-                    <span className="font-mono text-sm tabular-nums text-te-fg">
-                      {Math.round(profile?.creditsBalance ?? 0).toLocaleString(
-                        i18n.language,
-                      )}
-                    </span>
-                  </Row>
-                )}
+                <Row label={t("dialogs:account.row.credits_balance")}>
+                  <span className="font-mono text-sm tabular-nums text-te-fg">
+                    {Math.round(profile?.creditsBalance ?? 0).toLocaleString(
+                      i18n.language,
+                    )}
+                  </span>
+                </Row>
               </div>
 
               {/* Subscription —— 跳浏览器到 OpenLoaf Web 完成 */}
@@ -173,34 +159,30 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                   {subscribeButtonLabel}
                 </button>
                 <p className="mt-2 font-sans text-xs text-te-light-gray">
-                  {unlimited
-                    ? t("dialogs:account.subscribe_hint.unlimited")
-                    : t("dialogs:account.subscribe_hint.default")}
+                  {t("dialogs:account.subscribe_hint")}
                 </p>
               </div>
 
-              {/* Recharge —— 仅非 pro+ 展示 */}
-              {!unlimited ? (
-                <div className="mb-5">
-                  <div className="mb-3 flex items-center gap-2">
-                    <span className="h-px w-4 bg-te-accent" />
-                    <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
-                      {t("dialogs:account.section.recharge")}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void openWebPage("/recharge")}
-                    className="inline-flex w-full items-center justify-center gap-2 border border-te-gray px-4 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
-                  >
-                    <Gift className="size-4" />
-                    {t("dialogs:account.recharge_button")}
-                  </button>
-                  <p className="mt-2 font-sans text-xs text-te-light-gray">
-                    {t("dialogs:account.recharge_hint")}
-                  </p>
+              {/* Recharge */}
+              <div className="mb-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="h-px w-4 bg-te-accent" />
+                  <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
+                    {t("dialogs:account.section.recharge")}
+                  </span>
                 </div>
-              ) : null}
+                <button
+                  type="button"
+                  onClick={() => void openWebPage("/recharge")}
+                  className="inline-flex w-full items-center justify-center gap-2 border border-te-gray px-4 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+                >
+                  <Gift className="size-4" />
+                  {t("dialogs:account.recharge_button")}
+                </button>
+                <p className="mt-2 font-sans text-xs text-te-light-gray">
+                  {t("dialogs:account.recharge_hint")}
+                </p>
+              </div>
 
               {/* Session */}
               <div>

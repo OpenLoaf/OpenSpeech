@@ -77,7 +77,18 @@
       "failed_placeholder": "您的转录被中断。但 OpenSpeech 仍可以为您重试。",
       "cancelled_placeholder": "{{duration}} 录音已取消，未转录 · 可重新转录",
       "view_refined": "AI 优化",
-      "view_raw": "原始文本"
+      "view_raw": "原始文本",
+      "view_details": "查看详情"
+    },
+    "detail": {
+      "title": "记录详情",
+      "description": "查看历史记录完整内容并执行操作",
+      "meta": {
+        "duration": "时长",
+        "target": "目标应用",
+        "error": "错误"
+      },
+      "empty_text": "（无文本内容）"
     },
     "toast": {
       "copy_success": "已复制到剪贴板",
@@ -129,16 +140,15 @@
   "layout": {
     "nav": {
       "home": "首页",
+      "toolbox": "AI工具",
       "history": "历史记录",
       "dictionary": "词典"
     },
     "account_fallback": "账户",
     "login": "登录",
     "credits": "Credits",
-    "credits_unlimited": "UNLIMITED",
     "time_left": "LEFT",
     "time_minutes": "{{minutes}} MIN",
-    "time_unlimited": "UNLIMITED",
     "settings": "设置",
     "tray": {
       "update_found_title": "发现新版本",
@@ -150,5 +160,94 @@
     "placeholder": "搜索...",
     "clear": "清空搜索",
     "open": "搜索"
+  },
+  "toolbox": {
+    "title": "AI工具",
+    "subtitle": "随手输入或开口说话，再润色、翻译、朗读。",
+    "flow_hint": "上方给输入 · 下方挑工具 · 即刻拿到处理后的结果",
+    "input": {
+      "section_label": "// 01 · 输入",
+      "tabs": {
+        "text": "文字",
+        "voice": "语音",
+        "history": "历史",
+        "file": "音频文件"
+      },
+      "text_placeholder": "在这里输入或粘贴文字…",
+      "voice_hint": "按住按钮说话，松开自动转写。",
+      "voice_button_idle": "按住说话",
+      "voice_button_recording": "正在听…",
+      "voice_recorded": "已录制 · 0:08",
+      "history_hint": "从历史记录里挑一条。",
+      "history_empty": "暂无历史记录。",
+      "file_hint": "拖入或选择音频文件（mp3 / wav / m4a）。",
+      "file_button": "选择音频文件",
+      "file_loaded": "demo.mp3 · 12s · 1.2 MB",
+      "char_count": "{{count}} 字",
+      "right_label": "文字",
+      "right_hint_voice": "来自语音转写",
+      "right_hint_history": "来自历史记录",
+      "right_hint_file": "来自音频转写",
+      "right_empty": "请先在左侧给一个输入。",
+      "use_sample": "用示例文字"
+    },
+    "tools": {
+      "section_label": "// 02 · 工具",
+      "tabs": {
+        "polish": "润色",
+        "translate": "翻译",
+        "tts": "朗读"
+      },
+      "tutorial": {
+        "polish": {
+          "title": "润色",
+          "headline": "把口语化的句子打磨成像书面语。"
+        },
+        "translate": {
+          "title": "翻译",
+          "headline": "把文字翻成另一种语言，尽量保留语气。"
+        },
+        "tts": {
+          "title": "朗读",
+          "headline": "把文字合成自然的语音。"
+        }
+      },
+      "polish": {
+        "style_label": "风格",
+        "styles": {
+          "smooth": "通顺",
+          "formal": "正式",
+          "concise": "简洁"
+        }
+      },
+      "translate": {
+        "target_label": "译为",
+        "languages": {
+          "en": "英文",
+          "zh": "中文",
+          "ja": "日文",
+          "ko": "韩文"
+        }
+      },
+      "tts": {
+        "voice_label": "声音",
+        "speed_label": "语速",
+        "voices": {
+          "natural_f": "自然·女声",
+          "natural_m": "自然·男声",
+          "calm_f": "舒缓·女声"
+        },
+        "audio_placeholder": "▶  ━━━━━━━━━━━━━━━━━━━━  0:08 / 0:12"
+      },
+      "rerun": "重跑",
+      "copy": "复制",
+      "save_history": "保存",
+      "use_as_input": "用作输入",
+      "download": "下载",
+      "elapsed": "{{seconds}}s"
+    },
+    "footer": {
+      "ui_only_notice": "// UI 预览 — 业务尚未接入"
+    }
   }
 }

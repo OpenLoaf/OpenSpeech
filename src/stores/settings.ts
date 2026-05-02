@@ -2,11 +2,21 @@ import { create } from "zustand";
 import { Store } from "@tauri-apps/plugin-store";
 import { syncI18nFromSettings } from "@/lib/i18n-sync";
 import type { LanguagePref } from "@/i18n";
+import { deleteAiProviderKey } from "@/lib/secrets";
+import {
+  DEFAULT_AI_SYSTEM_PROMPTS,
+  type AiPromptLang as AiPromptLangFromDefaults,
+} from "@/lib/defaultAiPrompts";
+
+export {
+  DEFAULT_AI_SYSTEM_PROMPTS,
+  getEffectiveAiSystemPrompt,
+} from "@/lib/defaultAiPrompts";
 
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 10;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
 export type Sensitivity = "LOW" | "NORMAL" | "HIGH";
@@ -20,7 +30,7 @@ export type DictationMode = "REALTIME" | "AI";
 // 听写模式：
 //   REALTIME   — 实时转换：服务端 VAD 按停顿切句，partial 实时回填
 //   UTTERANCE  — 整句听写：整段录音视为一句话，松开按键后才出转写
-//   AI_REFINE  — AI 优化（默认）：UTTERANCE 流程结束后再调 OL-TL-005 整理书面化
+//   AI_REFINE  — AI 优化（默认）：UTTERANCE 流程结束后再走 AI refine 整理书面化
 export type AsrSegmentMode = "REALTIME" | "UTTERANCE" | "AI_REFINE";
 // 历史记录保留时长。off = 不写入数据库（仅当前会话内存可见）；其它按天数清理。
 // 真正的清理任务由后端启动期 sweeper 执行（见 docs/history.md，TODO 实现）。
@@ -80,10 +90,31 @@ export interface PersonalizationSettings {
   sensitivity: Sensitivity;
 }
 
+export type AiRefineMode = "saas" | "custom";
+export type AiPromptLang = AiPromptLangFromDefaults;
+
+export interface AiCustomProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+}
+
+export interface AiRefineSettings {
+  mode: AiRefineMode;
+  customProviders: AiCustomProvider[];
+  activeCustomProviderId: string | null;
+  // null = 跟随当前 UI 语言用 DEFAULT_AI_SYSTEM_PROMPTS；非 null = 用户自定义（不分语言）。
+  customSystemPrompt: string | null;
+  includeHistory: boolean;
+}
+
+
 interface PersistShape {
   schemaVersion: number;
   general: GeneralSettings;
   personalization: PersonalizationSettings;
+  aiRefine: AiRefineSettings;
 }
 
 const DEFAULT_GENERAL: GeneralSettings = {
@@ -104,7 +135,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   skippedUpdateVersion: "",
   closeBehavior: "ASK",
   onboardingCompleted: false,
-  // 默认 AI_REFINE：UTTERANCE 流程拿到 final transcript 后再调 OL-TL-005 整理。
+  // 默认 AI_REFINE：UTTERANCE 流程拿到 final transcript 后再走 AI refine 整理。
   // UTTERANCE（vadMode=none）作为基底：push-to-talk 听写文档推荐——更准、
   // 更便宜、不被 VAD 错切。REALTIME（server_vad）留给会议字幕 / 直播 / 同传
   // 等需要按句独立 transcript 的无人值守场景。
@@ -118,9 +149,18 @@ const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
   sensitivity: "NORMAL",
 };
 
+const DEFAULT_AI_REFINE: AiRefineSettings = {
+  mode: "saas",
+  customProviders: [],
+  activeCustomProviderId: null,
+  customSystemPrompt: null,
+  includeHistory: true,
+};
+
 interface SettingsState {
   general: GeneralSettings;
   personalization: PersonalizationSettings;
+  aiRefine: AiRefineSettings;
   loaded: boolean;
   init: () => Promise<void>;
   setGeneral: <K extends keyof GeneralSettings>(
@@ -131,6 +171,13 @@ interface SettingsState {
     key: K,
     value: PersonalizationSettings[K],
   ) => Promise<void>;
+  setAiRefineMode: (mode: AiRefineMode) => Promise<void>;
+  addAiProvider: (provider: AiCustomProvider) => Promise<void>;
+  updateAiProvider: (id: string, patch: Partial<Omit<AiCustomProvider, "id">>) => Promise<void>;
+  removeAiProvider: (id: string) => Promise<void>;
+  setActiveAiProvider: (id: string | null) => Promise<void>;
+  setAiSystemPrompt: (value: string | null) => Promise<void>;
+  setAiIncludeHistory: (v: boolean) => Promise<void>;
 }
 
 let storePromise: Promise<Store> | null = null;
@@ -227,6 +274,53 @@ function migrateV7(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
   };
 }
 
+// v8 → v9：加 aiRefine slice，原字段不动；缺失字段补默认值。
+// v9 → v10：systemPrompts(三语 Record) 改为 customSystemPrompt(string|null)。
+// 旧三语跟默认完全一致 ⇒ null（继续走默认）；否则取一条非空非默认的作为自定义值。
+function mergeAiRefine(raw: unknown): AiRefineSettings {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_AI_REFINE };
+  const r = raw as Partial<AiRefineSettings> & { systemPrompts?: unknown };
+  const providers = Array.isArray(r.customProviders)
+    ? r.customProviders.filter(
+        (p): p is AiCustomProvider =>
+          !!p && typeof p === "object" && typeof p.id === "string",
+      )
+    : [];
+  const active =
+    typeof r.activeCustomProviderId === "string" &&
+    providers.some((p) => p.id === r.activeCustomProviderId)
+      ? r.activeCustomProviderId
+      : providers[0]?.id ?? null;
+
+  let customSystemPrompt: string | null;
+  if (typeof r.customSystemPrompt === "string") {
+    customSystemPrompt = r.customSystemPrompt;
+  } else if (r.customSystemPrompt === null) {
+    customSystemPrompt = null;
+  } else if (r.systemPrompts && typeof r.systemPrompts === "object") {
+    const old = r.systemPrompts as Record<string, unknown>;
+    let picked: string | null = null;
+    for (const lang of ["zh-CN", "zh-TW", "en"] as const) {
+      const v = old[lang];
+      if (typeof v === "string" && v.length > 0 && v !== DEFAULT_AI_SYSTEM_PROMPTS[lang]) {
+        picked = v;
+        break;
+      }
+    }
+    customSystemPrompt = picked;
+  } else {
+    customSystemPrompt = null;
+  }
+
+  return {
+    mode: r.mode === "custom" ? "custom" : "saas",
+    customProviders: providers,
+    activeCustomProviderId: active,
+    customSystemPrompt,
+    includeHistory: typeof r.includeHistory === "boolean" ? r.includeHistory : true,
+  };
+}
+
 async function readPersisted(): Promise<PersistShape> {
   const s = await store();
   const raw = await s.get<unknown>("root");
@@ -234,11 +328,22 @@ async function readPersisted(): Promise<PersistShape> {
     schemaVersion: SCHEMA_VERSION,
     general: { ...DEFAULT_GENERAL },
     personalization: { ...DEFAULT_PERSONALIZATION },
+    aiRefine: { ...DEFAULT_AI_REFINE },
   };
   if (!raw || typeof raw !== "object") return defaults;
   const r = raw as Partial<PersistShape> & { schemaVersion?: number };
 
-  // 迁移：v1 → v2 → v3 → v4 → v5 → v6 → v7 链式
+  const finalize = (general: Partial<GeneralSettings>): PersistShape => ({
+    schemaVersion: SCHEMA_VERSION,
+    general: { ...DEFAULT_GENERAL, ...general },
+    personalization: {
+      ...DEFAULT_PERSONALIZATION,
+      ...(r.personalization ?? {}),
+    },
+    aiRefine: mergeAiRefine((r as { aiRefine?: unknown }).aiRefine),
+  });
+
+  // 迁移：v1 → v2 → ... → v8 → v9 链式
   if (r.schemaVersion === 1) {
     const v2 = migrateV1((r.general ?? {}) as Record<string, unknown>);
     const v3 = migrateV2(v2 as Record<string, unknown>);
@@ -247,14 +352,7 @@ async function readPersisted(): Promise<PersistShape> {
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
     const v8 = migrateV7(v7 as Record<string, unknown>);
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v8 },
-      personalization: {
-        ...DEFAULT_PERSONALIZATION,
-        ...(r.personalization ?? {}),
-      },
-    };
+    return finalize(v8);
   }
   if (r.schemaVersion === 2) {
     const v3 = migrateV2((r.general ?? {}) as Record<string, unknown>);
@@ -263,14 +361,7 @@ async function readPersisted(): Promise<PersistShape> {
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
     const v8 = migrateV7(v7 as Record<string, unknown>);
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v8 },
-      personalization: {
-        ...DEFAULT_PERSONALIZATION,
-        ...(r.personalization ?? {}),
-      },
-    };
+    return finalize(v8);
   }
   if (r.schemaVersion === 3) {
     const v4 = migrateV3((r.general ?? {}) as Record<string, unknown>);
@@ -278,76 +369,37 @@ async function readPersisted(): Promise<PersistShape> {
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
     const v8 = migrateV7(v7 as Record<string, unknown>);
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v8 },
-      personalization: {
-        ...DEFAULT_PERSONALIZATION,
-        ...(r.personalization ?? {}),
-      },
-    };
+    return finalize(v8);
   }
   if (r.schemaVersion === 4) {
     const v5 = migrateV4((r.general ?? {}) as Record<string, unknown>);
     const v6 = migrateV5(v5 as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
     const v8 = migrateV7(v7 as Record<string, unknown>);
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v8 },
-      personalization: {
-        ...DEFAULT_PERSONALIZATION,
-        ...(r.personalization ?? {}),
-      },
-    };
+    return finalize(v8);
   }
   if (r.schemaVersion === 5) {
     const v6 = migrateV5((r.general ?? {}) as Record<string, unknown>);
     const v7 = migrateV6(v6 as Record<string, unknown>);
     const v8 = migrateV7(v7 as Record<string, unknown>);
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v8 },
-      personalization: {
-        ...DEFAULT_PERSONALIZATION,
-        ...(r.personalization ?? {}),
-      },
-    };
+    return finalize(v8);
   }
   if (r.schemaVersion === 6) {
     const v7 = migrateV6((r.general ?? {}) as Record<string, unknown>);
     const v8 = migrateV7(v7 as Record<string, unknown>);
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v8 },
-      personalization: {
-        ...DEFAULT_PERSONALIZATION,
-        ...(r.personalization ?? {}),
-      },
-    };
+    return finalize(v8);
   }
   if (r.schemaVersion === 7) {
     const v8 = migrateV7((r.general ?? {}) as Record<string, unknown>);
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      general: { ...DEFAULT_GENERAL, ...v8 },
-      personalization: {
-        ...DEFAULT_PERSONALIZATION,
-        ...(r.personalization ?? {}),
-      },
-    };
+    return finalize(v8);
+  }
+  if (r.schemaVersion === 8 || r.schemaVersion === 9) {
+    return finalize((r.general ?? {}) as Partial<GeneralSettings>);
   }
 
   if (r.schemaVersion !== SCHEMA_VERSION) return defaults;
 
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    general: { ...DEFAULT_GENERAL, ...(r.general ?? {}) },
-    personalization: {
-      ...DEFAULT_PERSONALIZATION,
-      ...(r.personalization ?? {}),
-    },
-  };
+  return finalize((r.general ?? {}) as Partial<GeneralSettings>);
 }
 
 async function writePersisted(shape: PersistShape): Promise<void> {
@@ -356,46 +408,114 @@ async function writePersisted(shape: PersistShape): Promise<void> {
   await s.save();
 }
 
-export const useSettingsStore = create<SettingsState>((set, get) => ({
-  general: { ...DEFAULT_GENERAL },
-  personalization: { ...DEFAULT_PERSONALIZATION },
-  loaded: false,
-
-  init: async () => {
-    const p = await readPersisted();
-    set({
-      general: p.general,
-      personalization: p.personalization,
-      loaded: true,
-    });
-    // 若读到是 v1，writePersisted 一次把 v2 结构固化到磁盘
-    await writePersisted({
-      schemaVersion: SCHEMA_VERSION,
-      general: p.general,
-      personalization: p.personalization,
-    });
-  },
-
-  setGeneral: async (key, value) => {
-    const next = { ...get().general, [key]: value };
-    set({ general: next });
-    await writePersisted({
-      schemaVersion: SCHEMA_VERSION,
-      general: next,
-      personalization: get().personalization,
-    });
-    if (key === "interfaceLang") {
-      void syncI18nFromSettings(next.interfaceLang);
-    }
-  },
-
-  setPersonalization: async (key, value) => {
-    const next = { ...get().personalization, [key]: value };
-    set({ personalization: next });
-    await writePersisted({
+export const useSettingsStore = create<SettingsState>((set, get) => {
+  const persist = async (patch: Partial<PersistShape> = {}) => {
+    const shape: PersistShape = {
       schemaVersion: SCHEMA_VERSION,
       general: get().general,
-      personalization: next,
-    });
-  },
-}));
+      personalization: get().personalization,
+      aiRefine: get().aiRefine,
+      ...patch,
+    };
+    await writePersisted(shape);
+  };
+
+  return {
+    general: { ...DEFAULT_GENERAL },
+    personalization: { ...DEFAULT_PERSONALIZATION },
+    aiRefine: { ...DEFAULT_AI_REFINE },
+    loaded: false,
+
+    init: async () => {
+      const p = await readPersisted();
+      set({
+        general: p.general,
+        personalization: p.personalization,
+        aiRefine: p.aiRefine,
+        loaded: true,
+      });
+      await writePersisted(p);
+    },
+
+    setGeneral: async (key, value) => {
+      const next = { ...get().general, [key]: value };
+      set({ general: next });
+      await persist({ general: next });
+      if (key === "interfaceLang") {
+        void syncI18nFromSettings(next.interfaceLang);
+      }
+    },
+
+    setPersonalization: async (key, value) => {
+      const next = { ...get().personalization, [key]: value };
+      set({ personalization: next });
+      await persist({ personalization: next });
+    },
+
+    setAiRefineMode: async (mode) => {
+      const next = { ...get().aiRefine, mode };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    addAiProvider: async (provider) => {
+      const cur = get().aiRefine;
+      if (cur.customProviders.some((p) => p.id === provider.id)) return;
+      const customProviders = [...cur.customProviders, provider];
+      const activeCustomProviderId = cur.activeCustomProviderId ?? provider.id;
+      const next = { ...cur, customProviders, activeCustomProviderId };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    updateAiProvider: async (id, patch) => {
+      const cur = get().aiRefine;
+      const customProviders = cur.customProviders.map((p) =>
+        p.id === id ? { ...p, ...patch } : p,
+      );
+      const next = { ...cur, customProviders };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    removeAiProvider: async (id) => {
+      const cur = get().aiRefine;
+      const customProviders = cur.customProviders.filter((p) => p.id !== id);
+      const activeCustomProviderId =
+        cur.activeCustomProviderId === id
+          ? customProviders[0]?.id ?? null
+          : cur.activeCustomProviderId;
+      const next = { ...cur, customProviders, activeCustomProviderId };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+      try {
+        await deleteAiProviderKey(id);
+      } catch (e) {
+        console.warn("[ai-refine] deleteAiProviderKey failed:", e);
+      }
+    },
+
+    setActiveAiProvider: async (id) => {
+      const cur = get().aiRefine;
+      const exists = id === null || cur.customProviders.some((p) => p.id === id);
+      if (!exists) return;
+      const next = { ...cur, activeCustomProviderId: id };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setAiSystemPrompt: async (value) => {
+      const cur = get().aiRefine;
+      const next = { ...cur, customSystemPrompt: value };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setAiIncludeHistory: async (v) => {
+      const cur = get().aiRefine;
+      const next = { ...cur, includeHistory: v };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+  };
+});

@@ -35,7 +35,6 @@
     "row": {
       "email": "Email",
       "subscription": "Plan",
-      "saas_calls": "SaaS calls",
       "credits_balance": "Credit balance"
     },
     "membership": {
@@ -44,16 +43,12 @@
       "pro": "PRO",
       "premium": "PREMIUM"
     },
-    "unlimited": "Unlimited · no credit charge",
     "subscribe_button": {
       "default": "Subscribe / upgrade plan",
       "upgrade_to_premium": "Upgrade to PREMIUM",
       "manage": "Manage subscription"
     },
-    "subscribe_hint": {
-      "default": "After buying Pro or Premium on the OpenLoaf site, OpenSpeech cloud calls become unlimited.",
-      "unlimited": "Your plan is managed on the OpenLoaf website."
-    },
+    "subscribe_hint": "Manage your subscription and plan on the OpenLoaf website.",
     "recharge_button": "Top up",
     "recharge_hint": "1 CNY = 100 credits. You can top up without subscribing to a plan.",
     "logout_button": "Sign out",
