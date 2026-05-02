@@ -6,7 +6,11 @@ import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manage
 import { toast } from "sonner";
 import i18n from "@/i18n";
 import type { BindingId, HotkeyBinding } from "@/lib/hotkey";
-import { useSettingsStore, type AsrSegmentMode } from "@/stores/settings";
+import {
+  useSettingsStore,
+  getEffectiveAiSystemPrompt,
+  type AsrSegmentMode,
+} from "@/stores/settings";
 import { useHistoryStore } from "@/stores/history";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
@@ -22,14 +26,11 @@ import {
   startSttSession,
   finalizeSttSession,
   cancelSttSession,
-  refineSpeechTextStream,
   transcribeRecordingFile,
 } from "@/lib/stt";
-import {
-  getHotwordsForRefine,
-  rememberHotwordsCacheId,
-} from "@/lib/hotwordsCache";
-import { buildRefineContext } from "@/lib/refineContext";
+import { refineTextViaChatStream } from "@/lib/ai-refine";
+import { resolveLang } from "@/i18n";
+import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { newId } from "@/lib/ids";
 
 export type RecordingState =
@@ -89,6 +90,17 @@ interface RecordingStore {
   dismissError: () => void;
   simulateCancel: () => void;
   simulateFinalize: () => void;
+  /**
+   * DEV-ONLY：用历史里某条听写录音的音频文件，跑一遍正常 dictation pipeline
+   * （REST ASR → AI_REFINE 流式 → 注入到光标），免去每次手动说话调试。
+   * 不写新历史。仅 type=dictation 才允许调用，调用方自己 gate；
+   * 长录音（>5min）不支持（OL-TL-003 限制）。
+   */
+  simulateDictationFromAudio: (audioPath: string, durationMs: number) => Promise<void>;
+  /** DEV-ONLY：只跑一次 AI refine pass，返回 refined 文本；不注入、不写历史。 */
+  debugRefineOnly: (text: string) => Promise<string>;
+  /** DEV-ONLY：把任意文本通过 inject_type 写到当前焦点应用；不走录音/转录/refine。 */
+  debugReinject: (text: string) => Promise<void>;
 }
 
 const getEffectiveSegmentMode = (): AsrSegmentMode =>
@@ -201,10 +213,73 @@ const isRealtimeRepeatError = (code: string, message: string): boolean => {
 // 还是直接 transcribe_recording_file。Module 级足够——一次录音生命周期内无并发。
 let realtimeDegradedToFile = false;
 
+// DEBUG 模拟态（仅 dev / `simulateDictationFromAudio` 路径使用）：
+// - 不开真 mic、不开真 STT 会话；FSM 走 recording → transcribing → injecting → idle
+// - 用 fake audio-level + emit "openspeech://debug-recording" 让 overlay 显示倒计时条
+// - ESC 双击 / X 按钮 / `simulateCancel` 走 `cancelDebugSimulation()` 路径，不写历史
+let debugSimulating = false;
+let debugSimAbort: ((reason: unknown) => void) | null = null;
+let debugFakeLevelTimer: number | null = null;
+
+const startDebugFakeLevels = () => {
+  if (debugFakeLevelTimer !== null) return;
+  // overlay Waveform 直接 listen "openspeech://audio-level"——broadcast 事件走 emit
+  // 即可，main 自己 store 也会跟着更新一份（无副作用）。
+  debugFakeLevelTimer = window.setInterval(() => {
+    const v = 0.3 + Math.random() * 0.5;
+    void emit("openspeech://audio-level", v);
+  }, 50);
+};
+
+const stopDebugFakeLevels = () => {
+  if (debugFakeLevelTimer !== null) {
+    window.clearInterval(debugFakeLevelTimer);
+    debugFakeLevelTimer = null;
+  }
+};
+
+const broadcastDebug = (payload: {
+  active: boolean;
+  totalMs?: number;
+  endAtUnixMs?: number;
+}) => {
+  void emit("openspeech://debug-recording", payload);
+};
+
+const cancelDebugSimulation = () => {
+  if (!debugSimulating) return;
+  debugSimulating = false;
+  stopDebugFakeLevels();
+  broadcastDebug({ active: false });
+  const reject = debugSimAbort;
+  debugSimAbort = null;
+  reject?.(new Error("debug-cancelled"));
+};
+
+const debugAbortableDelay = (ms: number): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    const t = window.setTimeout(() => {
+      debugSimAbort = null;
+      resolve();
+    }, ms);
+    debugSimAbort = (reason) => {
+      window.clearTimeout(t);
+      debugSimAbort = null;
+      reject(reason);
+    };
+  });
+
 // 当前 realtime 会话的 sessionId，stt-ready 事件到达时写入，stt_start 之前清空。
-// finalize 后调 refineSpeechTextStream 时作为 task_id 透传给 OL-TL-005，让服务端
-// 把 ASR 与口语优化两侧日志关联起来。Module 级足够——同一时刻只有一个 stt session。
+// finalize 后调 AI refine chat stream 时作为 task_id 透传，让服务端把 ASR 与
+// 口语优化两侧日志关联起来。Module 级足够——同一时刻只有一个 stt session。
 let currentSttSessionId: string | null = null;
+
+// stt-ready 是否在本次录音生命周期内到达。WS 握手慢于录音时长时这个一直是 false：
+// 期间 audio callback 因 slot=None 静默丢帧，会话一帧 PCM 都没传到服务端，
+// finalize 必然空转 FINALIZE_WAIT_MS 才返回空串。finalizeAndWriteHistory 用它
+// 短路掉 stt_finalize 的等待，直接走 transcribe_recording_file 的 REST 重转，
+// 与历史记录里「重试」按钮同一条降级路径。
+let realtimeReadyDuringRecording = false;
 
 // 失败原因翻译：Rust 端 stt_start 失败典型文案：
 //   "not authenticated; login first"
@@ -319,10 +394,32 @@ type FinalizeOutcome = {
 const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   if (!IS_MAIN_WINDOW) return { rec: null, text: "" };
   const recSettled = await Promise.allSettled([stopRecordingAndSave()]).then((r) => r[0]);
-  const sttSettled = await Promise.allSettled([finalizeSttSession()]).then((r) => r[0]);
+
+  // WS 握手慢于录音时长（stt-ready 整段都没到）：会话一帧 audio 都没送到服务端，
+  // stt_finalize 必然空转 FINALIZE_WAIT_MS 后返回空串。直接降级走 REST 文件
+  // 转写，与历史「重试」按钮同一路径，省掉这 3s 等待。REALTIME 模式不走：
+  // 与既有 repeat-bug 降级口径一致——已经增量注入的 partial 会和重转的整段拼接错乱。
+  if (
+    !realtimeReadyDuringRecording &&
+    !realtimeDegradedToFile &&
+    getEffectiveSegmentMode() !== "REALTIME"
+  ) {
+    console.info("[stt] ws never ready during recording → degrade to file transcribe");
+    realtimeDegradedToFile = true;
+    void cancelSttSession();
+  }
+
+  // degrade 时跳过 finalize 的 3s 兜底等待——asr-error 与 ws-not-ready 两条入口
+  // 设 degrade 后 finalize 都拿不到 Final，等待纯属浪费用户从松手到出字的延迟。
+  const sttSettled: PromiseSettledResult<string> = realtimeDegradedToFile
+    ? { status: "fulfilled", value: "" }
+    : await Promise.allSettled([finalizeSttSession()]).then((r) => r[0]);
   const rec = recSettled.status === "fulfilled" ? recSettled.value : null;
   let text =
     sttSettled.status === "fulfilled" && sttSettled.value ? sttSettled.value : "";
+  console.info(
+    `[finalize] sttStatus=${sttSettled.status} textLen=${text.length} recDurMs=${rec?.duration_ms ?? "n/a"} degraded=${realtimeDegradedToFile}`,
+  );
 
   // DashScope realtime 模型层 repeat bug 降级：原 realtime 通道在 worker_dead /
   // asr-error 后 finalize 大概率拿到空 text。直接对刚落盘的录音文件用 OL-TL-003
@@ -388,7 +485,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     });
   }
 
-  // AI_REFINE：拿到原始 transcript 后强制走流式 OL-TL-005，每个 Delta 通过
+  // AI_REFINE：拿到原始 transcript 后强制走 AI refine chat stream，每个 Delta 通过
   // injectIncremental 实时敲到光标位置（剪贴板 + Cmd/Ctrl+V 单字符段）。
   // 流结束后把整段 refinedText 写回剪贴板，覆盖最后一段 delta，让用户后续
   // Cmd+V / Cmd+C 都拿到完整内容。
@@ -404,24 +501,67 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     `[refine] gate textLen=${text.length} segmentMode=${segmentMode} willCallRefine=${!!text && segmentMode === "AI_REFINE"}`,
   );
   if (text && segmentMode === "AI_REFINE") {
-    const { hotwords, hotwordsCacheId } = getHotwordsForRefine();
+    const hotwords = getHotwordsArray();
     resetIncrementalInject();
     let streamedSoFar = "";
     const refineStart = performance.now();
+    const aiSettings = useSettingsStore.getState().aiRefine;
+    const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
+    const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
+    const HISTORY_TURNS = 5;
+    const requestTimeMs = Date.now();
+    const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
+    let historyEntries: string[] | undefined;
+    if (aiSettings.includeHistory) {
+      const items = useHistoryStore.getState().items;
+      const picked = items
+        .filter((it) => it.status === "success")
+        .slice(0, HISTORY_TURNS)
+        .reverse();
+      const minutesAgoLabel = i18n.t("ai.minutes_ago", {
+        ns: "settings",
+        defaultValue: "minutes ago",
+      });
+      const lines = picked
+        .map((it) => {
+          const content = (it.refined_text ?? it.text ?? "").trim();
+          if (!content) return "";
+          const mins = Math.max(1, Math.floor((requestTimeMs - it.created_at) / 60000));
+          return `[${mins} ${minutesAgoLabel}] ${content}`;
+        })
+        .filter((s) => s.length > 0);
+      if (lines.length > 0) historyEntries = lines;
+    }
+    let activeProvider = null as
+      | { id: string; name: string; baseUrl: string; model: string }
+      | null;
+    if (aiSettings.mode === "custom") {
+      activeProvider =
+        aiSettings.customProviders.find(
+          (p) => p.id === aiSettings.activeCustomProviderId,
+        ) ?? null;
+    }
     console.info(
-      `[refine] stream start textLen=${text.length} hotwordsLen=${hotwords?.length ?? 0} cacheId=${hotwordsCacheId ? "yes" : "no"}`,
+      `[ai-refine] stream start mode=${aiSettings.mode} textLen=${text.length} hotwordsLen=${hotwords.length} historyLen=${historyEntries?.length ?? 0} provider=${activeProvider?.id ?? "saas"}`,
     );
     try {
-      const referenceContext = buildRefineContext(
-        useHistoryStore.getState().items,
-      );
-      const r = await refineSpeechTextStream(
+      if (aiSettings.mode === "custom" && !activeProvider) {
+        throw new Error("no_active_custom_provider");
+      }
+      const r = await refineTextViaChatStream(
         {
-          text,
-          hotwords: hotwords || undefined,
-          hotwordsCacheId,
+          mode: aiSettings.mode,
+          systemPrompt,
+          userText: text,
+          hotwords: hotwords.length > 0 ? hotwords : undefined,
+          historyEntries,
+          requestTime,
+          customBaseUrl: activeProvider?.baseUrl,
+          customModel: activeProvider?.model,
+          customKeyringId: activeProvider
+            ? `ai_provider_${activeProvider.id}`
+            : undefined,
           taskId: currentSttSessionId ?? undefined,
-          referenceContext,
         },
         (chunk) => {
           streamedSoFar += chunk;
@@ -430,9 +570,8 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       );
       refinedText = r.refinedText;
       console.info(
-        `[refine] stream done refinedLen=${refinedText.length} elapsedMs=${Math.round(performance.now() - refineStart)} credits=${r.creditsConsumed ?? "?"}`,
+        `[ai-refine] stream done refinedLen=${refinedText.length} elapsedMs=${Math.round(performance.now() - refineStart)}`,
       );
-      rememberHotwordsCacheId(hotwords, r.hotwordsCacheId);
       flushPendingInject();
       // 流式 token 已全部排队，剩下的只是 injectChain 中的最后几次 paste +
       // 末尾 diff 兜底。这一刻让 overlay pill 提前 exit，用户视感是"还有一点点
@@ -443,10 +582,13 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       try {
         await injectChain;
       } catch {}
-      try {
-        await writeClipboard(refinedText);
-      } catch (e) {
-        console.warn("[clipboard] post-refine writeText failed:", e);
+      // ESC 在流末/末尾兜底之前完成取消时，state 已切 idle——不再覆盖用户剪贴板。
+      if (isInjectFlowActive()) {
+        try {
+          await writeClipboard(refinedText);
+        } catch (e) {
+          console.warn("[clipboard] post-refine writeText failed:", e);
+        }
       }
     } catch (e) {
       const raw = String(e ?? "");
@@ -473,7 +615,10 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   }
   const finalText = refinedText ?? text;
 
-  if (rec) {
+  // ESC 取消（state 已切 idle）：不写"success/failed"历史条目——和
+  // simulateCancel/discardRecording 的语义保持一致（取消即不留 history）；
+  // 录音文件仍然在 rec.audio_path，以后想做"取消也保留音频"再单独走 abort 路径。
+  if (rec && isInjectFlowActive()) {
     await useHistoryStore.getState().add({
       type: "dictation",
       text: text || transcriptPlaceholder(),
@@ -494,10 +639,15 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // 前缀对不上（catch 后 finalText 退回原始 transcript，与已敲下的 refined 不一致）
   // → 不强行接尾，避免拼成半 refined 半 raw 的串，把整段 finalText 写剪贴板让
   // 用户手动 Cmd/Ctrl+V 拿到完整结果。
-  if (finalText) {
+  if (finalText && isInjectFlowActive()) {
     try {
       await injectChain;
     } catch {}
+    // 等 chain 排空后再确认一次：用户可能刚好在 await 期间双击 ESC 取消。
+    if (!isInjectFlowActive()) {
+      resetIncrementalInject();
+      return { rec, text: finalText };
+    }
     if (finalText.startsWith(lastInjectedText)) {
       const remaining = finalText.slice(lastInjectedText.length);
       if (remaining) {
@@ -548,6 +698,14 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
 let lastInjectedText = "";
 let injectChain: Promise<void> = Promise.resolve();
 
+// transcribing/injecting 期间被 ESC 取消后，FSM 切到 idle/error，但 AI refine
+// 流式 stream 在 Rust 侧没有 abort 通道、deltas 仍会陆续到达——所有可能"敲到
+// 用户光标 / 写用户剪贴板 / 写历史"的副作用都按这条门控就地短路。
+const isInjectFlowActive = () => {
+  const s = useRecordingStore.getState().state;
+  return s === "transcribing" || s === "injecting";
+};
+
 const flushPendingInject = () => {
   // 兼容保留：以前外部调用此函数 flush 节流 buffer，新路径无 buffer，这里成为 no-op。
   // injectChain 本身已串行排队，调用方继续 await injectChain 即可。
@@ -559,6 +717,7 @@ const resetIncrementalInject = () => {
 
 const injectIncremental = (fullText: string) => {
   if (!IS_MAIN_WINDOW) return;
+  if (!isInjectFlowActive()) return;
   // 服务端纠错把已注入的前缀改写时（极少），无法回退已敲下去的字符；
   // 跳过本轮增量，等末尾兜底 diff 把"剩余的"再敲一次（用户视觉上会出现重复，
   // 但比反复抖动更可控）。
@@ -567,6 +726,7 @@ const injectIncremental = (fullText: string) => {
   if (!delta) return;
   lastInjectedText = fullText;
   injectChain = injectChain.then(async () => {
+    if (!isInjectFlowActive()) return;
     try {
       await invoke("inject_type", { text: delta });
     } catch (e) {
@@ -1125,6 +1285,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           const recordingId = newId();
           resetIncrementalInject();
           realtimeDegradedToFile = false;
+          realtimeReadyDuringRecording = false;
           set({
             state: "preparing",
             activeId: id,
@@ -1361,12 +1522,13 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
       // realtime WS 握手成功后服务端首条事件，把 sessionId 透出来。
-      // 缓存到 module 级 currentSttSessionId，给 finalize 后调 OL-TL-005 时
+      // 缓存到 module 级 currentSttSessionId，给 finalize 后调 AI refine 时
       // 作为 task_id 透传，关联 ASR 与口语优化两侧日志。
       const u7r = await listen<{ sessionId: string }>(
         "openspeech://stt-ready",
         (evt) => {
           const sid = evt.payload?.sessionId ?? "";
+          realtimeReadyDuringRecording = true;
           if (sid) {
             currentSttSessionId = sid;
             console.info(`[stt] session ready, id=${sid}`);
@@ -1375,8 +1537,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       );
 
       // Esc 取消——走 Rust modifier_only 的预览通道（`openspeech://key-preview`），
-      // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc）。状态门控：仅当录音 /
-      // 转写流程活跃时响应，idle / injecting 忽略。
+      // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc）。状态门控：录音 /
+      // 转写 / 注入全流程都响应，仅 idle 忽略。注入态生效要点：AI refine 流式
+      // stream 在 Rust 侧没有 abort 通道，取消后剩余 deltas 仍会回流——靠
+      // injectIncremental / 尾段兜底里的状态 gate 兜住，FSM 切回 idle 即等同
+      // "停止继续敲下去"。
       //
       // 双段确认：
       //   ESC#1 + Recording → EscPending（0.5s 静默窗口，不弹提示、不发 esc-armed）
@@ -1406,6 +1571,19 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         clearEscTimers();
         escFirstAt = 0;
         void emitTo("overlay", "openspeech://esc-disarmed", null);
+        // DEBUG 模拟：没有真 mic / STT 会话，跳过 abort/discard/stopMic 那一整套，
+        // 只清 debug 标志 + FSM 切 idle，注入回路靠 isInjectFlowActive() 短路。
+        if (debugSimulating) {
+          cancelDebugSimulation();
+          set({
+            state: "idle",
+            activeId: null,
+            audioLevels: emptyLevels(),
+            recordingId: null,
+            liveTranscript: "",
+          });
+          return;
+        }
         // preparing/recording 时保存音频到历史（用户语义：取消转录但留下录音）；
         // transcribing 时音频已落盘 + stt 在跑，只丢 stt 结果即可。
         if (s === "preparing" || s === "recording") {
@@ -1442,7 +1620,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             get().dismissError();
             return;
           }
-          if (s === "idle" || s === "injecting") return;
+          if (s === "idle") return;
 
           // 已经 armed（任意阶段：pending 或 prompt）→ 第二次 ESC = 取消。
           if (escFirstAt > 0) {
@@ -1516,6 +1694,18 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     },
 
     simulateCancel: () => {
+      // DEBUG 模拟：跳过 abort/discard/stopMic（没有真实 mic/STT 会话）
+      if (debugSimulating) {
+        cancelDebugSimulation();
+        set({
+          state: "idle",
+          activeId: null,
+          audioLevels: emptyLevels(),
+          recordingId: null,
+          liveTranscript: "",
+        });
+        return;
+      }
       const cur = get();
       if (cur.state === "preparing" || cur.state === "recording") {
         void abortAndSaveHistory();
@@ -1530,6 +1720,272 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         recordingId: null,
         liveTranscript: "",
       });
+    },
+
+    simulateDictationFromAudio: async (audioPath: string, durationMs: number) => {
+      if (!IS_MAIN_WINDOW) return;
+      const cur = get().state;
+      if (cur !== "idle") {
+        toast.warning("[DEBUG] 当前正在录音/转写，先结束再试");
+        return;
+      }
+      if (durationMs > 5 * 60 * 1000) {
+        toast.error("[DEBUG] 录音超过 5 分钟，REST ASR 不支持");
+        return;
+      }
+
+      // 进入"假录音"态：和真听写一样跑 FSM，但不开 mic/STT。
+      // 倒计时 = 音频时长，期间 overlay 显示 DEBUG 倒计时条 + 假波形。
+      // 用户在这段窗口内 Cmd+Tab 到目标输入框；ESC 双击随时取消。
+      resetIncrementalInject();
+      realtimeDegradedToFile = false;
+      realtimeReadyDuringRecording = false;
+      currentSttSessionId = `debug-${newId()}`;
+      debugSimulating = true;
+      const endAtUnixMs = Date.now() + durationMs;
+      // overlay 窗口的 show 平时由 Rust 在全局快捷键 pressed 时调；DEBUG 路径
+      // 不经过快捷键，需要前端显式拉起一次，否则 pill / debug strip 全在隐藏窗口里。
+      void invoke("overlay_show").catch((e) =>
+        console.warn("[debug] overlay_show failed:", e),
+      );
+      broadcastDebug({ active: true, totalMs: durationMs, endAtUnixMs });
+      startDebugFakeLevels();
+      set({
+        state: "recording",
+        liveTranscript: "",
+        pillEarlyHide: false,
+        audioLevels: emptyLevels(),
+        lastPressAt: performance.now(),
+      });
+
+      try {
+        await debugAbortableDelay(durationMs);
+      } catch {
+        // ESC 取消 / 外部 cancelDebugSimulation()：FSM 已被 simulateCancel 切回 idle，
+        // 直接退出，不进 transcribing/injecting。
+        return;
+      }
+
+      stopDebugFakeLevels();
+      broadcastDebug({ active: false });
+      // 切 transcribing 之前确认还在 debug 模拟中——可能在边界条件下已被取消。
+      if (!debugSimulating) return;
+      set({ state: "transcribing", liveTranscript: "", pillEarlyHide: false });
+
+      try {
+        let text = "";
+        try {
+          const r = await transcribeRecordingFile({ audioPath, durationMs });
+          text = r.text ?? "";
+        } catch (e) {
+          console.warn("[debug] transcribe failed:", e);
+          notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
+            description: humanizeSttError(e),
+          });
+          set({ state: "idle", liveTranscript: "" });
+          return;
+        }
+
+        if (!text) {
+          notifyOverlay("warning", i18n.t("overlay:toast.transcribe_failed.title"), {
+            description: i18n.t("overlay:toast.transcribe_failed.no_transcript"),
+          });
+          set({ state: "idle", liveTranscript: "" });
+          return;
+        }
+
+      set({ state: "injecting", pillEarlyHide: false });
+
+      // 复用 finalize 里的 AI_REFINE 流式注入逻辑——这里只内联必要部分，不写历史，
+      // 不动录音/STT 会话状态机。
+      const segmentMode = getEffectiveSegmentMode();
+      let refinedText: string | null = null;
+      if (segmentMode === "AI_REFINE") {
+        const hotwords = getHotwordsArray();
+        let streamedSoFar = "";
+        const aiSettings = useSettingsStore.getState().aiRefine;
+        const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
+        const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
+        const requestTimeMs = Date.now();
+        const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
+        let historyEntries: string[] | undefined;
+        if (aiSettings.includeHistory) {
+          const items = useHistoryStore.getState().items;
+          const picked = items
+            .filter((it) => it.status === "success")
+            .slice(0, 5)
+            .reverse();
+          const minutesAgoLabel = i18n.t("ai.minutes_ago", {
+            ns: "settings",
+            defaultValue: "minutes ago",
+          });
+          const lines = picked
+            .map((it) => {
+              const content = (it.refined_text ?? it.text ?? "").trim();
+              if (!content) return "";
+              const mins = Math.max(1, Math.floor((requestTimeMs - it.created_at) / 60000));
+              return `[${mins} ${minutesAgoLabel}] ${content}`;
+            })
+            .filter((s) => s.length > 0);
+          if (lines.length > 0) historyEntries = lines;
+        }
+        let activeProvider = null as
+          | { id: string; name: string; baseUrl: string; model: string }
+          | null;
+        if (aiSettings.mode === "custom") {
+          activeProvider =
+            aiSettings.customProviders.find(
+              (p) => p.id === aiSettings.activeCustomProviderId,
+            ) ?? null;
+        }
+        try {
+          if (aiSettings.mode === "custom" && !activeProvider) {
+            throw new Error("no_active_custom_provider");
+          }
+          const r = await refineTextViaChatStream(
+            {
+              mode: aiSettings.mode,
+              systemPrompt,
+              userText: text,
+              hotwords: hotwords.length > 0 ? hotwords : undefined,
+              historyEntries,
+              requestTime,
+              customBaseUrl: activeProvider?.baseUrl,
+              customModel: activeProvider?.model,
+              customKeyringId: activeProvider
+                ? `ai_provider_${activeProvider.id}`
+                : undefined,
+              taskId: currentSttSessionId ?? undefined,
+            },
+            (chunk) => {
+              streamedSoFar += chunk;
+              injectIncremental(streamedSoFar);
+            },
+          );
+          refinedText = r.refinedText;
+          set({ pillEarlyHide: true });
+          try {
+            await injectChain;
+          } catch {}
+          if (isInjectFlowActive()) {
+            try {
+              await writeClipboard(refinedText);
+            } catch (e) {
+              console.warn("[debug] clipboard write failed:", e);
+            }
+          }
+        } catch (e) {
+          const raw = String(e ?? "");
+          if (isAuthError(raw)) {
+            handleAuthLost();
+          } else {
+            console.warn("[debug] refine failed:", e);
+            notifyOverlay(
+              "warning",
+              i18n.t("overlay:toast.transcribe_failed.title"),
+              { description: humanizeSttError(e) },
+            );
+          }
+        }
+        void streamedSoFar;
+      }
+
+      const finalText = refinedText ?? text;
+
+      if (finalText && isInjectFlowActive()) {
+        try {
+          await injectChain;
+        } catch {}
+        if (!isInjectFlowActive()) {
+          resetIncrementalInject();
+          set({ state: "idle", liveTranscript: "" });
+          return;
+        }
+        if (finalText.startsWith(lastInjectedText)) {
+          const remaining = finalText.slice(lastInjectedText.length);
+          if (remaining) {
+            try {
+              await invoke("inject_type", { text: remaining });
+            } catch (e) {
+              console.warn("[debug] tail type failed:", e);
+              try {
+                await writeClipboard(remaining);
+                await invoke("inject_paste");
+              } catch (e2) {
+                console.warn("[debug] tail paste fallback failed:", e2);
+              }
+            }
+          }
+        } else {
+          try {
+            await writeClipboard(finalText);
+          } catch {}
+        }
+        resetIncrementalInject();
+      }
+
+        set({ state: "idle", liveTranscript: "" });
+        toast.success("[DEBUG] 模拟完成", {
+          description: `text=${finalText.length} chars`,
+        });
+      } finally {
+        // 不论 ASR/refine/inject 任何一步出口，确保 debug 标志清掉、波形 ticker 关掉、
+        // overlay 倒计时条收回。被 simulateCancel 提前清过也无所谓——幂等。
+        debugSimulating = false;
+        stopDebugFakeLevels();
+        broadcastDebug({ active: false });
+      }
+    },
+
+    debugRefineOnly: async (text: string) => {
+      if (!IS_MAIN_WINDOW) throw new Error("not main window");
+      const trimmed = text.trim();
+      if (!trimmed) throw new Error("empty text");
+      const aiSettings = useSettingsStore.getState().aiRefine;
+      const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
+      const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
+      const hotwords = getHotwordsArray();
+      const requestTime = `${new Date().toISOString()} (UTC)`;
+      let activeProvider = null as
+        | { id: string; name: string; baseUrl: string; model: string }
+        | null;
+      if (aiSettings.mode === "custom") {
+        activeProvider =
+          aiSettings.customProviders.find(
+            (p) => p.id === aiSettings.activeCustomProviderId,
+          ) ?? null;
+        if (!activeProvider) throw new Error("no_active_custom_provider");
+      }
+      const r = await refineTextViaChatStream(
+        {
+          mode: aiSettings.mode,
+          systemPrompt,
+          userText: trimmed,
+          hotwords: hotwords.length > 0 ? hotwords : undefined,
+          requestTime,
+          customBaseUrl: activeProvider?.baseUrl,
+          customModel: activeProvider?.model,
+          customKeyringId: activeProvider
+            ? `ai_provider_${activeProvider.id}`
+            : undefined,
+          taskId: `debug-refine-${newId()}`,
+        },
+        () => {},
+      );
+      return r.refinedText;
+    },
+
+    debugReinject: async (text: string) => {
+      if (!IS_MAIN_WINDOW) throw new Error("not main window");
+      const payload = text;
+      if (!payload) throw new Error("empty text");
+      try {
+        await invoke("inject_type", { text: payload });
+      } catch (e) {
+        console.warn("[debug] inject_type failed, fallback paste:", e);
+        await writeClipboard(payload);
+        await invoke("inject_paste");
+      }
     },
 
     simulateFinalize: () => {
