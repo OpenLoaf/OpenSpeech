@@ -32,15 +32,15 @@ OpenSpeech **本身不发行套餐**。套餐是由**姊妹产品 OpenLoaf** 统
 | OpenLoaf 套餐 | 月价 / 年价 | 月积分 | 对 OpenSpeech 的影响 |
 |---|---|---|---|
 | Free | ¥0 | 0 | 只能用 BYO；SaaS 模式下每次调用都会被扣积分（起始为 0 → 不足会被拒） |
-| Lite | ¥35 / ¥300 | 5,000 / 60,000（年） | SaaS 调用**按积分计费**，扣完即停 |
-| **Pro** | ¥140 / ¥1,200 | 20,000 / 240,000 | **无限使用**，SaaS 调用**不扣积分** |
-| **Premium** | ¥420 / ¥3,600 | 60,000 / 720,000 | **无限使用**，SaaS 调用**不扣积分** |
+| Lite | ¥35 / ¥300 | 5,000 / 60,000（年） | SaaS 调用按积分计费，扣完即停 |
+| Pro | ¥140 / ¥1,200 | 20,000 / 240,000 | SaaS 调用按积分计费，套餐积分用完后可继续充值 |
+| Premium | ¥420 / ¥3,600 | 60,000 / 720,000 | SaaS 调用按积分计费，套餐积分用完后可继续充值 |
 
 **关键规则**：
 
-- **Pro 及以上套餐 → OpenSpeech SaaS 调用完全无限、零积分消耗**。客户端的积分余额显示可以仅作参考。
-- Lite 与 Free → SaaS 调用按积分扣费；可通过"充值"直接给账户加积分（1 元 = 100 积分）而不绑定套餐。
-- **捆绑逻辑完全在 SaaS 端判定**。前端只根据 `user.current` 返回的 `membership_level` 展示状态。
+- **所有套餐均按积分计费**。客户端不再对 Pro / Premium 做"无限 / 不扣积分"的特殊展示。
+- 任意等级用户均可通过"充值"直接给账户加积分（1 元 = 100 积分），不绑定套餐。
+- **扣费逻辑完全在 SaaS 端判定**。前端只根据 `user.current` 返回的 `membership_level` 展示徽章。
 
 ---
 
@@ -49,7 +49,7 @@ OpenSpeech **本身不发行套餐**。套餐是由**姊妹产品 OpenLoaf** 统
 | 数据来源 | 含义 | UI 位置 |
 |---|---|---|
 | `profile.membershipLevel` | 当前套餐等级 | 顶部徽章（FREE / LITE / PRO / PREMIUM / INFINITY） |
-| `profile.creditsBalance` | 当前剩余积分 | 侧栏 Time-left Rail（折算成可用分钟）；Pro+ 显示 ∞ UNLIMITED |
+| `profile.creditsBalance` | 当前剩余积分 | 侧栏 Time-left Rail（折算成可用分钟） |
 | `realtimeAsrCreditsPerMinute` | 实时 ASR 单价（积分/分钟） | 侧栏 Time-left Rail 折算分母 |
 | `profile.email` / `profile.name` / `profile.avatarUrl` | 身份展示 | 侧栏账户按钮 + AccountDialog |
 
@@ -57,8 +57,7 @@ OpenSpeech **本身不发行套餐**。套餐是由**姊妹产品 OpenLoaf** 统
 
 侧栏不再裸露"剩余积分"数字，而是折算成"还能录多少分钟"，这是终端用户更直观的口径。
 
-- **Free / Lite**：`≈ floor(creditsBalance / realtimeAsrCreditsPerMinute) 分钟`。
-- **Pro / Premium / Infinity**：直接显示 `∞ UNLIMITED`（这些档 SaaS 调用不扣积分，分钟数无意义）。
+- **拉到单价**：展示 `≈ floor(creditsBalance / realtimeAsrCreditsPerMinute) 分钟`，所有套餐等级一致。
 - **单价拉失败 / 还没拉回**：退化展示原始积分，避免假"0 min"误导。
 
 `realtimeAsrCreditsPerMinute` 由 `openloaf_fetch_realtime_asr_pricing` 在登录成功 / bootstrap 恢复后拉一次，
@@ -113,4 +112,3 @@ OpenSpeech **本身不发行套餐**。套餐是由**姊妹产品 OpenLoaf** 统
 
 - Cmd+K 或菜单项里加一个"查看积分 / 套餐"快捷跳转
 - 账户页展示本月积分流水（需 SDK 暴露 `memberCredits.transactions`，目前 Rust SDK 0.2.6 未暴露）
-- 无限模式（Pro+）下隐藏"充值"按钮，避免误导

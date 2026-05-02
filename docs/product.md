@@ -16,7 +16,7 @@
 2. **零学习成本**：用户只需要记住一个快捷键。
 3. **隐私保守**：录音不持久化、不上传审计；转写结果仅保存在本地设备。
 4. **模型自选**：
-   - 默认走 OpenLoaf SaaS 云端（按积分扣费，捆绑 OpenLoaf 套餐后无限使用）
+   - 默认走 OpenLoaf SaaS 云端（按积分扣费，所有套餐等级一致计费）
    - 也支持 BYO-Model：用户自行配置 REST 端点，不经 SaaS，不消耗积分
    - 详见 `subscription.md`
 5. **全平台同步交付**：Windows / macOS / Linux **同版本同步发布**（竞品 TypeLess 仅 macOS + 移动端，无 Linux）。
