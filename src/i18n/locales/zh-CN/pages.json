@@ -189,7 +189,9 @@
       "right_hint_history": "来自历史记录",
       "right_hint_file": "来自音频转写",
       "right_empty": "请先在左侧给一个输入。",
-      "use_sample": "用示例文字"
+      "use_sample": "用示例文字",
+      "replaced_hint": "已替换为上一步输出",
+      "restore_original": "还原原文"
     },
     "tools": {
       "section_label": "// 02 · 工具",
@@ -201,7 +203,7 @@
       "tutorial": {
         "polish": {
           "title": "润色",
-          "headline": "把口语化的句子打磨成像书面语。"
+          "headline": "按场景把口语稿改写成成稿——邮件、微信、汇报随你挑。"
         },
         "translate": {
           "title": "翻译",
@@ -213,11 +215,13 @@
         }
       },
       "polish": {
-        "style_label": "风格",
-        "styles": {
-          "smooth": "通顺",
-          "formal": "正式",
-          "concise": "简洁"
+        "scenario_label": "场景",
+        "examples": {
+          "email": "邮件",
+          "wechat": "微信",
+          "report": "工作汇报",
+          "meeting_notes": "会议纪要",
+          "social_post": "朋友圈"
         }
       },
       "translate": {
@@ -244,7 +248,9 @@
       "save_history": "保存",
       "use_as_input": "用作输入",
       "download": "下载",
-      "elapsed": "{{seconds}}s"
+      "elapsed": "{{seconds}}s",
+      "idle": "等待输入",
+      "output_empty": "在上方填入或选择一段输入"
     },
     "footer": {
       "ui_only_notice": "// UI 预览 — 业务尚未接入"

@@ -11,7 +11,8 @@ import {
   error as logError,
 } from "@tauri-apps/plugin-log";
 import i18next from "i18next";
-import { useSettingsStore } from "@/stores/settings";
+import { useSettingsStore, DEFAULT_AI_SYSTEM_PROMPTS } from "@/stores/settings";
+import { resolveLang } from "@/i18n";
 import { useUIStore } from "@/stores/ui";
 import {
   listInputDevices,
@@ -29,9 +30,13 @@ import {
   MessageSquare,
   FolderOpen,
   Mic,
+  Bot,
+  Trash2,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { syncAutostart } from "@/lib/autostart";
+import { loadAiProviderKey, saveAiProviderKey } from "@/lib/secrets";
 import {
   checkForUpdateForChannel,
   installUpdateWithProgress,
@@ -71,6 +76,7 @@ function useTabs(): TabDef[] {
   return [
     { id: "GENERAL", label: t("tabs.general"), icon: Sliders },
     { id: "DICTATION", label: t("tabs.dictation"), icon: Mic },
+    { id: "AI", label: t("tabs.ai"), icon: Bot },
     { id: "PERSONALIZATION", label: t("tabs.personalization"), icon: Sparkles },
     { id: "ABOUT", label: t("tabs.about"), icon: Info },
   ];
@@ -724,6 +730,281 @@ function PersonalizationTab() {
   );
 }
 
+function AiTab() {
+  const { t } = useTranslation("settings");
+  const aiRefine = useSettingsStore((s) => s.aiRefine);
+  const setAiRefineMode = useSettingsStore((s) => s.setAiRefineMode);
+  const addAiProvider = useSettingsStore((s) => s.addAiProvider);
+  const updateAiProvider = useSettingsStore((s) => s.updateAiProvider);
+  const removeAiProvider = useSettingsStore((s) => s.removeAiProvider);
+  const setActiveAiProvider = useSettingsStore((s) => s.setActiveAiProvider);
+  const setAiSystemPrompt = useSettingsStore((s) => s.setAiSystemPrompt);
+  const setAiIncludeHistory = useSettingsStore((s) => s.setAiIncludeHistory);
+
+  return (
+    <div>
+      <SectionTitle>{t("ai.section_mode")}</SectionTitle>
+      <div className="py-3">
+        <RadioBlock
+          value={aiRefine.mode}
+          onChange={(v) => void setAiRefineMode(v)}
+          options={[
+            {
+              value: "saas",
+              label: t("ai.mode_saas_label"),
+              hint: t("ai.mode_saas_hint"),
+            },
+            {
+              value: "custom",
+              label: t("ai.mode_custom_label"),
+              hint: t("ai.mode_custom_hint"),
+            },
+          ]}
+        />
+      </div>
+
+      {aiRefine.mode === "custom" && (
+        <>
+          <SectionTitle>{t("ai.section_providers")}</SectionTitle>
+          {aiRefine.customProviders.length === 0 ? (
+            <div className="border border-dashed border-te-gray/40 px-4 py-6 text-center font-mono text-xs text-te-light-gray">
+              {t("ai.providers_empty")}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {aiRefine.customProviders.map((p) => (
+                <AiProviderCard
+                  key={p.id}
+                  provider={p}
+                  isActive={p.id === aiRefine.activeCustomProviderId}
+                  onUpdate={(patch) => void updateAiProvider(p.id, patch)}
+                  onRemove={() => void removeAiProvider(p.id)}
+                  onSetActive={() => void setActiveAiProvider(p.id)}
+                />
+              ))}
+            </div>
+          )}
+          <div className="mt-4 flex">
+            <button
+              type="button"
+              onClick={() => {
+                const id =
+                  typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `prov_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                void addAiProvider({
+                  id,
+                  name: t("ai.provider_default_name"),
+                  baseUrl: t("ai.provider_default_base_url"),
+                  model: t("ai.provider_default_model"),
+                });
+              }}
+              className="inline-flex items-center gap-2 border border-te-gray/60 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+            >
+              <Plus className="size-3.5" />
+              {t("ai.provider_add")}
+            </button>
+          </div>
+        </>
+      )}
+
+      <AiSystemPromptSection
+        custom={aiRefine.customSystemPrompt}
+        onChange={(v) => void setAiSystemPrompt(v)}
+      />
+
+
+      <SectionTitle>{t("ai.section_history")}</SectionTitle>
+      <Row
+        label={t("ai.include_history")}
+        hint={t("ai.include_history_hint")}
+      >
+        <Switch
+          checked={aiRefine.includeHistory}
+          onChange={(v) => void setAiIncludeHistory(v)}
+        />
+      </Row>
+    </div>
+  );
+}
+
+function AiSystemPromptSection({
+  custom,
+  onChange,
+}: {
+  custom: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const { t } = useTranslation("settings");
+  const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
+  const lang = resolveLang(interfaceLang);
+  const displayValue = custom ?? DEFAULT_AI_SYSTEM_PROMPTS[lang];
+  const isCustom = custom !== null;
+  return (
+    <>
+      <SectionTitle>{t("ai.section_prompts")}</SectionTitle>
+      <div className="-mt-2 mb-3 px-1 font-mono text-[11px] leading-relaxed text-te-light-gray">
+        {t("ai.prompts_hint")}
+      </div>
+      <textarea
+        value={displayValue}
+        onChange={(e) => onChange(e.target.value)}
+        rows={5}
+        className="w-full resize-y border border-te-gray/40 bg-te-surface p-3 font-mono text-xs text-te-fg outline-none transition-colors focus:border-te-accent"
+      />
+      <div className="mt-2 flex items-center justify-end">
+        <button
+          type="button"
+          disabled={!isCustom}
+          onClick={() => onChange(null)}
+          className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors enabled:hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {t("ai.prompt_reset")}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function AiProviderCard({
+  provider,
+  isActive,
+  onUpdate,
+  onRemove,
+  onSetActive,
+}: {
+  provider: { id: string; name: string; baseUrl: string; model: string };
+  isActive: boolean;
+  onUpdate: (patch: Partial<{ name: string; baseUrl: string; model: string }>) => void;
+  onRemove: () => void;
+  onSetActive: () => void;
+}) {
+  const { t } = useTranslation("settings");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [keyDirty, setKeyDirty] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const k = await loadAiProviderKey(provider.id);
+        if (!cancelled && k !== null) setApiKey(k);
+      } catch (e) {
+        console.warn("[ai-refine] load api key failed:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider.id]);
+
+  const persistKey = async () => {
+    if (!keyDirty) return;
+    try {
+      await saveAiProviderKey(provider.id, apiKey);
+      setKeyDirty(false);
+    } catch (e) {
+      console.warn("[ai-refine] save api key failed:", e);
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 border px-4 py-3 transition-colors",
+        isActive ? "border-te-accent bg-te-accent/8" : "border-te-gray/40",
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className={cn("size-2", isActive ? "bg-te-accent" : "bg-te-gray")} />
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+            {isActive ? t("ai.provider_active") : provider.id.slice(0, 8)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {!isActive && (
+            <button
+              type="button"
+              onClick={onSetActive}
+              className="border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+            >
+              {t("ai.provider_set_active")}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onRemove}
+            className="inline-flex items-center gap-1 border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-red-400 hover:text-red-400"
+          >
+            <Trash2 className="size-3" />
+            {t("ai.provider_remove")}
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <LabeledInput
+          label={t("ai.provider_name")}
+          value={provider.name}
+          onChange={(v) => onUpdate({ name: v })}
+        />
+        <LabeledInput
+          label={t("ai.provider_model")}
+          value={provider.model}
+          onChange={(v) => onUpdate({ model: v })}
+        />
+      </div>
+      <LabeledInput
+        label={t("ai.provider_base_url")}
+        value={provider.baseUrl}
+        onChange={(v) => onUpdate({ baseUrl: v })}
+      />
+      <div>
+        <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+          {t("ai.provider_api_key")}
+        </div>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => {
+            setApiKey(e.target.value);
+            setKeyDirty(true);
+          }}
+          onBlur={() => void persistKey()}
+          className="w-full border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
+        />
+        <div className="mt-1 font-mono text-[11px] text-te-light-gray/80">
+          {t("ai.provider_api_key_hint")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LabeledInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+        {label}
+      </div>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
+      />
+    </div>
+  );
+}
+
 function AboutTab() {
   const { t } = useTranslation("settings");
   const { t: tFeedback } = useTranslation("feedback");
@@ -996,6 +1277,7 @@ export default function SettingsContent({
       >
         {tab === "GENERAL" && <GeneralTab />}
         {tab === "DICTATION" && <DictationTab />}
+        {tab === "AI" && <AiTab />}
         {tab === "PERSONALIZATION" && <PersonalizationTab />}
         {tab === "ABOUT" && <AboutTab />}
       </motion.div>

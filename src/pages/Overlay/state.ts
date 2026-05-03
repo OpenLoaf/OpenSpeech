@@ -28,6 +28,15 @@ export interface ToastState extends ToastPayload {
   id: number;
 }
 
+/** DEV-only DEBUG 模拟态：主窗用录音文件回放走整条 dictation pipeline 时广播。
+ *  active=true 期间在 pill 上方挂一条 "DEBUG · 倒数 Xs" 提示条；ESC 双击可取消。 */
+export interface DebugState {
+  active: boolean;
+  /** Date.now() 基准的截止时刻；overlay 自己 setInterval 算 remainingMs */
+  endAtUnixMs: number | null;
+  totalMs: number;
+}
+
 export interface OverlayState {
   /** 镜像主窗 RecordingState；overlay 不参与副作用，仅渲染。 */
   main: RecordingState;
@@ -37,6 +46,7 @@ export interface OverlayState {
   escArmed: boolean;
   /** 注入末尾段 main 窗主动让 pill 提前 exit，比"全部敲完"快一拍。 */
   pillEarlyHide: boolean;
+  debug: DebugState;
 }
 
 const INITIAL: OverlayState = {
@@ -46,6 +56,7 @@ const INITIAL: OverlayState = {
   toast: null,
   escArmed: false,
   pillEarlyHide: false,
+  debug: { active: false, endAtUnixMs: null, totalMs: 0 },
 };
 
 type Action =
@@ -59,7 +70,8 @@ type Action =
   | { type: "toast-show"; payload: ToastPayload; id: number }
   | { type: "toast-dismiss"; id?: number }
   | { type: "esc-armed" }
-  | { type: "esc-disarmed" };
+  | { type: "esc-disarmed" }
+  | { type: "debug"; debug: DebugState };
 
 function reduce(s: OverlayState, a: Action): OverlayState {
   switch (a.type) {
@@ -88,6 +100,8 @@ function reduce(s: OverlayState, a: Action): OverlayState {
         escArmed: false,
         toast: s.toast?.dismissOnDisarm ? null : s.toast,
       };
+    case "debug":
+      return { ...s, debug: a.debug };
   }
 }
 
@@ -102,6 +116,7 @@ export interface OverlayMachine {
     liveTranscript: string,
     pillEarlyHide: boolean,
   ) => void;
+  setDebug: (debug: DebugState) => void;
 }
 
 const DEFAULT_TOAST_AUTO_DISMISS_MS = 2000;
@@ -160,6 +175,10 @@ export function useOverlayMachine(): OverlayMachine {
     });
   };
 
+  const setDebug = (debug: DebugState) => {
+    dispatch({ type: "debug", debug });
+  };
+
   // 卸载时清掉所有 timer，防止 setTimeout 在组件销毁后还派发 dispatch（dev StrictMode
   // 会报"useReducer dispatch called after unmount"，prod 会触发 stale state warning）。
   useEffect(() => {
@@ -168,5 +187,5 @@ export function useOverlayMachine(): OverlayMachine {
     };
   }, []);
 
-  return { state, showToast, dismissToast, setEscArmed, applyFsm };
+  return { state, showToast, dismissToast, setEscArmed, applyFsm, setDebug };
 }

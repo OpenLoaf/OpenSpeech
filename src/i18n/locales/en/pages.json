@@ -189,7 +189,9 @@
       "right_hint_history": "From history",
       "right_hint_file": "Transcribed from audio",
       "right_empty": "Provide an input on the left first.",
-      "use_sample": "Use sample text"
+      "use_sample": "Use sample text",
+      "replaced_hint": "Replaced with previous step's output",
+      "restore_original": "Restore original"
     },
     "tools": {
       "section_label": "// 02 · TOOLS",
@@ -201,7 +203,7 @@
       "tutorial": {
         "polish": {
           "title": "Polish",
-          "headline": "Smooth spoken text into clean writing."
+          "headline": "Rewrite spoken drafts to match a scenario — email, message, report, you name it."
         },
         "translate": {
           "title": "Translate",
@@ -213,11 +215,13 @@
         }
       },
       "polish": {
-        "style_label": "Style",
-        "styles": {
-          "smooth": "Smooth",
-          "formal": "Formal",
-          "concise": "Concise"
+        "scenario_label": "Scenario",
+        "examples": {
+          "email": "Email",
+          "wechat": "Message",
+          "report": "Report",
+          "meeting_notes": "Meeting notes",
+          "social_post": "Social post"
         }
       },
       "translate": {
@@ -244,7 +248,9 @@
       "save_history": "Save",
       "use_as_input": "Use as input",
       "download": "Download",
-      "elapsed": "{{seconds}}s"
+      "elapsed": "{{seconds}}s",
+      "idle": "Awaiting input",
+      "output_empty": "Provide an input above to see the result here."
     },
     "footer": {
       "ui_only_notice": "// UI PREVIEW — actions are not wired up yet"

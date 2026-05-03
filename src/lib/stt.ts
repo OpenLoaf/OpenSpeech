@@ -14,7 +14,6 @@
 //   "openspeech://asr-credits"  payload: number — 余额变化
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 // V4 OL-TL-RT-002 的 vadMode 透传：
 //   "auto"   → ServerVad（服务端按停顿切句，多段 Final）
@@ -72,74 +71,3 @@ export async function transcribeLongAudioUrl(args: {
   });
 }
 
-// OL-TL-005 / speechRefine：把 ASR transcript 整理成书面化文本（去口头禅、消重、
-// 自我修正识别、按顺序列表化）。**同语言不翻译**。失败 / 短文本 / 超时由 SDK 回退
-// 为输入原文，UI 拿到的 refinedText 永远可用。
-//
-// 热词缓存（v0.3.6+）：调用方可同时传 hotwords + hotwordsCacheId——后端优先用
-// cacheId 命中 Redis；服务端 410 HOTWORDS_CACHE_MISS 时自动降级回明文 hotwords
-// 重发并刷新缓存，所以前端拿到的 hotwordsCacheId 永远是"当前可用的"。
-export interface RefineSpeechTextResult {
-  refinedText: string;
-  creditsConsumed: number;
-  durationMs: number;
-  warning: string | null;
-  hotwordsCacheId: string | null;
-}
-
-export async function refineSpeechText(args: {
-  text: string;
-  hotwords?: string;
-  hotwordsCacheId?: string;
-  /** 关联前置 ASR / Realtime 任务 ID（≤128 字符），仅用于服务端日志关联。v0.3.8+ */
-  taskId?: string;
-  /** 参考上下文（≤50000 字符），帮助模型消解代词 / 缩略 / 跳跃式表达。v0.3.7+ */
-  referenceContext?: string;
-}): Promise<RefineSpeechTextResult> {
-  return await invoke<RefineSpeechTextResult>("refine_speech_text", {
-    text: args.text,
-    hotwords: args.hotwords,
-    hotwordsCacheId: args.hotwordsCacheId,
-    taskId: args.taskId,
-    referenceContext: args.referenceContext,
-  });
-}
-
-/**
- * 流式版 OL-TL-005：每个 Delta 通过 onDelta 回调即时推上来，命令 await 完成时
- * 拿到的 result 就是整段 refinedText + 元数据（与非流式一致）。
- *
- * 调用方负责：(1) 用 onDelta 把字逐个注入到光标 / UI；(2) 命令成功后把
- * result.refinedText 整段写回剪贴板，覆盖 deltas 期间最后一段写下的剪贴板。
- *
- * 失败时（auth、网络、stream Error 帧）抛错；调用方退化为非流式或仅展示原文。
- */
-export async function refineSpeechTextStream(
-  args: {
-    text: string;
-    hotwords?: string;
-    hotwordsCacheId?: string;
-    /** 关联前置 Realtime 任务 sessionId（≤128 字符）。v0.3.8+ */
-    taskId?: string;
-    /** 参考上下文（最近若干条 history 的 refinedText，≤50000 字符）。v0.3.7+ */
-    referenceContext?: string;
-  },
-  onDelta: (chunk: string) => void,
-): Promise<RefineSpeechTextResult> {
-  let unlisten: UnlistenFn | null = null;
-  try {
-    unlisten = await listen<string>("openspeech://refine-delta", (evt) => {
-      const chunk = String(evt.payload ?? "");
-      if (chunk) onDelta(chunk);
-    });
-    return await invoke<RefineSpeechTextResult>("refine_speech_text_stream", {
-      text: args.text,
-      hotwords: args.hotwords,
-      hotwordsCacheId: args.hotwordsCacheId,
-      taskId: args.taskId,
-      referenceContext: args.referenceContext,
-    });
-  } finally {
-    if (unlisten) unlisten();
-  }
-}

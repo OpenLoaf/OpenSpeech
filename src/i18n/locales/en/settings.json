@@ -11,6 +11,7 @@
     "dictation": "Dictation",
     "model": "Model",
     "personalization": "Personalization",
+    "ai": "AI",
     "about": "About"
   },
   "hotkeys": {
@@ -100,6 +101,34 @@
     "low": "Low",
     "normal": "Normal",
     "high": "High"
+  },
+  "ai": {
+    "section_mode": "Refine mode",
+    "mode_saas_label": "Cloud (recommended)",
+    "mode_saas_hint": "Use the fast chat model on your signed-in OpenLoaf account; billed by credits.",
+    "mode_custom_label": "Custom provider",
+    "mode_custom_hint": "OpenAI-compatible endpoints with your own API Key. Multiple providers allowed, but only one active at a time.",
+    "section_providers": "Custom providers",
+    "providers_empty": "No custom providers yet",
+    "provider_name": "Name",
+    "provider_base_url": "Base URL",
+    "provider_model": "Model",
+    "provider_api_key": "API Key",
+    "provider_api_key_hint": "Stored in the system keychain; saved automatically on blur.",
+    "provider_active": "Active",
+    "provider_set_active": "Set active",
+    "provider_remove": "Remove",
+    "provider_add": "Add provider",
+    "provider_default_name": "New provider",
+    "provider_default_base_url": "https://api.openai.com/v1",
+    "provider_default_model": "gpt-4o-mini",
+    "section_prompts": "System prompt",
+    "prompts_hint": "Defaults follow the interface language. Edit to customize; the same custom prompt then applies to all languages.",
+    "prompt_reset": "Reset to default",
+    "section_history": "Context",
+    "include_history": "Send the last 5 dictations as context",
+    "include_history_hint": "Recent transcripts help the model carry over tone and terminology.",
+    "minutes_ago": "minutes ago"
   },
   "about": {
     "version": "Version",

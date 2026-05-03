@@ -47,7 +47,7 @@ const FALLBACK_BASE_URL: &str = "https://openloaf.hexems.com";
 #[cfg(not(debug_assertions))]
 const FALLBACK_BASE_URL: &str = "https://openloaf.hexems.com";
 
-const DEFAULT_BASE_URL: &str = match option_env!("OPENLOAF_BASE_URL") {
+pub const DEFAULT_BASE_URL: &str = match option_env!("OPENLOAF_BASE_URL") {
     Some(v) => v,
     None => FALLBACK_BASE_URL,
 };
@@ -168,25 +168,6 @@ impl OpenLoafState {
     pub fn authenticated_client(&self) -> Option<SaaSClient> {
         self.client.access_token().as_ref()?;
         Some(self.client.clone())
-    }
-
-    /// 一次性独立 SaaSClient：每次调用都新建 ureq Agent → 新连接池。
-    /// Why: 长录音（>60s）期间共享 client 的 idle keep-alive 连接会被对端 RST
-    /// （localhost 本地代理 / 上游网关），下一次 OL-TL-005 复用旧连接就吃
-    /// `Connection reset by peer (os error 54)`，回退原文，跳过 AI 优化。
-    /// How to apply: 仅给 OL-TL-005 / refine stream 这种"长 STT 之后才发请求"
-    /// 的链路使用；常规 call 继续用 `authenticated_client()` 复用连接池。
-    /// token 是 snapshot，调用方应在拿之前先 `ensure_access_token_fresh()`。
-    pub fn fresh_authenticated_client(&self) -> Option<SaaSClient> {
-        let token = self.client.access_token()?;
-        Some(SaaSClient::new(SaaSClientConfig {
-            base_url: DEFAULT_BASE_URL.into(),
-            access_token: Some(token),
-            locale: Some("zh-CN".into()),
-            auth_storage: Some(self.storage.clone()),
-            client_name: Some(APP_ID.into()),
-            client_version: Some(env!("CARGO_PKG_VERSION").into()),
-        }))
     }
 
     /// 返回 SaaSClient 克隆（无论是否登录）。供"网络健康探针"等公开端点调用复用。
@@ -504,7 +485,16 @@ pub fn openloaf_current_user(state: State<'_, SharedOpenLoaf>) -> Option<PublicU
 pub async fn openloaf_health_check(state: State<'_, SharedOpenLoaf>) -> Result<bool, String> {
     use std::time::Duration;
     let client = state.client_clone();
-    let task = tokio::task::spawn_blocking(move || client.system().health());
+    // ureq 连接池可能命中一条被对端单方面关闭的 keep-alive 连接，
+    // 首次写入直接 RST。识别这类错误后立即重试一次，让 ureq 重建 TCP。
+    let task = tokio::task::spawn_blocking(move || match client.system().health() {
+        Ok(resp) => Ok(resp),
+        Err(e) if is_stale_connection_error(&e) => {
+            log::warn!("[health] stale pooled connection, retrying once: {e:?}");
+            client.system().health()
+        }
+        Err(e) => Err(e),
+    });
     match tokio::time::timeout(Duration::from_secs(5), task).await {
         Ok(Ok(Ok(_resp))) => Ok(true),
         Ok(Ok(Err(e))) => {
@@ -520,6 +510,16 @@ pub async fn openloaf_health_check(state: State<'_, SharedOpenLoaf>) -> Result<b
             Ok(false)
         }
     }
+}
+
+fn is_stale_connection_error(err: &impl std::fmt::Debug) -> bool {
+    let s = format!("{err:?}").to_ascii_lowercase();
+    s.contains("connection reset")
+        || s.contains("broken pipe")
+        || s.contains("connection aborted")
+        || s.contains("connection closed")
+        || s.contains("os error 54")
+        || s.contains("os error 32")
 }
 
 #[tauri::command]

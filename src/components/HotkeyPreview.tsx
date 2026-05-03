@@ -159,14 +159,19 @@ function isDisplayableKey(token: KeyToken): boolean {
 export function Kbd({
   children,
   highlight,
+  size = "md",
 }: {
   children: React.ReactNode;
   highlight?: boolean;
+  size?: "md" | "lg";
 }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-sm border bg-te-bg px-3 py-1.5 font-mono text-sm transition-colors",
+        "inline-flex items-center rounded-sm border bg-te-bg font-mono transition-colors",
+        size === "lg"
+          ? "px-[clamp(0.75rem,2.5cqw,1.5rem)] py-[clamp(0.4rem,1.6cqw,1rem)] text-[clamp(0.875rem,3cqw,1.75rem)]"
+          : "px-3 py-1.5 text-sm",
         highlight
           ? "border-te-accent text-te-accent shadow-[inset_0_-2px_0_0_var(--te-accent)]"
           : "border-te-gray text-te-fg shadow-[inset_0_-2px_0_0_var(--te-gray)]",
@@ -287,6 +292,7 @@ export function HotkeyPreview({
   title,
   stack = false,
   hintPlacement = "row",
+  fillHeight = false,
 }: {
   hint?: string;
   index?: string;
@@ -295,6 +301,8 @@ export function HotkeyPreview({
   stack?: boolean;
   /** "row" = hint 在底部黄字行；"header" = hint 替换右上角 index 位置。 */
   hintPlacement?: "row" | "header";
+  /** 撑满父容器高度，header 顶到顶、按键行垂直居中。Home 页用。 */
+  fillHeight?: boolean;
 }) {
   const { t } = useTranslation();
   const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
@@ -319,8 +327,8 @@ export function HotkeyPreview({
   const hintInHeader = hintPlacement === "header";
 
   return (
-    <div>
-      <div className="flex items-start justify-between">
+    <div className={cn(fillHeight && "flex h-full min-h-0 flex-col")}>
+      <div className="flex shrink-0 items-start justify-between">
         <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
           {resolvedTitle}
         </span>
@@ -339,18 +347,35 @@ export function HotkeyPreview({
         className={cn(
           "mt-3 flex flex-col gap-3",
           !stack && !hintInHeader && "md:flex-row md:items-center md:justify-between",
+          fillHeight && "min-h-0 flex-1 justify-center [container-type:inline-size]",
         )}
       >
-        <div className="flex items-center gap-3">
+        <div
+          className={cn(
+            "flex items-center",
+            fillHeight ? "gap-[clamp(0.5rem,2cqw,1.25rem)]" : "gap-3",
+          )}
+        >
           {tokens.length === 0 ? (
-            <Kbd>{t("dialogs:hotkey_preview.unbound")}</Kbd>
+            <Kbd size={fillHeight ? "lg" : "md"}>
+              {t("dialogs:hotkey_preview.unbound")}
+            </Kbd>
           ) : showBindingRow ? (
             tokens.map((t, i) => (
               <Fragment key={i}>
                 {i > 0 && (
-                  <span className="font-mono text-xl text-te-light-gray">+</span>
+                  <span
+                    className={cn(
+                      "font-mono text-te-light-gray",
+                      fillHeight
+                        ? "text-[clamp(1rem,3cqw,2rem)]"
+                        : "text-xl",
+                    )}
+                  >
+                    +
+                  </span>
                 )}
-                <Kbd highlight={tokenIsHeld(t)}>
+                <Kbd highlight={tokenIsHeld(t)} size={fillHeight ? "lg" : "md"}>
                   {t.kind !== "prefix" && t.icon ? (
                     <span aria-hidden className="mr-1.5 opacity-60">
                       {t.icon}
@@ -366,9 +391,18 @@ export function HotkeyPreview({
             pressed.slice(-4).map((p, i) => (
               <Fragment key={p.id}>
                 {i > 0 && (
-                  <span className="font-mono text-xl text-te-light-gray">+</span>
+                  <span
+                    className={cn(
+                      "font-mono text-te-light-gray",
+                      fillHeight
+                        ? "text-[clamp(1rem,3cqw,2rem)]"
+                        : "text-xl",
+                    )}
+                  >
+                    +
+                  </span>
                 )}
-                <Kbd>{p.label}</Kbd>
+                <Kbd size={fillHeight ? "lg" : "md"}>{p.label}</Kbd>
               </Fragment>
             ))
           )}

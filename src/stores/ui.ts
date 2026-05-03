@@ -13,6 +13,7 @@ export type SettingsTabId =
   | "GENERAL"
   | "DICTATION"
   | "PERSONALIZATION"
+  | "AI"
   | "ABOUT";
 
 interface UIStore {

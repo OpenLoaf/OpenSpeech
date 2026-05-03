@@ -95,8 +95,8 @@ export function LiveDictationPanel({
       : "text-te-fg";
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex shrink-0 items-start justify-between gap-3">
         <span
           className={cn(
             "font-mono text-[10px] uppercase tracking-widest md:text-xs",
@@ -123,25 +123,25 @@ export function LiveDictationPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-[minmax(0,40%)_minmax(0,1fr)] gap-4 md:gap-6">
-        <div className="flex flex-col gap-2">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,40%)_minmax(0,1fr)] gap-4 md:gap-6">
+        <div className="flex min-h-0 flex-col gap-2">
           <Waveform levels={audioLevels} active={waveActive} />
           <span className="font-mono text-[9px] uppercase tracking-widest text-te-light-gray md:text-[10px]">
             AUDIO · {audioLevels.length} SAMPLES
           </span>
         </div>
 
-        <div className="flex min-h-[4rem] flex-col justify-between border-l border-te-gray/40 pl-4 md:pl-6">
+        <div className="flex min-h-0 flex-col justify-between gap-2 border-l border-te-gray/40 pl-4 md:pl-6">
           <p
             className={cn(
-              "font-sans text-xs leading-relaxed md:text-sm",
-              "max-h-24 overflow-y-auto",
+              "min-h-0 flex-1 font-sans text-xs leading-relaxed md:text-sm",
+              "overflow-y-auto",
               hasText ? textToneClass : "text-te-fg/40",
             )}
           >
             {hasText ? liveTranscript : t("overlay:panel.placeholder")}
           </p>
-          <div className="flex flex-col gap-0.5">
+          <div className="flex shrink-0 flex-col gap-0.5">
             <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
               {primary}
             </span>

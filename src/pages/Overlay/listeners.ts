@@ -21,6 +21,12 @@ interface KeyPreviewPayload {
   isRepeat?: boolean;
 }
 
+interface DebugPayload {
+  active: boolean;
+  totalMs?: number;
+  endAtUnixMs?: number;
+}
+
 export interface OverlayHandlers {
   onFsm: (p: FsmPayload) => void;
   onToast: (p: ToastPayload) => void;
@@ -28,6 +34,7 @@ export interface OverlayHandlers {
   onEscPressed: () => void;
   onEscArmed: () => void;
   onEscDisarmed: () => void;
+  onDebug: (p: DebugPayload) => void;
 }
 
 /**
@@ -80,6 +87,12 @@ export function useOverlayListeners(handlers: OverlayHandlers) {
     pending.push(
       listen("openspeech://esc-disarmed", () => {
         if (alive) handlersRef.current.onEscDisarmed();
+      }),
+    );
+
+    pending.push(
+      listen<DebugPayload>("openspeech://debug-recording", (e) => {
+        if (alive) handlersRef.current.onDebug(e.payload);
       }),
     );
 

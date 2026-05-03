@@ -20,6 +20,7 @@ use tauri_plugin_store::StoreExt;
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
 
+mod ai_refine;
 mod audio;
 mod db;
 mod hotkey;
@@ -813,8 +814,7 @@ pub fn run() {
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,
-            stt::refine_speech_text,
-            stt::refine_speech_text_stream,
+            ai_refine::refine_text_via_chat_stream,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
             inject::inject_paste,

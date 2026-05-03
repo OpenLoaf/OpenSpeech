@@ -17,6 +17,7 @@ import { Waveform, resetWaveform } from "./Waveform";
 const PILL_HEIGHT = 36;
 const TOAST_HEIGHT = 42;
 const TOAST_GAP = 4;
+const DEBUG_STRIP_HEIGHT = 28;
 const EXPANDED_HEIGHT = TOAST_HEIGHT + TOAST_GAP + PILL_HEIGHT;
 // toast 单独显示（无录音活动）时，整窗只渲染 toast 一行，省得用户被一条空的灰胶囊干扰。
 const TOAST_ONLY_HEIGHT = TOAST_HEIGHT;
@@ -25,7 +26,7 @@ export default function OverlayPage() {
   const { t } = useTranslation();
   const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
   const settingsLoaded = useSettingsStore((s) => s.loaded);
-  const { state, showToast, dismissToast, setEscArmed, applyFsm } =
+  const { state, showToast, dismissToast, setEscArmed, applyFsm, setDebug } =
     useOverlayMachine();
 
   // boot IIFE 跑 applyLang 是 race 路径——overlay 第一次拿到 settings 之前可能就
@@ -58,7 +59,30 @@ export default function OverlayPage() {
     },
     onEscArmed: () => setEscArmed(true),
     onEscDisarmed: () => setEscArmed(false),
+    onDebug: (p) =>
+      setDebug({
+        active: p.active,
+        endAtUnixMs: p.active ? p.endAtUnixMs ?? null : null,
+        totalMs: p.active ? p.totalMs ?? 0 : 0,
+      }),
   });
+
+  // DEBUG 倒计时 ticker：每 200ms 重新算 remaining，驱动 strip 文案刷新。
+  // 不依赖 setInterval 的精度；只要在 active 期间维持 ~5fps 即够用。
+  const [debugRemainingMs, setDebugRemainingMs] = useState(0);
+  useEffect(() => {
+    if (!state.debug.active || state.debug.endAtUnixMs === null) {
+      setDebugRemainingMs(0);
+      return;
+    }
+    const tick = () => {
+      const rem = Math.max(0, (state.debug.endAtUnixMs ?? 0) - Date.now());
+      setDebugRemainingMs(rem);
+    };
+    tick();
+    const t = window.setInterval(tick, 200);
+    return () => window.clearInterval(t);
+  }, [state.debug.active, state.debug.endAtUnixMs]);
 
   // 回到 idle 立即把波形 buffer 清掉——下一次 show 时不会闪一帧上次录音的尾巴。
   useEffect(() => {
@@ -69,8 +93,11 @@ export default function OverlayPage() {
   // 文字时，主窗会广播 pillEarlyHide=true。让用户在"看到几乎全部文字"那一刻
   // 同时看到悬浮栏退场，比"文字全敲完 + 800ms"再消失节奏快一拍。
   const pillEarlyHide = state.pillEarlyHide;
+  const debugActive = state.debug.active;
   const visible =
-    (state.main !== "idle" && !pillEarlyHide) || state.toast !== null;
+    (state.main !== "idle" && !pillEarlyHide) ||
+    state.toast !== null ||
+    debugActive;
   // 录音活动期 = 胶囊必须显示。idle / error 时若有 toast，就让 toast 独占——
   // error 状态的红字本来就只是 toast 标题的回显，没必要在底下再挂个胶囊。
   const pillVisible = pillEarlyHide
@@ -82,13 +109,14 @@ export default function OverlayPage() {
   // 窗口尺寸切换走"先涨后缩"两段：要变大时立刻涨（让动画里新元素有地方画），
   // 要变小时延迟到 framer-motion exit 动画结束（约 160ms）再收，避免窗口先于
   // toast/胶囊缩掉、把动画半路截断成生硬的 pop。
-  const targetHeight = !visible
+  const baseHeight = !visible
     ? 0
     : pillVisible
       ? state.toast
         ? EXPANDED_HEIGHT
         : PILL_HEIGHT
       : TOAST_ONLY_HEIGHT;
+  const targetHeight = baseHeight + (debugActive ? DEBUG_STRIP_HEIGHT + TOAST_GAP : 0);
   const [appliedHeight, setAppliedHeight] = useState(targetHeight);
   useEffect(() => {
     if (targetHeight === appliedHeight) return;
@@ -166,6 +194,31 @@ export default function OverlayPage() {
       className="flex h-screen w-screen flex-col justify-end"
       style={{ transformOrigin: "50% 100%" }}
     >
+      <AnimatePresence initial={false}>
+        {debugActive && (
+          <motion.div
+            key="debug-strip"
+            initial={{ opacity: 0, y: 6, height: 0, marginBottom: 0 }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              height: DEBUG_STRIP_HEIGHT,
+              marginBottom: TOAST_GAP,
+            }}
+            exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="flex items-center justify-between gap-2 overflow-hidden border border-dashed border-te-accent bg-te-bg px-2 leading-none"
+          >
+            <span className="shrink-0 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
+              DEBUG · {Math.ceil(debugRemainingMs / 1000)}s
+            </span>
+            <span className="min-w-0 truncate whitespace-nowrap font-mono text-[9px] text-te-light-gray">
+              ESC×2 取消
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence initial={false}>
         {state.toast && (
           <motion.div

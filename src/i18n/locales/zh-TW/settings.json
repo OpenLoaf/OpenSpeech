@@ -11,6 +11,7 @@
     "dictation": "聽寫",
     "model": "模型",
     "personalization": "個人化",
+    "ai": "AI",
     "about": "關於"
   },
   "hotkeys": {
@@ -100,6 +101,34 @@
     "low": "低",
     "normal": "標準",
     "high": "高"
+  },
+  "ai": {
+    "section_mode": "改寫模式",
+    "mode_saas_label": "雲端（推薦）",
+    "mode_saas_hint": "使用 OpenLoaf 已登入帳號的快速 chat 模型，依積分計費。",
+    "mode_custom_label": "自訂供應商",
+    "mode_custom_hint": "OpenAI 相容協定；自帶 API Key，可加入多個供應商但同時間僅能啟用一個。",
+    "section_providers": "自訂供應商",
+    "providers_empty": "尚未新增自訂供應商",
+    "provider_name": "名稱",
+    "provider_base_url": "Base URL",
+    "provider_model": "模型",
+    "provider_api_key": "API Key",
+    "provider_api_key_hint": "儲存於系統金鑰圈；失去焦點時自動儲存",
+    "provider_active": "目前啟用",
+    "provider_set_active": "設為啟用",
+    "provider_remove": "刪除",
+    "provider_add": "新增供應商",
+    "provider_default_name": "新供應商",
+    "provider_default_base_url": "https://api.openai.com/v1",
+    "provider_default_model": "gpt-4o-mini",
+    "section_prompts": "系統提示詞",
+    "prompts_hint": "預設跟隨目前介面語言；一旦修改即視為自訂，對所有語言生效。",
+    "prompt_reset": "恢復預設",
+    "section_history": "上下文",
+    "include_history": "把最近 5 條歷史一同送出",
+    "include_history_hint": "把最近的 transcript 作為參考上下文，協助模型沿用一致的語氣與術語。",
+    "minutes_ago": "分鐘前"
   },
   "about": {
     "version": "版本",

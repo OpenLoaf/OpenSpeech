@@ -5,6 +5,7 @@ import HistoryPage from "@/pages/History";
 import DictionaryPage from "@/pages/Dictionary";
 import SettingsPage from "@/pages/Settings";
 import OnboardingPage from "@/pages/Onboarding";
+import ToolboxPage from "@/pages/Toolbox";
 
 export const router = createBrowserRouter([
   // Onboarding 是独立全屏页面（不进 Layout 的 sidebar 壳），完成后再 navigate("/")
@@ -14,6 +15,7 @@ export const router = createBrowserRouter([
     Component: Layout,
     children: [
       { index: true, Component: HomePage },
+      { path: "toolbox", Component: ToolboxPage },
       { path: "history", Component: HistoryPage },
       { path: "dictionary", Component: DictionaryPage },
       { path: "settings", Component: SettingsPage },

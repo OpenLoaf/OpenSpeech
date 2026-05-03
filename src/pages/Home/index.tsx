@@ -1,11 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Trans, useTranslation } from "react-i18next";
+import { useMemo } from "react";
+import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { PulsarGrid } from "@/components/PulsarGrid";
-import { HotkeyPreview } from "@/components/HotkeyPreview";
-import { LiveDictationPanel } from "@/components/LiveDictationPanel";
-import { cn } from "@/lib/utils";
-import { useRecordingStore, type RecordingState } from "@/stores/recording";
+import { HotkeyDictationCard } from "@/components/HotkeyDictationCard";
 import { useHistoryStore } from "@/stores/history";
 
 // 假设打字基线速度：用于"节省时间"估算。40 WPM 是普通用户中位打字速度。
@@ -82,40 +79,6 @@ function StatCard({ index, label, value, unit }: StatProps) {
 
 export default function HomePage() {
   const { t } = useTranslation();
-  const recState = useRecordingStore((s) => s.state);
-  const audioLevels = useRecordingStore((s) => s.audioLevels);
-  const liveTranscript = useRecordingStore((s) => s.liveTranscript);
-  const isLive = recState !== "idle";
-
-  // 录音结束后保留最近一次结果——FSM 走完 injecting 会把 liveTranscript 清空，
-  // 直接拿就拿到空串。这里在 active 阶段把最新非空 transcript 缓到 ref，
-  // 检测到 active → idle 过渡时落到 resultText 让面板继续显示，等用户点 ✕
-  // 或再次按快捷键开始新一轮。
-  const [resultText, setResultText] = useState<string | null>(null);
-  const lastTranscriptRef = useRef("");
-  const prevStateRef = useRef<RecordingState>("idle");
-
-  useEffect(() => {
-    if (liveTranscript) lastTranscriptRef.current = liveTranscript;
-  }, [liveTranscript]);
-
-  useEffect(() => {
-    const prev = prevStateRef.current;
-    prevStateRef.current = recState;
-    if (prev === "idle" && recState !== "idle") {
-      setResultText(null);
-      lastTranscriptRef.current = "";
-      return;
-    }
-    if (prev !== "idle" && recState === "idle") {
-      const captured = lastTranscriptRef.current.trim();
-      setResultText(captured ? lastTranscriptRef.current : null);
-    }
-  }, [recState]);
-
-  const showResult = !isLive && resultText !== null;
-  const showPanel = isLive || showResult;
-  const panelTranscript = isLive ? liveTranscript : (resultText ?? "");
 
   const historyItems = useHistoryStore((s) => s.items);
   const stats = useMemo(() => {
@@ -158,7 +121,7 @@ export default function HomePage() {
       />
 
       <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden px-[clamp(1rem,4vw,2.5rem)] pt-[clamp(0.5rem,2vh,1.5rem)] pb-[clamp(1rem,3vw,2rem)]">
-        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
+        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-[clamp(0.75rem,2.5vh,1.75rem)]">
           {/* HERO */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -193,54 +156,8 @@ export default function HomePage() {
           </motion.div>
 
           {/* HOTKEY CARD */}
-          <div className="flex min-h-0 flex-[3_1_0%] items-center">
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.4, delay: 0.03 }}
-              className={cn(
-                "w-full border bg-te-surface p-4 transition-colors md:p-5",
-                isLive ? "border-te-accent/80" : "border-te-gray/60",
-              )}
-            >
-              <AnimatePresence mode="wait" initial={false}>
-                {showPanel ? (
-                  <motion.div
-                    key="live"
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.18 }}
-                  >
-                    <LiveDictationPanel
-                      state={recState}
-                      audioLevels={audioLevels}
-                      liveTranscript={panelTranscript}
-                      onClose={showResult ? () => setResultText(null) : undefined}
-                    />
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="preview"
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.18 }}
-                  >
-                    <HotkeyPreview hintPlacement="header" />
-                    <p className="mt-3 max-w-2xl font-sans text-xs leading-relaxed text-te-light-gray md:text-sm">
-                      <Trans
-                        i18nKey="pages:home.hotkey_hint"
-                        components={{
-                          esc: <span className="mx-1 font-mono text-te-fg" />,
-                        }}
-                      />
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
+          <div className="flex min-h-0 flex-[3_1_0%] items-stretch overflow-hidden">
+            <HotkeyDictationCard />
           </div>
 
           {/* STATS */}
