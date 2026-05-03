@@ -5,7 +5,9 @@
 
 use keyring::Entry;
 
-// service 与 bundle identifier 对齐，便于系统密钥链按 app 维度管理。
+// 固定写死生产 identifier，**不跟随 dev overlay 变化**——这样 dev 包能复用生产已登录的
+// keychain（OpenLoaf token / API key），开发时不用反复重新登录。dev/prod 的 settings.json
+// / SQLite / recordings 已经按 app_data_dir 隔离，机密层不需要再隔。
 const SERVICE: &str = "com.openspeech.app";
 
 fn entry(name: &str) -> Result<Entry, String> {

@@ -1,12 +1,10 @@
 use std::fs;
-use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{Manager, ResourceId, Runtime, Webview};
+use tauri::{AppHandle, Manager, ResourceId, Runtime, Webview};
 use tauri_plugin_updater::UpdaterExt;
 
 const CHANNEL_FILE: &str = "update-channel";
-const APP_IDENTIFIER: &str = "com.openspeech.app";
 
 // COS 国内分发（主）+ GitHub 兜底。Tauri updater 按数组顺序逐个尝试，第一个 200 命中即用，
 // 所以 COS 全挂时会回退到 GitHub Release，用户至少还能升级。
@@ -23,33 +21,12 @@ const BETA_GITHUB: &str =
 // 所以前端不调 plugin 的 check()，改调本文件的 check_for_update —— 命令内按 channel
 // 文件构造 endpoints 后调 updater_builder().endpoints(...) 走 runtime override。
 // rid 注册到 webview.resources_table()，与 plugin 的 download/install 命令共用同一表。
-fn app_config_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        return std::env::var_os("HOME").map(|h| {
-            PathBuf::from(h)
-                .join("Library/Application Support")
-                .join(APP_IDENTIFIER)
-        });
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(v) = std::env::var_os("XDG_CONFIG_HOME") {
-            return Some(PathBuf::from(v).join(APP_IDENTIFIER));
-        }
-        return std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join(".config").join(APP_IDENTIFIER));
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join(APP_IDENTIFIER));
-    }
-    #[allow(unreachable_code)]
-    None
-}
-
-fn read_channel() -> &'static str {
-    let Some(dir) = app_config_dir() else {
+//
+// 路径走 app.path().app_config_dir() —— 跟随当前 identifier。dev overlay 把
+// identifier 改成 com.openspeech.app.dev，update-channel 文件就自然落到 dev 目录，
+// 不会污染生产数据。
+fn read_channel<R: Runtime>(app: &AppHandle<R>) -> &'static str {
+    let Ok(dir) = app.path().app_config_dir() else {
         return "stable";
     };
     match fs::read_to_string(dir.join(CHANNEL_FILE)) {
@@ -58,10 +35,10 @@ fn read_channel() -> &'static str {
     }
 }
 
-fn write_channel(channel: &str) -> std::io::Result<()> {
+fn write_channel<R: Runtime>(app: &AppHandle<R>, channel: &str) -> std::io::Result<()> {
     let normalized = if channel == "beta" { "beta" } else { "stable" };
-    let dir = app_config_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "config dir not found")
+    let dir = app.path().app_config_dir().map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, format!("config dir: {e}"))
     })?;
     fs::create_dir_all(&dir)?;
     fs::write(dir.join(CHANNEL_FILE), normalized)
@@ -75,13 +52,13 @@ fn endpoints_for(channel: &str) -> Vec<&'static str> {
 }
 
 #[tauri::command]
-pub fn get_update_channel() -> String {
-    read_channel().to_string()
+pub fn get_update_channel<R: Runtime>(app: AppHandle<R>) -> String {
+    read_channel(&app).to_string()
 }
 
 #[tauri::command]
-pub fn set_update_channel(channel: String) -> Result<(), String> {
-    write_channel(&channel).map_err(|e| e.to_string())
+pub fn set_update_channel<R: Runtime>(app: AppHandle<R>, channel: String) -> Result<(), String> {
+    write_channel(&app, &channel).map_err(|e| e.to_string())
 }
 
 // 与 plugin-updater commands.rs 的 Metadata 字段保持一致——前端 new Update(metadata)
@@ -114,7 +91,7 @@ fn current_platform_key() -> &'static str {
 pub async fn check_for_update<R: Runtime>(
     webview: Webview<R>,
 ) -> Result<Option<UpdateMetadata>, String> {
-    let channel = read_channel();
+    let channel = read_channel(webview.app_handle());
     let endpoint_strs = endpoints_for(channel);
     log::info!(
         target: "openspeech::updater",
