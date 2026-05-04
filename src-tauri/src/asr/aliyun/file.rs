@@ -39,6 +39,7 @@ pub enum FileTransError {
 }
 
 impl FileTransError {
+    #[allow(dead_code)] // 错误码 string 由 Display 主导；code() 留给将来按错误类型分流
     pub fn code(&self) -> &'static str {
         match self {
             FileTransError::Unauthenticated(_) => "aliyun_unauthenticated",
@@ -135,9 +136,9 @@ pub struct TaskOutput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // 字段全是 serde 反序列化目标 + 协议形状文档；transcription_url 是主路径用
 pub struct TaskResult {
     #[serde(default)]
-    #[allow(dead_code)]
     pub file_url: Option<String>,
     #[serde(default)]
     pub subtask_status: Option<String>,
@@ -168,6 +169,7 @@ pub struct TranscriptEntry {
 }
 
 /// 把 results[*].transcription 顺序拼成纯文本（仅对内联版本有效；paraformer-v2 永远是空）。
+#[allow(dead_code)] // paraformer-v2 走 fetch_transcription 二级；保留它给 paraformer-v1 / sensevoice 等内联模型
 pub fn merge_transcriptions(results: &[TaskResult]) -> String {
     results
         .iter()
@@ -192,6 +194,7 @@ pub trait DashScopeClient: Send + Sync {
         &self,
         api_key: &str,
         oss_urls: &[String],
+        language_hints: &[String],
     ) -> Result<String, FileTransError>;
 
     async fn query_task(
@@ -227,12 +230,15 @@ impl ReqwestDashScopeClient {
     }
 }
 
-fn build_submit_body(oss_urls: &[String]) -> String {
-    serde_json::json!({
+fn build_submit_body(oss_urls: &[String], language_hints: &[String]) -> String {
+    let mut body = serde_json::json!({
         "model": FILETRANS_MODEL,
         "input": { "file_urls": oss_urls },
-    })
-    .to_string()
+    });
+    if !language_hints.is_empty() {
+        body["parameters"] = serde_json::json!({ "language_hints": language_hints });
+    }
+    body.to_string()
 }
 
 #[async_trait::async_trait]
@@ -241,8 +247,9 @@ impl DashScopeClient for ReqwestDashScopeClient {
         &self,
         api_key: &str,
         oss_urls: &[String],
+        language_hints: &[String],
     ) -> Result<String, FileTransError> {
-        let body = build_submit_body(oss_urls);
+        let body = build_submit_body(oss_urls, language_hints);
         let resp = self
             .client
             .post(SUBMIT_URL)
@@ -431,10 +438,18 @@ mod tests {
 
     #[test]
     fn submit_body_shape() {
-        let body = build_submit_body(&["oss://b/k".into()]);
+        let body = build_submit_body(&["oss://b/k".into()], &[]);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["model"], FILETRANS_MODEL);
         assert_eq!(v["input"]["file_urls"][0], "oss://b/k");
+        assert!(v.get("parameters").is_none());
+    }
+
+    #[test]
+    fn submit_body_with_language_hints() {
+        let body = build_submit_body(&["oss://b/k".into()], &["en".into()]);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["parameters"]["language_hints"][0], "en");
     }
 
     #[test]
@@ -560,8 +575,13 @@ mod tests {
             &self,
             _api_key: &str,
             oss_urls: &[String],
+            language_hints: &[String],
         ) -> Result<String, FileTransError> {
-            self.captured.lock().unwrap().push(format!("submit:{}", oss_urls.join(",")));
+            self.captured.lock().unwrap().push(format!(
+                "submit:{}|hints:{}",
+                oss_urls.join(","),
+                language_hints.join(",")
+            ));
             match self.pop() {
                 Op::Submit(r) => r,
                 Op::Query(_) => panic!("expected Submit op"),

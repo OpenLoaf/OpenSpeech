@@ -28,7 +28,8 @@
 | 项 | 说明 |
 |---|---|
 | 界面语言 | UI 显示语言；默认跟随系统 |
-| 听写语种 | `自动检测`（默认）/ 指定语种 |
+
+> 「听写语种」已从「常规」节移到「听写」分区——它是听写通道的属性而不是 UI 属性。详见下文「听写」节。
 
 ### 音频
 
@@ -42,18 +43,31 @@
 
 > 最长录音时长不再作为独立设置项；录音状态机内部默认上限见 `voice-input-flow.md`。
 
-### 大模型（REST）
+### 听写（Dictation）
 
-独立 tab，侧边栏名"模型"。
+独立 tab，承载所有听写通道相关设置。
 
+#### 通道选择
 | 项 | 说明 |
 |---|---|
-| STT 端点 URL | 必填；用户自行填写 |
-| API Key | 必填，加密存储 |
-| 模型名称 | 可选，部分服务需要 |
-| 请求超时 | 默认 30 秒 |
-| 音频编码 | `wav` / `opus`，取决于端点支持 |
-| 连接测试按钮 | 发送一个 1 秒静音样本验证连通性 |
+| 听写云通道 | `OpenLoaf 云端`（默认，saas）/ `自定义供应商`（custom）|
+| 听写语种 | `跟随界面语言`（默认）/ `自动检测` / `中文` / `English` / `日本語` / `한국어` / `粤语`。`follow_interface` resolve 见 `src/lib/dictation-lang.ts`；后端按 ISO code 映射到各家专属字段（见 [cloud-endpoints.md §4.3](./cloud-endpoints.md)）|
+
+#### 自定义供应商（mode=custom 时显示）
+支持腾讯云 / 阿里云 BYOK，多个供应商共存但同时只能激活一个。所有密钥走 macOS Keychain。
+
+| 供应商 | 必填字段 | 可选字段 |
+|---|---|---|
+| 腾讯云 | AppID / Region（默认 `ap-shanghai`） / SecretId / SecretKey / **COS Bucket（必填）**：录音先上传到 COS 再转写，单文件 ≤512MB。前端必填校验 + 后端拒绝空 bucket（错误码 `tencent_cos_bucket_required`）。 | — |
+| 阿里云 DashScope | ApiKey | — |
+
+每条 provider 卡片提供「测试」按钮，发一次最小握手验证凭证有效性。详见 [cloud-endpoints.md §3 / §4](./cloud-endpoints.md)。
+
+#### 听写模式
+| 项 | 说明 |
+|---|---|
+| 听写模式 | `实时转换`（REALTIME，server VAD 切句流式 partial）/ `整句听写`（UTTERANCE，松开后整段文件转写，默认） |
+| 启用 AI 优化 | 开关，默认 on。仅 UTTERANCE 模式下生效；REALTIME 强制禁用 + 灰显 |
 
 ### 文本注入
 

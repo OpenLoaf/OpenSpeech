@@ -18,6 +18,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::asr::aliyun::oss_upload::{BailianOssClient, OssUploadError, ReqwestBailianOssClient};
+use crate::asr::tencent::cos::CosClient;
 use crate::asr::tencent::file::{
     ACTION_QUERY, ASR_HOST, ASR_SERVICE, ASR_VERSION, DescribeTaskStatusRequest,
 };
@@ -37,6 +39,8 @@ pub enum DictationTestRequest {
         secret_id: String,
         #[serde(rename = "secretKey")]
         secret_key: String,
+        #[serde(rename = "cosBucket", default)]
+        cos_bucket: Option<String>,
     },
     Aliyun {
         #[serde(rename = "apiKey")]
@@ -57,6 +61,9 @@ const ERR_UNAUTH: &str = "unauthenticated";
 const ERR_NETWORK: &str = "network";
 const ERR_MISSING: &str = "missing_fields";
 const ERR_UNKNOWN: &str = "unknown";
+const ERR_COS_UNAUTH: &str = "cos_unauthorized";
+const ERR_COS_NOT_FOUND: &str = "cos_not_found";
+const ERR_OSS_POLICY: &str = "oss_policy_failed";
 
 #[tauri::command]
 pub async fn dictation_test_provider(
@@ -68,7 +75,15 @@ pub async fn dictation_test_provider(
             region,
             secret_id,
             secret_key,
-        } => Ok(test_tencent(&app_id, region.as_deref(), &secret_id, &secret_key).await),
+            cos_bucket,
+        } => Ok(test_tencent(
+            &app_id,
+            region.as_deref(),
+            &secret_id,
+            &secret_key,
+            cos_bucket.as_deref(),
+        )
+        .await),
         DictationTestRequest::Aliyun { api_key } => Ok(test_aliyun(&api_key).await),
     }
 }
@@ -78,6 +93,7 @@ async fn test_tencent(
     region: Option<&str>,
     secret_id: &str,
     secret_key: &str,
+    cos_bucket: Option<&str>,
 ) -> DictationTestResult {
     if app_id.trim().is_empty()
         || secret_id.trim().is_empty()
@@ -95,7 +111,7 @@ async fn test_tencent(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     let date = utc_date_from_timestamp(timestamp);
-    let region = region.unwrap_or("ap-shanghai").to_string();
+    let region_str = region.unwrap_or("ap-shanghai").to_string();
 
     // 故意用一个不存在的 TaskId（1）来探活：
     //  - 鉴权通过 → 服务端走业务路径，返回 FailedOperation.NoSuchTask（200 OK + Error.Code）
@@ -139,7 +155,7 @@ async fn test_tencent(
         .header("Host", ASR_HOST)
         .header("X-TC-Action", ACTION_QUERY)
         .header("X-TC-Version", ASR_VERSION)
-        .header("X-TC-Region", &region)
+        .header("X-TC-Region", &region_str)
         .header("X-TC-Timestamp", timestamp.to_string())
         .header("Authorization", authorization)
         .body(body)
@@ -199,11 +215,18 @@ async fn test_tencent(
             message: format!("service not enabled: {err_msg}"),
         },
         // 没找到 task → 鉴权通过、业务上确实没这条任务，正是我们要的"测试通过"信号
-        Some("FailedOperation.NoSuchTask") | None => DictationTestResult {
-            ok: true,
-            code: "ok".into(),
-            message: "credentials verified".into(),
-        },
+        Some("FailedOperation.NoSuchTask") | None => {
+            let bucket = cos_bucket.map(|b| b.trim()).filter(|b| !b.is_empty());
+            if let Some(bucket) = bucket {
+                probe_tencent_cos(&region_str, bucket, secret_id, secret_key).await
+            } else {
+                DictationTestResult {
+                    ok: true,
+                    code: "ok".into(),
+                    message: "credentials verified".into(),
+                }
+            }
+        }
         // 其他错误：记录但视作不通过——避免误判
         Some(c) => DictationTestResult {
             ok: false,
@@ -219,6 +242,59 @@ fn classify_tencent_status_code(status: u16) -> String {
         408 | 504 => "timeout".into(),
         429 => "rate_limited".into(),
         _ => ERR_NETWORK.into(),
+    }
+}
+
+/// HEAD bucket 返回值映射：200 → ok；403 → cos_unauthorized；404 → cos_not_found；其他 → unknown。
+fn classify_cos_status(status: u16) -> &'static str {
+    match status {
+        200 | 204 => "ok",
+        401 | 403 => ERR_COS_UNAUTH,
+        404 => ERR_COS_NOT_FOUND,
+        408 | 504 => "timeout",
+        429 => "rate_limited",
+        _ => ERR_UNKNOWN,
+    }
+}
+
+async fn probe_tencent_cos(
+    region: &str,
+    bucket: &str,
+    secret_id: &str,
+    secret_key: &str,
+) -> DictationTestResult {
+    let client = match CosClient::new(region, bucket, secret_id, secret_key) {
+        Ok(c) => c,
+        Err(e) => {
+            return DictationTestResult {
+                ok: false,
+                code: ERR_NETWORK.into(),
+                message: format!("COS client init failed: {e}"),
+            };
+        }
+    };
+    match client.head_bucket().await {
+        Ok(status) => {
+            let code = classify_cos_status(status.as_u16());
+            if code == "ok" {
+                DictationTestResult {
+                    ok: true,
+                    code: "ok".into(),
+                    message: "credentials + COS bucket verified".into(),
+                }
+            } else {
+                DictationTestResult {
+                    ok: false,
+                    code: code.into(),
+                    message: format!("COS HEAD bucket failed: HTTP {status}"),
+                }
+            }
+        }
+        Err(e) => DictationTestResult {
+            ok: false,
+            code: ERR_NETWORK.into(),
+            message: format!("COS HEAD bucket network error: {e}"),
+        },
     }
 }
 
@@ -264,10 +340,42 @@ async fn test_aliyun(api_key: &str) -> DictationTestResult {
     }
 
     // 200 / 404 / 400 都算"鉴权通过"。DashScope 的 InvalidApiKey 走 401，其它都不是密钥问题。
-    DictationTestResult {
-        ok: true,
-        code: "ok".into(),
-        message: "credentials verified".into(),
+    // ApiKey 通过后再探一次 OSS getPolicy——账号没开通 DashScope OSS 资源时这步会失败。
+    probe_aliyun_oss_policy(api_key).await
+}
+
+async fn probe_aliyun_oss_policy(api_key: &str) -> DictationTestResult {
+    let client = match ReqwestBailianOssClient::new() {
+        Ok(c) => c,
+        Err(e) => {
+            return DictationTestResult {
+                ok: false,
+                code: ERR_NETWORK.into(),
+                message: format!("OSS client init failed: {e}"),
+            };
+        }
+    };
+    match client.get_policy(api_key).await {
+        Ok(_) => DictationTestResult {
+            ok: true,
+            code: "ok".into(),
+            message: "credentials + OSS policy verified".into(),
+        },
+        Err(OssUploadError::Unauthenticated(m)) => DictationTestResult {
+            ok: false,
+            code: ERR_UNAUTH.into(),
+            message: format!("OSS getPolicy unauthorized: {m}"),
+        },
+        Err(OssUploadError::Network(m)) => DictationTestResult {
+            ok: false,
+            code: ERR_NETWORK.into(),
+            message: format!("OSS getPolicy network error: {m}"),
+        },
+        Err(e) => DictationTestResult {
+            ok: false,
+            code: ERR_OSS_POLICY.into(),
+            message: format!("OSS getPolicy failed: {e}"),
+        },
     }
 }
 
@@ -292,9 +400,21 @@ mod tests {
         assert_eq!(classify_tencent_status_code(500), ERR_NETWORK);
     }
 
+    #[test]
+    fn classify_cos_status_maps_each_code() {
+        assert_eq!(classify_cos_status(200), "ok");
+        assert_eq!(classify_cos_status(204), "ok");
+        assert_eq!(classify_cos_status(401), ERR_COS_UNAUTH);
+        assert_eq!(classify_cos_status(403), ERR_COS_UNAUTH);
+        assert_eq!(classify_cos_status(404), ERR_COS_NOT_FOUND);
+        assert_eq!(classify_cos_status(429), "rate_limited");
+        assert_eq!(classify_cos_status(504), "timeout");
+        assert_eq!(classify_cos_status(500), ERR_UNKNOWN);
+    }
+
     #[tokio::test]
     async fn missing_fields_short_circuit_tencent() {
-        let r = test_tencent("", None, "", "").await;
+        let r = test_tencent("", None, "", "", None).await;
         assert!(!r.ok);
         assert_eq!(r.code, ERR_MISSING);
     }

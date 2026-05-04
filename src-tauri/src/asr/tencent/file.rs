@@ -20,7 +20,10 @@ use super::signature::{
 /// 音频来源：URL 或本地 base64 二选一。
 /// 腾讯把这俩条件分散在 `SourceType + Url` / `SourceType + Data + DataLen` 两组字段里，
 /// 这里用枚举把它收成一个不可能搞错的类型。
+///
+/// 主路径只走 LocalBase64；Url 留作协议完整性 + 将来支持文件 URL 直传。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum AudioSource {
     /// SourceType=0：公网可下载的 URL。≤5h、≤1GB。
     Url(String),
@@ -45,6 +48,8 @@ pub struct CreateRecTaskRequest {
 }
 
 impl CreateRecTaskRequest {
+    /// 公网 URL 模式（SourceType=0）。COS BYOK 路径用：先把音频上传到用户 COS
+    /// 再生成预签名 URL 喂进来。body 不含 DataLen——`length_bytes` 留给上层日志/护栏。
     pub fn new_url(url: impl Into<String>) -> Self {
         Self {
             engine_model_type: "16k_zh".into(),
@@ -55,6 +60,7 @@ impl CreateRecTaskRequest {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_local(base64: impl Into<String>, data_len: u64) -> Self {
         Self {
             engine_model_type: "16k_zh".into(),
@@ -108,6 +114,7 @@ pub struct CreateRecTaskResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // request_id 用于排查腾讯侧 trace，serde 反序列化目标
 pub struct CreateRecTaskResponseInner {
     #[serde(rename = "RequestId")]
     pub request_id: String,
@@ -170,6 +177,7 @@ impl TaskStatus {
             _ => None,
         }
     }
+    #[allow(dead_code)] // poll 循环用 match-arm 直接判，is_terminal 留给 ad-hoc 调用
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Success | Self::Failed)
     }
@@ -182,6 +190,7 @@ pub struct DescribeTaskStatusResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // request_id 用于排查腾讯侧 trace，serde 反序列化目标
 pub struct DescribeTaskStatusResponseInner {
     #[serde(rename = "RequestId")]
     pub request_id: String,
@@ -192,6 +201,7 @@ pub struct DescribeTaskStatusResponseInner {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // 协议形状字段（TaskId / AudioDuration 等）serde 反序列化目标
 pub struct TaskStatusData {
     #[serde(rename = "TaskId")]
     pub task_id: i64,
@@ -228,6 +238,7 @@ where
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // 协议形状：主路径只读 final_sentence；其余留作时间戳/分轨 hooks
 pub struct ResultDetail {
     #[serde(rename = "FinalSentence", default)]
     pub final_sentence: String,
@@ -275,6 +286,7 @@ pub enum TencentFileError {
 }
 
 impl TencentFileError {
+    #[allow(dead_code)] // 错误码 string 由 Display 主导；code() 留给将来按错误类型分流
     pub fn code(&self) -> &'static str {
         match self {
             TencentFileError::Unauthenticated(_) => "tencent_unauthenticated",

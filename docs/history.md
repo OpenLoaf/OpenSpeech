@@ -17,8 +17,24 @@
 | created_at | Unix 时间戳（毫秒） |
 | target_app | 注入目标应用的可识别名称（如 "VSCode"、"Chrome"）；若无法获取则为空 |
 | audio_path | 录音文件的**相对路径**（相对 `app_data_dir`），新版形如 `recordings/<yyyy-MM-dd>/<id>.ogg`，迁移前老记录可能仍是 `recordings/<id>.{ogg,wav}`。未保存音频的记录（如 `cancelled`、或"关闭音频保存"设置开启时）该字段为 NULL |
+| asr_source | 实际走的 ASR 通道：`saas-realtime` / `saas-rest` / `byo`。schema v3 之前的老记录为 NULL |
+| ai_model | AI 优化使用的模型预格式化展示串（如 "OpenLoaf SaaS" / "{provider name} · {model}"）。未启用 / 未尝试 = NULL |
+| refined_text | AI 优化后的书面化文本；仅 UTTERANCE + `aiRefine.enabled` 时产生。**判断"是否做过 AI 优化"必须看 `segment_mode` + `aiRefine.enabled` 配合**，不能仅凭 `refined_text != null` 反推（refine 失败时也会是 null，会误判） |
+| segment_mode | 该次记录使用的分段模式：`REALTIME` / `UTTERANCE`。schema v4 之前的老记录为 NULL |
+| provider_kind | 实际承载本次转写的供应商通道。命名规则 `<vendor>-<channel>`：`saas-realtime` / `saas-file` / `tencent-realtime` / `tencent-file` / `aliyun-realtime` / `aliyun-file`。schema v4 之前的老记录为 NULL |
 
 **不保存**：模型请求/响应的完整内容（仅保留最终 `text`）。
+
+## Schema migrations
+
+| Version | 改动 | 触发实现 |
+|---|---|---|
+| v1 | 初始 schema | `src-tauri/src/db/mod.rs` |
+| v2 | 加 `target_app` | 同上 |
+| v3 | 加 `audio_path` / `asr_source` / `ai_model` | 同上 |
+| v4 | 加 `segment_mode` / `provider_kind` | `migrate_to_v4`（追加 PR-8） |
+
+老记录这两列回填策略：保持 NULL，UI 详情页按 i18n key `history.detail.{segment_mode,provider_kind}.<value>` 翻译，命中 NULL 时显示 "—"。
 
 ## 录音文件
 

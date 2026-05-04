@@ -6,6 +6,11 @@
 //   cd src-tauri
 //   cargo test --lib asr::byok_e2e -- --ignored --nocapture --test-threads=1
 //
+// 单跑 stage 3（realtime WS 鉴权链路）：
+//
+//   cd src-tauri
+//   cargo test --lib asr::byok_e2e::stage_3 -- --ignored --nocapture --test-threads=1
+//
 // 依赖：
 // - macOS Keychain service "com.openspeech.app" 里有 dictation_provider_<id> 条目
 // - ~/Library/Application Support/com.openspeech.app/settings.json 里有
@@ -26,9 +31,18 @@ use crate::asr::aliyun::file::{
     TokioSleeper as AliyunSleeper, merge_transcripts_payload, poll_task_until_terminal,
 };
 use crate::asr::aliyun::oss_upload::{BailianOssClient, ReqwestBailianOssClient};
+use crate::asr::aliyun::realtime_session::{
+    AliyunEvent, AliyunRealtimeSession, ConnectParams as AliyunConnectParams,
+    SessionEvent as AliyunSessionEvent,
+};
 use crate::asr::tencent::file::{
     AudioSource, CreateRecTaskRequest, ReqwestHttp, TokioSleeper as TencentSleeper,
     merge_result_detail, poll_until_terminal, submit_create_task,
+};
+use crate::asr::tencent::realtime::TencentEvent;
+use crate::asr::tencent::realtime_session::{
+    ConnectParams as TencentConnectParams, SessionEvent as TencentSessionEvent,
+    TencentRealtimeSession,
 };
 use crate::secrets::{DictationCredentials, load_dictation_provider_credentials_for_rust};
 
@@ -324,7 +338,7 @@ async fn stage_2_aliyun_file_e2e_with_local_recording() {
 
     let dash = ReqwestDashScopeClient::new().expect("build dashscope client");
     let task_id = dash
-        .submit_filetrans(&api_key, std::slice::from_ref(&oss_url))
+        .submit_filetrans(&api_key, std::slice::from_ref(&oss_url), &[])
         .await
         .unwrap_or_else(|e| panic!("submit_filetrans failed: {e}"));
     eprintln!("[aliyun] filetrans task_id={task_id} → 轮询中…");
@@ -369,6 +383,194 @@ async fn stage_2_aliyun_file_e2e_with_local_recording() {
         "transcription_url 拉到的 payload 里没文本（录音可能是真静音）"
     );
     let _ = bytes;
+}
+
+// ─── 阶段 3：realtime WS 鉴权链路（最快，不读录音） ───────────────
+//
+// 目标：验证 BYOK 实时通道的"建连 + 鉴权 + ingest 一段静音 PCM + finish"全流程。
+// 这里**不要求**真识别出文字——只断言：
+//   1) 建 WS 成功（HTTPS upgrade）
+//   2) 服务端发回一个 `Ready` 事件（说明签名 / Bearer token 通过）
+//   3) 不会立刻收到 `Error { code: "unauthenticated*" / "InvalidApiKey" / 4002 / .. }`
+// 失败时 eprintln! 出原始 message + panic，便于 debug。
+//
+// 静音 PCM：1 秒 16k mono PCM16 = 16000 samples * 2 bytes = 32000 字节零。
+// 切 40ms 块（16000 * 0.04 * 2 = 1280 字节）逐帧喂，保留与生产 cpal callback 同节奏。
+
+const SILENCE_PCM_SECONDS: usize = 1;
+const SAMPLE_RATE_HZ: usize = 16000;
+const FRAME_MS: usize = 40;
+const FRAME_BYTES: usize = SAMPLE_RATE_HZ * FRAME_MS / 1000 * 2; // 1280
+
+fn silence_pcm16() -> Vec<u8> {
+    vec![0u8; SAMPLE_RATE_HZ * SILENCE_PCM_SECONDS * 2]
+}
+
+#[tokio::test]
+#[ignore]
+async fn stage_3_tencent_realtime_e2e_with_silence_pcm() {
+    let p = pick_provider("tencent");
+    let DictationCredentials::Tencent { secret_id, secret_key } = load_creds(&p.id) else {
+        panic!("vendor mismatch");
+    };
+    let app_id = p
+        .tencent_app_id
+        .as_deref()
+        .unwrap_or_else(|| panic!("provider {} 缺 tencentAppId", p.id))
+        .to_string();
+    let region = p.tencent_region.as_deref().unwrap_or("ap-shanghai").to_string();
+
+    eprintln!("[tencent-rt] 建 WS appid={app_id} region={region} engine=16k_zh");
+    let session = tokio::task::spawn_blocking(move || {
+        TencentRealtimeSession::connect(TencentConnectParams {
+            app_id: &app_id,
+            secret_id: &secret_id,
+            secret_key: &secret_key,
+            _region: &region,
+            sample_rate: 16000,
+            engine_model_type: "16k_zh",
+        })
+    })
+    .await
+    .expect("join")
+    .unwrap_or_else(|e| panic!("[tencent-rt] connect 失败（TLS / DNS / 401）: {e}"));
+
+    // 切 1280 字节块喂静音 PCM —— 鉴权过的话第一帧之前就能拿 Ready。
+    let pcm = silence_pcm16();
+    for chunk in pcm.chunks(FRAME_BYTES) {
+        session
+            .send_audio_pcm16(chunk.to_vec())
+            .unwrap_or_else(|e| panic!("[tencent-rt] send_audio_pcm16: {e}"));
+    }
+    session
+        .finish()
+        .unwrap_or_else(|e| panic!("[tencent-rt] finish: {e}"));
+
+    let mut saw_ready = false;
+    let mut saw_text_event = false;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        let Some(ev) = session.next_event_timeout(Duration::from_millis(500)) else {
+            continue;
+        };
+        match ev {
+            TencentSessionEvent::Frame(TencentEvent::Ready { voice_id }) => {
+                eprintln!("[tencent-rt] ✓ Ready voice_id={voice_id}");
+                assert!(!voice_id.is_empty(), "Ready 事件 voice_id 不应为空");
+                saw_ready = true;
+            }
+            TencentSessionEvent::Frame(TencentEvent::Partial { sentence_id, text }) => {
+                eprintln!("[tencent-rt] partial sid={sentence_id} text={text:?}");
+                saw_text_event = true;
+            }
+            TencentSessionEvent::Frame(TencentEvent::Final { sentence_id, text }) => {
+                eprintln!("[tencent-rt] final sid={sentence_id} text={text:?}");
+                saw_text_event = true;
+            }
+            TencentSessionEvent::Frame(TencentEvent::EndOfStream) => {
+                eprintln!("[tencent-rt] EndOfStream");
+                break;
+            }
+            TencentSessionEvent::Frame(TencentEvent::Error { code, message }) => {
+                // 4002 = 鉴权失败 / 4003 = 服务未开通 → 凭证或 AppID 配置错。
+                assert!(
+                    code != 4002 && code != 4003,
+                    "[tencent-rt] 鉴权失败 code={code} msg={message}"
+                );
+                eprintln!("[tencent-rt] 业务层 Error code={code} msg={message}（非鉴权问题）");
+                break;
+            }
+            TencentSessionEvent::DecodeError(msg) => {
+                eprintln!("[tencent-rt] decode 错: {msg}");
+            }
+            TencentSessionEvent::Network(msg) => {
+                panic!("[tencent-rt] 网络层退出: {msg}");
+            }
+        }
+    }
+    assert!(
+        saw_ready,
+        "[tencent-rt] 15s 内没收到 Ready 事件——鉴权或 WS upgrade 链路可能挂了"
+    );
+    let _ = saw_text_event; // 静音不期望出文本，仅记录。
+}
+
+#[tokio::test]
+#[ignore]
+async fn stage_3_aliyun_realtime_e2e_with_silence_pcm() {
+    let p = pick_provider("aliyun");
+    let DictationCredentials::Aliyun { api_key } = load_creds(&p.id) else {
+        panic!("vendor mismatch");
+    };
+
+    eprintln!("[aliyun-rt] 建 WS qwen3-asr-flash-realtime language=zh");
+    let session = tokio::task::spawn_blocking(move || {
+        AliyunRealtimeSession::connect(AliyunConnectParams {
+            api_key: &api_key,
+            language: "zh",
+            sample_rate: 16000,
+            use_server_vad: false,
+        })
+    })
+    .await
+    .expect("join")
+    .unwrap_or_else(|e| panic!("[aliyun-rt] connect 失败: {e}"));
+
+    let pcm = silence_pcm16();
+    for chunk in pcm.chunks(FRAME_BYTES) {
+        session
+            .send_audio_pcm16(chunk.to_vec())
+            .unwrap_or_else(|e| panic!("[aliyun-rt] send_audio_pcm16: {e}"));
+    }
+    session
+        .finish()
+        .unwrap_or_else(|e| panic!("[aliyun-rt] finish: {e}"));
+
+    let mut saw_ready = false;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        let Some(ev) = session.next_event_timeout(Duration::from_millis(500)) else {
+            continue;
+        };
+        match ev {
+            AliyunSessionEvent::Frame(AliyunEvent::Ready { session_id }) => {
+                eprintln!("[aliyun-rt] ✓ Ready session_id={session_id:?}");
+                saw_ready = true;
+            }
+            AliyunSessionEvent::Frame(AliyunEvent::Partial { item_id, text }) => {
+                eprintln!("[aliyun-rt] partial item={item_id} text={text:?}");
+            }
+            AliyunSessionEvent::Frame(AliyunEvent::Final { item_id, transcript }) => {
+                eprintln!("[aliyun-rt] final item={item_id} transcript={transcript:?}");
+            }
+            AliyunSessionEvent::Frame(AliyunEvent::EndOfStream) => {
+                eprintln!("[aliyun-rt] EndOfStream");
+                break;
+            }
+            AliyunSessionEvent::Frame(AliyunEvent::Error { code, message }) => {
+                let code_lc = code.to_ascii_lowercase();
+                assert!(
+                    !code_lc.contains("invalidapikey")
+                        && !code_lc.contains("unauthorized")
+                        && !code_lc.contains("forbidden")
+                        && !code_lc.contains("authentication"),
+                    "[aliyun-rt] 鉴权失败 code={code} msg={message}"
+                );
+                eprintln!("[aliyun-rt] 业务层 Error code={code} msg={message}（非鉴权问题）");
+                break;
+            }
+            AliyunSessionEvent::DecodeError(msg) => {
+                eprintln!("[aliyun-rt] decode 错: {msg}");
+            }
+            AliyunSessionEvent::Network(msg) => {
+                panic!("[aliyun-rt] 网络层退出: {msg}");
+            }
+        }
+    }
+    assert!(
+        saw_ready,
+        "[aliyun-rt] 15s 内没收到 Ready 事件——Bearer ApiKey 或 WS upgrade 链路可能挂了"
+    );
 }
 
 // 让 use 不报"未使用"——AudioSource 与一些类型在不同测试间复用。

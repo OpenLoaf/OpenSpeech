@@ -42,7 +42,7 @@
 | 供应商 | C1 实时听写 | C2 短文件 (≤5MB / ≤60s) | C3 长文件 (URL 或 ≤1GB) | 凭证 |
 |---|---|---|---|---|
 | **OpenLoaf SaaS**（默认）| `OL-TL-RT-002` (Qwen3-ASR realtime) | `OL-TL-003` (DashScope multimodal) | `OL-TL-004` (Qwen3 filetrans) | SaaS access_token（OAuth 登录后由 SDK 持有）|
-| **腾讯云 ASR** | [实时语音识别 WebSocket](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/websocket-realtime-asr.md)（`wss://asr.cloud.tencent.com/asr/v2/<appid>`，HMAC-SHA1 签名） | [录音文件识别（一句话）](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-request.md)（`SourceType=1` 本地 base64，**≤5MB**，注意：腾讯无独立"短"接口，统一是 `CreateRecTask` 异步） | 同左：[`CreateRecTask`](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-request.md) + [`DescribeTaskStatus`](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-query.md)（URL 或本地，URL ≤5h、≤1GB；签名 [TC3-HMAC-SHA256](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/common-signature-v3.md)）| `AppID + SecretId + SecretKey` |
+| **腾讯云 ASR** | [实时语音识别 WebSocket](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/websocket-realtime-asr.md)（`wss://asr.cloud.tencent.com/asr/v2/<appid>`，HMAC-SHA1 签名） | [录音文件识别（一句话）](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-request.md)（`SourceType=0` URL 模式，**必须填 COS bucket**，单文件 ≤512MB——见 §4.4） | 同左：[`CreateRecTask`](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-request.md) + [`DescribeTaskStatus`](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-query.md)（URL 或本地，URL ≤5h、≤1GB；签名 [TC3-HMAC-SHA256](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/common-signature-v3.md)）| `AppID + SecretId + SecretKey`（+ COS Bucket，必填）|
 | **阿里云 ASR (DashScope)** | Qwen3-ASR-Flash-Realtime（同 OL-TL-RT-002 上游）/ Paraformer Realtime | DashScope `multimodal-generation`（同 OL-TL-003 上游）| Qwen3-ASR-Flash-Filetrans（同 OL-TL-004 上游；本地音频走 OSS 上传，详见 §4.3）| `DashScope ApiKey`（Bearer）|
 | Azure / Google / OpenAI Whisper / byo-rest | 见 [speech-providers.md §6.5](./speech-providers.md) | 同左 | 同左 | 见各 vendor 文档 |
 
@@ -64,10 +64,12 @@
 |---|---|---|---|
 | OpenLoaf access_token / refresh_token / family_token | C5–C8 / C1–C4 SaaS 模式 | macOS Keychain（release）/ `$HOME/.openspeech/dev-auth.json`（debug）| service=`ai.openloaf.saas` / account=`default` |
 | AI Refine 自定义 provider apiKey | C4 custom 模式 | macOS Keychain | service=`ai_provider_<provider.id>` |
-| **腾讯云 SecretId** | C1–C3 BYOK 腾讯（**未实现**） | 待定（建议同 keyring 复用 secrets/ 模块）| 提议：service=`asr_provider_<id>` / account=`tencent_secret_id` |
-| **腾讯云 SecretKey** | 同上 | 同上 | 提议：service=`asr_provider_<id>` / account=`tencent_secret_key` |
-| **腾讯云 AppID** | 同上（实时 WS URL `wss://...asr/v2/<appid>` 必填）| 非 secret，可放 `tauri-plugin-store` | settings.providers.asr.config.tencent.appId |
-| **阿里 DashScope ApiKey** | C1–C3 BYOK 阿里 | macOS Keychain | service=`asr_provider_<id>` / account=`dashscope_api_key` |
+| **腾讯云 SecretId** | C1–C3 BYOK 腾讯（已实现） | macOS Keychain | service=`dictation_provider_<id>`，与 SecretKey 一起 JSON encode |
+| **腾讯云 SecretKey** | 同上 | macOS Keychain | 同上 |
+| **腾讯云 AppID** | 实时 WS URL `wss://...asr/v2/<appid>` 必填 | 非 secret，存 `tauri-plugin-store` | settings.dictation.customProviders[].tencentAppId |
+| **腾讯云 Region** | File API + COS Endpoint 必填 | 非 secret，同上 | settings.dictation.customProviders[].tencentRegion（默认 `ap-shanghai`）|
+| **腾讯云 COS Bucket** | optional：填了走 COS 上传解除 5MB 限制 | 非 secret，同上 | settings.dictation.customProviders[].tencentCosBucket（如 `myaudio-1234567890`）|
+| **阿里 DashScope ApiKey** | C1–C3 BYOK 阿里（已实现）| macOS Keychain | service=`dictation_provider_<id>` / vendor=`aliyun` |
 
 ---
 
@@ -96,7 +98,7 @@
 |---|---|---|
 | URL | SDK 内部走 OL-TL-RT-002 | `wss://asr.cloud.tencent.com/asr/v2/<appid>?<params>&signature=<sig>` |
 | 鉴权 | SDK 注入 access_token | URL query 内 `secretid` + `signature` (HMAC-SHA1 + base64 + URL-encode；签名原文 = host+path+按字典序排好的 query 串，**不含 `wss://`**) |
-| 引擎模型 | `qwen3-asr-flash-realtime` | `engine_model_type=16k_zh` (默认) / `16k_zh_en` (中英粤+9 方言大模型) / `16k_multi_lang` (多语种)；前端 lang 选择需映射到这套枚举 |
+| 引擎模型 | `qwen3-asr-flash-realtime` | `engine_model_type` 跟随听写语种（`stt::engine_for_tencent`）：zh→`16k_zh` / en→`16k_en` / ja→`16k_ja` / ko→`16k_ko` / yue→`16k_yue`；auto / 兜底→`16k_zh`（最保守的合法引擎；注意腾讯不存在 `16k_zh_en` 引擎名）|
 | 音频格式 | PCM16 16k mono（不变）| `voice_format=1` (PCM)，PCM16 16k mono；建议每 200ms 发 6400 字节（与现有 cpal 重采样兼容）|
 | 帧 / 控制 | SDK 抽象 `RealtimeAsrSession::send_audio` / `finish` | 二进制 frame = 音频；text frame `{"type":"end"}` 表 finish；服务端发 `final:1` 后断开 |
 | 事件解析 | `RealtimeEvent::{Partial, Final, Credits, Closed, Error, Ready}` | 统一 JSON：`{code, message, voice_id, message_id, result?, final?}`；`result.slice_type` 0/1=partial、2=final |
@@ -112,7 +114,7 @@
 | URL | SDK 内部 | `https://asr.tencentcloudapi.com/`（POST，公共参数走 header）|
 | 鉴权 | SDK 注入 token | TC3-HMAC-SHA256；header：`X-TC-Action: CreateRecTask`、`X-TC-Version: 2019-06-14`、`X-TC-Timestamp`、`X-TC-Region`、`Authorization: TC3-HMAC-SHA256 Credential=<id>/<date>/asr/tc3_request, SignedHeaders=content-type;host, Signature=<hex>` |
 | 请求体 | base64 + media_type | JSON `{ "EngineModelType":"16k_zh", "ChannelNum":1, "ResTextFormat":0, "SourceType":1, "Data":"<base64>", "DataLen":<bytes> }` |
-| 大小限制 | SaaS ≤5min（duration check）| **本地 base64 ≤5MB**（注意：和现有 `SHORT_AUDIO_LIMIT_MS=5min` 不是同一维度，要按 byte 重新约束）|
+| 大小限制 | SaaS ≤5min（duration check）| **走 COS 上传，单文件 ≤512MB（必须配置 COS bucket）**（注意：和现有 `SHORT_AUDIO_LIMIT_MS=5min` 不是同一维度，要按 byte 重新约束）|
 | 同步 vs 异步 | SaaS 同步返回文本 | **腾讯异步**：返回 `{"Data":{"TaskId":<int>}}` → 必须**轮询** `DescribeTaskStatus`（与 C3 同一接口）|
 | 轮询字段 | — | `Status`：0 waiting / 1 doing / 2 success / 3 failed；成功时 `Result` 是字符串（含时间戳），结构化数据在 `ResultDetail[].FinalSentence` |
 | 文件 | `src-tauri/src/transcribe/mod.rs:104-128` | 替换为 `tencent_file_recognition::create_task` + 复用 C3 的轮询 |
@@ -135,7 +137,25 @@
 
 **保持不变**——用户已经有 custom provider 入口（`ai_refine/mod.rs::resolve_custom`），让用户在 settings 里配自己的 OpenAI 兼容 endpoint 即可。腾讯 TMT 不是 OpenAI 协议，本期不接。
 
-### 4.3 阿里 DashScope BYOK 文件转写（C2 / C3，PR-7 已落地）
+### 4.3 听写口语语种 `dictation.lang`（前端 → 后端透传规则）
+
+> settings.json 的 `dictation.lang` 字段统一用稳定 ISO code，前端 i18n 文案另算（settings.json key `dictation_lang.*`）。
+
+| 前端值 | 含义 | 后端收到的 ISO code（`startSttSession({lang})` / `transcribeRecordingFile({lang})`）|
+|---|---|---|
+| `follow_interface` | 跟随界面语言 | `interfaceLang === "zh-CN" \| "zh-TW"` → `"zh"`；`"en"` → `"en"`；`"system"` 兜底 → `"auto"` |
+| `auto` | 显式让上游做语种检测 | `"auto"` |
+| `zh` / `en` / `ja` / `ko` / `yue` | 显式选 | 原样透传 |
+
+resolve 实现：`src/lib/dictation-lang.ts::resolveDictationLang`。三个调用点：`recording.ts` 的 `startRecordingSession` / `finalize file transcribe` / `history.retry`。
+
+后端按 ISO code 映射到各家专属字段：
+- 腾讯 realtime：`stt::engine_for_tencent(lang) -> engine_model_type`
+- 腾讯 file：`transcribe::tencent_engine_for(lang) -> EngineModelType`
+- 阿里 realtime：`stt::aliyun_lang_code(lang) -> language` query
+- 阿里 file：`transcribe::aliyun_language_hints(lang) -> parameters.language_hints[]`（auto / 不识别 → 空数组让 paraformer-v2 自检）
+
+### 4.4 阿里 DashScope BYOK 文件转写（C2 / C3，PR-7 已落地）
 
 > 阿里百炼 filetrans **不接 base64**，必须给公网 URL；本地音频要先上传到百炼自带的 OSS 临时存储拿 `oss://` URL，再交给 filetrans 任务接口。
 >
@@ -181,14 +201,18 @@ Header:
   Authorization: Bearer <ApiKey>
   Content-Type: application/json
   X-DashScope-OssResourceResolve: enable    # 必须！告诉服务端 file_urls 是 oss:// 私有
+  X-DashScope-Async: enable                  # 必须！filetrans 不支持同步调用，缺这条会 403 AccessDenied
 Body:
 {
-  "model": "qwen3-asr-flash-filetrans",
-  "input": { "file_urls": ["oss://<bucket>/<upload_dir>/<file_name>"] }
+  "model": "paraformer-v2",                  # BYOK 公网模型 ID（不是 SaaS 内部用的 qwen3-asr-flash-filetrans 别名）
+  "input": { "file_urls": ["oss://<bucket>/<upload_dir>/<file_name>"] },
+  "parameters": { "language_hints": ["zh"] } # 可选；dictation.lang 不为 auto 时按 §4.3 映射填一个元素
 }
 ```
 
 返回 `{ "output": { "task_id": "...", "task_status": "PENDING" }, "request_id": "..." }`。
+
+> **bucket 推导关键**：filetrans 期望 `oss://<logical_bucket>/...` 形式，logical_bucket 取 `policy.upload_dir` 的第一段（如 `dashscope-instant`），**不能用 upload_host 推导出的物理 bucket**（如 `dashscope-file-mgr`），否则任务会以 `InvalidParameter.MalformedURL: A valid file URL is required` FAILED。实现见 `oss_upload.rs::oss_url_for`。
 
 **步骤 4：轮询任务**
 
@@ -197,7 +221,9 @@ GET https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}
 Header: Authorization: Bearer <ApiKey>
 ```
 
-`task_status`: `PENDING | RUNNING | SUCCEEDED | FAILED`。终态 SUCCEEDED 时 `output.results[*].transcription` 是文本，多 url 合并；FAILED 时 `output.{code, message}` 是失败原因。轮询间隔 3s、deadline 24min（与腾讯文件转写口径对齐）。
+`task_status`: `PENDING | RUNNING | SUCCEEDED | FAILED`。终态 SUCCEEDED 时 paraformer-v2 的转写文本**不在** `output.results[*].transcription`（永远空）——而在 `output.results[*].transcription_url` 指向的 OSS 临时签名 URL 里。需要再 `GET` 那个 URL（无需 Bearer，签名 URL 自鉴权）拿到 `{ transcripts: [{text}] }` JSON，把 `transcripts[*].text` 拼起来才是正文。FAILED 时 `output.{code, message}` 是失败原因。轮询间隔 3s、deadline 24min（与腾讯文件转写口径对齐）。
+
+> 兼容性注释：早期 paraformer-v1 / sensevoice-v1 把 `transcription` 内联在 results 里（`merge_transcriptions` 走老路径）；paraformer-v2 强制走 `transcription_url`（`merge_transcripts_payload` + `fetch_transcription`）。两条路径都保留以便未来切换不同模型。
 
 **错误码 ↔ overlay i18n（前缀 `aliyun_`）：**
 
@@ -210,6 +236,55 @@ Header: Authorization: Bearer <ApiKey>
 | `aliyun_filetrans_timeout` | `overlay:error.aliyun_filetrans_timeout` | 24 分钟内未返回终态 |
 | `aliyun_rate_limited` | `overlay:error.aliyun_rate_limited` | 429 |
 | `aliyun_network_error` | `overlay:error.stt_network` | 网络层 / 非以上分类 |
+
+---
+
+### 4.5 腾讯云 COS 上传（C2/C3，可选大文件路径）
+
+> 腾讯 BYOK File 强制走 COS 上传：用户必须在自定义供应商 UI 里填 `tencentCosBucket`（前端必填校验 + 后端 dispatch 验证非空，缺失返回 `tencent_cos_bucket_required` 错误码）。文件先 PUT 到 `https://{bucket}-{appid}.cos.{region}.myqcloud.com/`，再用预签名 GET URL 提交 CreateRecTask。单文件上限 ≤512MB。
+>
+> 实现：
+> - `src-tauri/src/asr/tencent/cos.rs` — COS Signature v5（HMAC-SHA1）+ PUT object + 预签名 GET URL + best-effort delete
+> - 接入点：`src-tauri/src/transcribe/mod.rs` 的 `DictationBackend::TencentFile` 分支
+> - 复用：`signature.rs` 的 HMAC 工具；不要重新造轮子
+
+**步骤 1：PUT 上传到 COS**
+
+```
+PUT https://{bucket}.cos.{region}.myqcloud.com/openspeech-recordings/{uuid}.{ext}
+Header:
+  Authorization: q-sign-algorithm=sha1&q-ak=<SecretId>&q-sign-time=<t1>;<t2>&q-key-time=<t1>;<t2>&q-header-list=content-type;host&q-url-param-list=&q-signature=<hex>
+  Content-Type: audio/wav | audio/ogg
+Body: <PCM/OGG bytes>
+```
+
+bucket 完整形态是 `{name}-{appid}`（例如 `myaudio-1234567890`）。region 复用 settings 里 `tencentRegion`。
+
+**步骤 2：生成预签名 GET URL**
+
+把同样的 `q-*` 字段以 query string 形式拼到 `https://{bucket}.cos.{region}.myqcloud.com/{key}` 后面，有效期 1h。这条 URL 可以直接交给 ASR `CreateRecTask`（私有 bucket 也能用）。
+
+**步骤 3：调 ASR `CreateRecTask`（SourceType=0）**
+
+```
+POST https://asr.tencentcloudapi.com/
+Body: { "EngineModelType":"<by lang>", "ChannelNum":1, "ResTextFormat":0, "SourceType":0, "Url":"<presigned URL>" }
+```
+
+之后复用 base64 路径完全一样的 `submit_create_task` + `poll_until_terminal`。
+
+**步骤 4：清理 COS（best-effort）**
+
+任务 SUCCEEDED 或 FAILED 后异步发 DELETE，失败只 log warn 不抛——避免清理失败影响主流程。
+
+**错误码 ↔ overlay i18n（前缀 `tencent_cos_`）：**
+
+| Rust 端错误 | 前端 i18n key | 说明 |
+|---|---|---|
+| `tencent_cos_unauthenticated` | `overlay:error.tencent_cos_unauthenticated` | 401/403：SecretId/Key 无效或缺 COS 权限 |
+| `tencent_cos_forbidden` | `overlay:error.tencent_cos_forbidden` | bucket 不存在 / region 不对 / Policy 拒绝 |
+| `tencent_cos_network` | `overlay:error.tencent_cos_network` | 网络层错（含 DNS / 超时） |
+| `tencent_cos_unknown` | `overlay:error.tencent_cos_unknown` | 其它 |
 
 ---
 

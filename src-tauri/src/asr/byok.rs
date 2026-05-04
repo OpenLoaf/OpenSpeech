@@ -54,15 +54,21 @@ pub struct ProviderRef {
     pub tencent_app_id: Option<String>,
     #[serde(default)]
     pub tencent_region: Option<String>,
+    /// 腾讯云 COS bucket（含 appid 后缀，如 `myaudio-1234567890`）。None / 空 = 走
+    /// base64 直传（≤5MB）；填了走 COS 上传（≤512MB）。
+    #[serde(default)]
+    pub tencent_cos_bucket: Option<String>,
     /// UI 上的别名（写日志 / 错误文案兜底用，可空）。
     #[serde(default)]
     pub custom_provider_name: Option<String>,
 }
 
 // PR-4 起 TencentRealtime 字段被 stt/mod.rs 消费；File / Aliyun 分支由 PR-5 / 6 / 7
-// 接入，期间未使用字段编译器会按 enum 整体可见性放过（dead_code 只对完全未读字段
-// 报警，这里 Tencent* / Aliyun* 都至少在 dispatch 写 + 路由 match 读到 variant）。
+// 接入。File 路径目前只用 secret_id/secret_key/region/api_key，app_id / name 是
+// 协议形状的一部分（日志 / 后续配额 / 多 provider 切换会用），加 allow_dead 避免
+// 误删——结构体级 allow 比字段级更紧凑。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DictationBackend {
     SaasRealtime,
     SaasFile,
@@ -79,6 +85,8 @@ pub enum DictationBackend {
         secret_id: String,
         secret_key: String,
         name: String,
+        /// COS bucket 必填；None / 空字符串后端直接拒绝转写（ERR_TENCENT_COS_BUCKET_REQUIRED）。
+        cos_bucket: Option<String>,
     },
     AliyunRealtime {
         api_key: String,
@@ -191,6 +199,10 @@ pub fn dispatch(
                             secret_id,
                             secret_key,
                             name,
+                            cos_bucket: provider_ref
+                                .tencent_cos_bucket
+                                .clone()
+                                .filter(|s| !s.trim().is_empty()),
                         },
                     })
                 }
@@ -227,6 +239,9 @@ pub fn provider_kind_str(b: &DictationBackend) -> &'static str {
 /// PR-3 占位错文案：腾讯 / 阿里 BYOK 真实现还没合入。
 pub const ERR_BYOK_NOT_IMPLEMENTED: &str = "byok_not_implemented_yet";
 
+/// 旧 settings 没填 COS 桶时直接拒绝转写，不再 base64 兜底。
+pub const ERR_TENCENT_COS_BUCKET_REQUIRED: &str = "tencent_cos_bucket_required";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +253,7 @@ mod tests {
             custom_provider_vendor: None,
             tencent_app_id: None,
             tencent_region: None,
+            tencent_cos_bucket: None,
             custom_provider_name: None,
         }
     }
@@ -258,6 +274,7 @@ mod tests {
             custom_provider_vendor: Some(CustomVendor::Tencent),
             tencent_app_id: Some("123".into()),
             tencent_region: None,
+            tencent_cos_bucket: None,
             custom_provider_name: None,
         };
         let err = dispatch(&pr, DictationModality::Realtime).unwrap_err();
@@ -272,10 +289,26 @@ mod tests {
             custom_provider_vendor: None,
             tencent_app_id: None,
             tencent_region: None,
+            tencent_cos_bucket: None,
             custom_provider_name: None,
         };
         let err = dispatch(&pr, DictationModality::Realtime).unwrap_err();
         assert_eq!(err.code(), "byok_missing_credentials");
+    }
+
+    #[test]
+    fn provider_ref_deserialize_includes_cos_bucket() {
+        let json = r#"{"mode":"custom","activeCustomProviderId":"p1","customProviderVendor":"tencent","tencentAppId":"123","tencentRegion":"ap-shanghai","tencentCosBucket":"myaudio-1234567890"}"#;
+        let pr: ProviderRef = serde_json::from_str(json).unwrap();
+        assert_eq!(pr.tencent_cos_bucket.as_deref(), Some("myaudio-1234567890"));
+    }
+
+    #[test]
+    fn provider_ref_missing_cos_bucket_field_defaults_to_none() {
+        // 老 v13 数据（缺 tencentCosBucket）必须仍能反序列化
+        let json = r#"{"mode":"custom","activeCustomProviderId":"p1","customProviderVendor":"tencent","tencentAppId":"123","tencentRegion":"ap-shanghai"}"#;
+        let pr: ProviderRef = serde_json::from_str(json).unwrap();
+        assert!(pr.tencent_cos_bucket.is_none());
     }
 
     #[test]
