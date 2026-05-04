@@ -8,6 +8,7 @@ export type DictationTestRequest =
       region?: string | null;
       secretId: string;
       secretKey: string;
+      cosBucket?: string | null;
     }
   | {
       vendor: "aliyun";
@@ -17,7 +18,8 @@ export type DictationTestRequest =
 export interface DictationTestResult {
   ok: boolean;
   /// 稳定错误码：ok / unauthenticated / network / missing_fields /
-  ///            service_not_enabled / rate_limited / timeout / unknown
+  ///            service_not_enabled / rate_limited / timeout / unknown /
+  ///            cos_unauthorized / cos_not_found / oss_policy_failed
   code: string;
   message: string;
 }

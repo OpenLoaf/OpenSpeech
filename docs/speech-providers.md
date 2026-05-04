@@ -629,7 +629,7 @@ docs/providers/                 # 每 provider 一份用户文档（如何申请
 |---|---|---|
 | **0** | 把现有 OpenLoaf realtime 路径包装成 `OpenLoafCloudAdapter`；行为完全等价于现状；引入 `providers/` 目录与 trait | 无 |
 | **1** | 引入 Capability 枚举与 registry；改写 `recording.ts` Gate 为 `active_profile` 决策；UI 仍然只显示 CLOUD | 无 |
-| **2** | 实现 settings 改造：mode 切换器、provider 表单、capability 预览；上线 `aliyun` + `tencent` 两个 LOCAL adapter；上线翻译 / 问 AI 走 LLM adapter（CLOUD 模式下仍走 OpenLoaf v4 工具，LOCAL 模式下走对应 LLM 适配器）| 第一个里程碑：用户可不登录用 aliyun / tencent |
+| **2 ✅ 已完成（v0.2.x）** | settings 改造：mode 切换器（saas / custom）、custom provider 卡片（腾讯/阿里）、keyring 集成、连接测试；BYOK 通道实现完整四象限：腾讯 realtime + 文件（COS 必填，≤512MB）、阿里 realtime（DashScope WS）+ 文件（百炼 OSS + paraformer-v2）；前端 `dictation.lang`（含 follow_interface）下穿到各家专属 lang 字段；history 表加 `segment_mode` + `provider_kind` 列回看历史通道 | 用户可不登录用腾讯 / 阿里 BYOK |
 | **3** | 上线 `azure` + `google` adapter；上线 `byo-rest` 兜底；上线 §8.3 ProviderCapabilityGapDialog | LOCAL 选项扩展到 5 个 |
 | **4** | 上线 `_template/` 与 `docs/providers/` 文档；blog post 公布开源 adapter 接入流程 | 社区贡献入口 |
 | **5（可选）** | 评估 wasm 动态加载是否值得 | 取决于社区 PR 数量 |

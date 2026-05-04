@@ -20,6 +20,7 @@ export interface ProviderRef {
   customProviderName: string | null;
   tencentAppId: string | null;
   tencentRegion: string | null;
+  tencentCosBucket: string | null;
 }
 
 function fromDictation(dictation: DictationSettings): ProviderRef {
@@ -31,6 +32,7 @@ function fromDictation(dictation: DictationSettings): ProviderRef {
       customProviderName: null,
       tencentAppId: null,
       tencentRegion: null,
+      tencentCosBucket: null,
     };
   }
   const active: DictationCustomProvider | undefined = dictation.customProviders.find(
@@ -43,6 +45,7 @@ function fromDictation(dictation: DictationSettings): ProviderRef {
     customProviderName: active?.name ?? null,
     tencentAppId: active?.tencentAppId ?? null,
     tencentRegion: active?.tencentRegion ?? null,
+    tencentCosBucket: active?.tencentCosBucket ?? null,
   };
 }
 

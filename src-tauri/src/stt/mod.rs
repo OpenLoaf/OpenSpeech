@@ -212,13 +212,16 @@ pub async fn stt_start<R: Runtime>(
         custom_provider_vendor: None,
         tencent_app_id: None,
         tencent_region: None,
+        tencent_cos_bucket: None,
         custom_provider_name: None,
     });
     let backend = dispatch(&provider_ref, DictationModality::Realtime).map_err(|e| {
         log::warn!("[stt] backend dispatch failed: {e}");
         e.code().to_string()
     })?;
-    let _ = app.emit(EVENT_PROVIDER_RESOLVED, provider_kind_str(&backend));
+    let resolved_kind = provider_kind_str(&backend);
+    log::info!("[stt] dispatch → provider_kind={resolved_kind} mode={mode:?}");
+    let _ = app.emit(EVENT_PROVIDER_RESOLVED, resolved_kind);
 
     // SaaS realtime 走 OpenLoaf JWT 续期路径；BYOK realtime 自带凭证，没有 401 概念。
     let needs_saas_token = matches!(&backend, DictationBackend::SaasRealtime);
@@ -341,7 +344,7 @@ fn stt_start_impl<R: Runtime>(
             name,
         } => {
             // 腾讯实时引擎按"language hint"挑：用户选的语言优先走对应模型；auto 路径
-            // 暂用 `16k_zh_en`（中英粤+方言大模型）兜底——日语/韩语等非中英用户应该
+            // 落 `16k_zh`（腾讯文档枚举里最保守的合法值）——日语/韩语等非中英用户应
             // 在前端选具体 language。
             let engine_model_type = engine_for_tencent(language);
             let sess =
@@ -453,8 +456,9 @@ fn engine_for_tencent(lang: RealtimeAsrLlmOlTlRt002Lang) -> &'static str {
         RealtimeAsrLlmOlTlRt002Lang::Ja => "16k_ja",
         RealtimeAsrLlmOlTlRt002Lang::Ko => "16k_ko",
         RealtimeAsrLlmOlTlRt002Lang::Yue => "16k_yue",
-        // Auto + 兜底：用中英粤+方言大模型引擎，覆盖最广。
-        _ => "16k_zh_en",
+        // Auto + 兜底：腾讯 engine_model_type 不支持 16k_zh_en，落最保守的 16k_zh，
+        // 避免握手 InvalidParameterValue。
+        _ => "16k_zh",
     }
 }
 

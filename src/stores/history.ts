@@ -4,6 +4,7 @@ import { newId } from "@/lib/ids";
 import { deleteRecordingFile } from "@/lib/audio";
 import { transcribeRecordingFile } from "@/lib/stt";
 import { buildProviderRef } from "@/lib/dictation-provider-ref";
+import { resolveDictationLang } from "@/lib/dictation-lang";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { useAuthStore } from "@/stores/auth";
@@ -335,14 +336,18 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
     markRetry(true);
     try {
+      const settings = useSettingsStore.getState();
       const r = await transcribeRecordingFile({
         audioPath: target.audio_path,
         durationMs: target.duration_ms,
+        lang: resolveDictationLang(settings.dictation.lang, settings.general.interfaceLang),
         provider: buildProviderRef(),
       });
       const text = r.text ?? "";
       // retry 永远走 SaaS REST 文件转写，与 recording.ts degrade 路径一致。
       const asrSource: AsrSource = "saas-rest";
+      // provider_kind 直接取 Rust dispatch 的真值（saas/tencent/aliyun-file 之一）。
+      const providerKind: ProviderKind = r.providerKind;
 
       // 跟随当前用户偏好——UTTERANCE + aiRefine.enabled 时走新 chat 通道整理；
       // refine 失败回退原文，与 recording.ts::finalizeAndWriteHistory 的两步行为对齐。
@@ -430,8 +435,8 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
       const d = await db();
       await d.execute(
-        "UPDATE history SET text = $1, refined_text = $2, status = 'success', error = NULL, asr_source = $3, ai_model = $4 WHERE id = $5",
-        [text, refinedText, asrSource, aiModel, id],
+        "UPDATE history SET text = $1, refined_text = $2, status = 'success', error = NULL, asr_source = $3, ai_model = $4, segment_mode = $5, provider_kind = $6 WHERE id = $7",
+        [text, refinedText, asrSource, aiModel, segmentMode, providerKind, id],
       );
       set({
         items: get().items.map((it) =>
@@ -444,6 +449,8 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
                 error: null,
                 asr_source: asrSource,
                 ai_model: aiModel,
+                segment_mode: segmentMode,
+                provider_kind: providerKind,
               }
             : it,
         ),

@@ -1,6 +1,11 @@
 {
   "transcribe": {
-    "too_long_for_utterance": "Recording exceeds 5 minutes — UTTERANCE mode is not supported, switch to REALTIME"
+    "too_long_for_utterance": "Recording exceeds 5 minutes — UTTERANCE mode is not supported, switch to REALTIME",
+    "aliyun_oss_upload_failed": "Aliyun OSS upload failed — credentials may be expired or the network is unstable",
+    "aliyun_filetrans_failed": "Aliyun file transcription task failed — please retry later",
+    "aliyun_file_too_large": "File exceeds 100 MB — Aliyun OSS single-file limit reached",
+    "tencent_cos_upload_failed": "Tencent COS upload failed — check credentials and network",
+    "tencent_cos_bucket_required": "Tencent COS bucket is required for transcription. Open Settings → Dictation and fill it in."
   },
   "home": {
     "hero": {
@@ -248,6 +253,7 @@
       },
       "polish": {
         "scenario_label": "Scenario",
+        "scenarios_empty": "No scenarios configured",
         "examples": {
           "email": "Email",
           "wechat": "Message",

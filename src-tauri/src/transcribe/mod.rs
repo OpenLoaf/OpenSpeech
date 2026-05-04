@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::asr::byok::{
-    DictationBackend, DictationModality, ERR_BYOK_NOT_IMPLEMENTED, ProviderMode, ProviderRef,
-    dispatch, provider_kind_str,
+    DictationBackend, DictationModality, ERR_BYOK_NOT_IMPLEMENTED, ERR_TENCENT_COS_BUCKET_REQUIRED,
+    ProviderMode, ProviderRef, dispatch, provider_kind_str,
 };
 use crate::asr::aliyun::file::{
     DashScopeClient, FileTransError, ReqwestDashScopeClient, TokioSleeper as AliyunSleeper,
@@ -31,6 +31,7 @@ use crate::asr::aliyun::file::{
 use crate::asr::aliyun::oss_upload::{
     BailianOssClient, OssUploadError, ReqwestBailianOssClient,
 };
+use crate::asr::tencent::cos::{CosClient, CosError};
 use crate::asr::tencent::file::{
     CreateRecTaskRequest, ReqwestHttp, TencentFileError, TokioSleeper, merge_result_detail,
     poll_until_terminal, submit_create_task,
@@ -122,6 +123,7 @@ fn default_saas_provider_ref() -> ProviderRef {
         custom_provider_vendor: None,
         tencent_app_id: None,
         tencent_region: None,
+        tencent_cos_bucket: None,
         custom_provider_name: None,
     }
 }
@@ -141,6 +143,9 @@ pub async fn transcribe_recording_file<R: Runtime>(
     })?;
 
     let kind = provider_kind_str(&backend).to_string();
+    log::info!(
+        "[transcribe] dispatch → provider_kind={kind} audio={audio_path} duration_ms={duration_ms}"
+    );
     match backend {
         DictationBackend::SaasFile => {
             tauri::async_runtime::spawn_blocking(move || {
@@ -153,22 +158,37 @@ pub async fn transcribe_recording_file<R: Runtime>(
             secret_id,
             secret_key,
             region,
+            cos_bucket,
             ..
         } => {
+            let bucket = cos_bucket
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ERR_TENCENT_COS_BUCKET_REQUIRED.to_string())?
+                .to_string();
             let bytes = read_recording_bytes(&app, &audio_path)?;
-            transcribe_tencent_file(bytes, &audio_path, lang, &secret_id, &secret_key, &region)
-                .await
-                .map(|text| TranscribeFileResult {
-                    text,
-                    variant: "tencentFile".into(),
-                    credits_consumed: 0.0,
-                    provider_kind: kind,
-                })
-                .map_err(|e| e.to_string())
+            transcribe_tencent_file_via_cos(
+                bytes,
+                &audio_path,
+                lang,
+                &secret_id,
+                &secret_key,
+                &region,
+                &bucket,
+            )
+            .await
+            .map(|text| TranscribeFileResult {
+                text,
+                variant: "tencentFile".into(),
+                credits_consumed: 0.0,
+                provider_kind: kind,
+            })
+            .map_err(|e| e.to_string())
         }
         DictationBackend::AliyunFile { api_key, .. } => {
             let bytes = read_recording_bytes(&app, &audio_path)?;
-            transcribe_aliyun_file(bytes, &audio_path, &api_key)
+            transcribe_aliyun_file(bytes, &audio_path, lang.as_deref(), &api_key)
                 .await
                 .map(|text| TranscribeFileResult {
                     text,
@@ -188,6 +208,12 @@ pub async fn transcribe_recording_file<R: Runtime>(
 const TENCENT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const TENCENT_POLL_DEADLINE: Duration = Duration::from_secs(24 * 60);
 
+/// 走 COS 公网 URL 时的 ASR 上限：腾讯实际接受 ≤512MB 音频，COS 物理桶上限 5GB。
+/// 用 ASR 限制兜底，避免无谓上传。
+const TENCENT_URL_MAX_BYTES: u64 = 512 * 1024 * 1024;
+/// 预签名 URL TTL：1 小时够腾讯异步任务跑完（任务平均 1-3 分钟）。
+const COS_PRESIGN_TTL_SECS: u64 = 3600;
+
 fn tencent_engine_for(lang: Option<&str>) -> &'static str {
     match lang.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
         Some("en") | Some("en-us") | Some("en-gb") => "16k_en",
@@ -198,33 +224,85 @@ fn tencent_engine_for(lang: Option<&str>) -> &'static str {
     }
 }
 
-async fn transcribe_tencent_file(
+/// 错误归一：COS 上传失败 → tencent_cos_*；ASR 调用失败 → tencent_*。
+/// 前端 humanizeSttError 按 Display 字符串前缀路由。
+#[derive(Debug)]
+enum TencentCosFileError {
+    Cos(CosError),
+    File(TencentFileError),
+}
+
+impl std::fmt::Display for TencentCosFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TencentCosFileError::Cos(e) => write!(f, "{e}"),
+            TencentCosFileError::File(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<CosError> for TencentCosFileError {
+    fn from(e: CosError) -> Self {
+        TencentCosFileError::Cos(e)
+    }
+}
+
+impl From<TencentFileError> for TencentCosFileError {
+    fn from(e: TencentFileError) -> Self {
+        TencentCosFileError::File(e)
+    }
+}
+
+fn cos_object_key_for(audio_path: &str) -> String {
+    let ext = std::path::Path::new(audio_path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| "wav".into());
+    format!("openspeech-recordings/{}.{ext}", uuid::Uuid::new_v4())
+}
+
+fn cos_content_type_for(audio_path: &str) -> &'static str {
+    if audio_path.to_ascii_lowercase().ends_with(".ogg") {
+        "audio/ogg"
+    } else {
+        "audio/wav"
+    }
+}
+
+async fn transcribe_tencent_file_via_cos(
     bytes: Vec<u8>,
     audio_path: &str,
     lang: Option<String>,
     secret_id: &str,
     secret_key: &str,
     region: &str,
-) -> Result<String, TencentFileError> {
+    bucket: &str,
+) -> Result<String, TencentCosFileError> {
     let actual_len = bytes.len() as u64;
-    if actual_len > crate::asr::tencent::file::TENCENT_FILE_MAX_BYTES {
-        return Err(TencentFileError::FileTooLarge {
+    if actual_len > TENCENT_URL_MAX_BYTES {
+        return Err(TencentCosFileError::File(TencentFileError::FileTooLarge {
             actual_bytes: actual_len,
-        });
+        }));
     }
-    let b64 = B64.encode(&bytes);
-    let req = CreateRecTaskRequest::new_local(b64, actual_len)
-        .engine(tencent_engine_for(lang.as_deref()));
-    let _ = audio_path; // 暂未用到 OGG/WAV 区分（腾讯 16k_zh 通吃容器封装）
-    let region_opt = if region.trim().is_empty() {
-        None
+    let region_str = if region.trim().is_empty() {
+        "ap-shanghai"
     } else {
-        Some(region)
+        region
     };
+    let cos = CosClient::new(region_str, bucket, secret_id, secret_key)?;
+    let key = cos_object_key_for(audio_path);
+    cos.put_object(&key, bytes, cos_content_type_for(audio_path))
+        .await?;
+    log::info!("[transcribe] tencent COS uploaded key={key} bucket={bucket} region={region_str}");
+    let url = cos.presigned_get_url(&key, COS_PRESIGN_TTL_SECS)?;
+
+    let req = CreateRecTaskRequest::new_url(url).engine(tencent_engine_for(lang.as_deref()));
+    let region_opt = Some(region_str);
     let http = ReqwestHttp::new()?;
     let sleeper = TokioSleeper;
     let task_id = submit_create_task(&http, secret_id, secret_key, region_opt, &req).await?;
-    log::info!("[transcribe] tencent CreateRecTask submitted task_id={task_id}");
+    log::info!("[transcribe] tencent CreateRecTask (URL) submitted task_id={task_id}");
     let deadline = Instant::now() + TENCENT_POLL_DEADLINE;
     let resp = poll_until_terminal(
         &http,
@@ -236,13 +314,20 @@ async fn transcribe_tencent_file(
         TENCENT_POLL_INTERVAL,
         deadline,
     )
-    .await?;
-    let data = resp.response.data.ok_or_else(|| TencentFileError::TaskFailed {
-        msg: "DescribeTaskStatus returned no Data on success".into(),
-    })?;
+    .await;
+
+    // 任务结束后无论成败都尝试清理 COS 上的临时对象，best-effort（失败只 warn）。
+    cos.delete_object_best_effort(&key).await;
+
+    let resp = resp?;
+    let data = resp
+        .response
+        .data
+        .ok_or_else(|| TencentFileError::TaskFailed {
+            msg: "DescribeTaskStatus returned no Data on success".into(),
+        })?;
     let text = merge_result_detail(&data.result_detail);
     if text.is_empty() {
-        // 兜底：腾讯 ResultDetail 偶发为空（短音频 / 旧路径），改用 Result 字段去掉时间戳前缀
         Ok(strip_tencent_timestamps(&data.result))
     } else {
         Ok(text)
@@ -283,6 +368,19 @@ impl From<FileTransError> for AliyunFileError {
     }
 }
 
+/// 把前端送来的 ISO code 翻译成 paraformer-v2 的 language_hints。
+/// auto / 不识别 → 空（让模型自检），其它一一对应。
+fn aliyun_language_hints(lang: Option<&str>) -> Vec<String> {
+    match lang.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("zh") => vec!["zh".into()],
+        Some("en") | Some("en-us") | Some("en-gb") => vec!["en".into()],
+        Some("ja") => vec!["ja".into()],
+        Some("ko") => vec!["ko".into()],
+        Some("yue") => vec!["yue".into()],
+        _ => Vec::new(),
+    }
+}
+
 fn aliyun_file_name_for(audio_path: &str) -> String {
     let stem = std::path::Path::new(audio_path)
         .file_name()
@@ -295,11 +393,13 @@ fn aliyun_file_name_for(audio_path: &str) -> String {
 async fn transcribe_aliyun_file(
     bytes: Vec<u8>,
     audio_path: &str,
+    lang: Option<&str>,
     api_key: &str,
 ) -> Result<String, AliyunFileError> {
     let oss = ReqwestBailianOssClient::new()?;
     let scope = ReqwestDashScopeClient::new()?;
-    transcribe_aliyun_file_with(&oss, &scope, &AliyunSleeper, bytes, audio_path, api_key).await
+    transcribe_aliyun_file_with(&oss, &scope, &AliyunSleeper, bytes, audio_path, lang, api_key)
+        .await
 }
 
 async fn transcribe_aliyun_file_with(
@@ -308,6 +408,7 @@ async fn transcribe_aliyun_file_with(
     sleeper: &dyn crate::asr::aliyun::file::Sleeper,
     bytes: Vec<u8>,
     audio_path: &str,
+    lang: Option<&str>,
     api_key: &str,
 ) -> Result<String, AliyunFileError> {
     let file_name = aliyun_file_name_for(audio_path);
@@ -319,8 +420,10 @@ async fn transcribe_aliyun_file_with(
     };
     log::info!("[transcribe] aliyun OSS uploaded: {oss_url}");
 
+    // paraformer-v2 接受 language_hints；auto / 空表示不约束，让上游自检。
+    let language_hints = aliyun_language_hints(lang);
     let task_id = scope
-        .submit_filetrans(api_key, &[oss_url])
+        .submit_filetrans(api_key, &[oss_url], &language_hints)
         .await
         .map_err(AliyunFileError::Trans)?;
     log::info!("[transcribe] aliyun filetrans submitted task_id={task_id}");
@@ -526,6 +629,31 @@ fn transcribe_long_audio_url_impl<R: Runtime>(
 }
 
 #[cfg(test)]
+mod tencent_tests {
+    use crate::asr::byok::ERR_TENCENT_COS_BUCKET_REQUIRED;
+
+    #[test]
+    fn cos_bucket_required_constant_value_is_stable() {
+        assert_eq!(ERR_TENCENT_COS_BUCKET_REQUIRED, "tencent_cos_bucket_required");
+    }
+
+    #[test]
+    fn empty_or_whitespace_bucket_filtered_out() {
+        let cases: Vec<Option<String>> = vec![None, Some(String::new()), Some("   ".into())];
+        for c in cases {
+            let bucket = c
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            assert!(bucket.is_none(), "expected None for {c:?}");
+        }
+        let ok = Some(" my-bucket ".to_string());
+        let bucket = ok.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        assert_eq!(bucket, Some("my-bucket"));
+    }
+}
+
+#[cfg(test)]
 mod aliyun_tests {
     use super::*;
     use crate::asr::aliyun::file::{
@@ -618,8 +746,13 @@ mod aliyun_tests {
             &self,
             _api_key: &str,
             oss_urls: &[String],
+            language_hints: &[String],
         ) -> Result<String, FileTransError> {
-            self.captured.lock().unwrap().push(format!("submit:{}", oss_urls.join(",")));
+            self.captured.lock().unwrap().push(format!(
+                "submit:{}|hints:{}",
+                oss_urls.join(","),
+                language_hints.join(",")
+            ));
             match self.pop() {
                 ScopeOp::Submit(r) => r,
                 _ => panic!("expected Submit op"),
@@ -695,6 +828,7 @@ mod aliyun_tests {
             &ZeroSleeper,
             vec![1, 2, 3],
             "recordings/2026-05-04/audio.wav",
+            None,
             "ak",
         )
         .await
@@ -721,6 +855,7 @@ mod aliyun_tests {
             &ZeroSleeper,
             vec![1, 2, 3],
             "audio.wav",
+            None,
             "ak",
         )
         .await
@@ -745,6 +880,7 @@ mod aliyun_tests {
             &ZeroSleeper,
             big,
             "audio.wav",
+            None,
             "ak",
         )
         .await
@@ -768,6 +904,7 @@ mod aliyun_tests {
             &ZeroSleeper,
             vec![1, 2, 3],
             "audio.wav",
+            None,
             "ak",
         )
         .await
@@ -800,6 +937,7 @@ mod aliyun_tests {
             &ZeroSleeper,
             vec![1, 2, 3],
             "audio.wav",
+            None,
             "ak",
         )
         .await

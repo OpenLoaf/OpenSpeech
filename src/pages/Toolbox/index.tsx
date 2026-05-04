@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import {
-  ArrowUpFromLine,
-  Copy,
   CornerUpLeft,
   Download,
   FileAudio,
@@ -12,7 +10,6 @@ import {
   Mic,
   Play,
   RotateCcw,
-  Save,
   Sparkles,
   Type,
   Volume2,
@@ -22,7 +19,13 @@ import { cn } from "@/lib/utils";
 import { HotkeyDictationCard } from "@/components/HotkeyDictationCard";
 import { useRecordingStore, type RecordingState } from "@/stores/recording";
 import { useHistoryStore } from "@/stores/history";
-import { useSettingsStore } from "@/stores/settings";
+import {
+  useSettingsStore,
+  DEFAULT_POLISH_SCENARIOS,
+  getEffectiveAiTranslationSystemPrompt,
+  getEffectiveAiPolishSystemPrompt,
+} from "@/stores/settings";
+import { resolveLang } from "@/i18n";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
 
 type InputTab = "text" | "voice" | "history" | "file";
@@ -40,14 +43,6 @@ function shortTimeLabel(ts: number): string {
 
 const SAMPLE_TEXT = "今天天气真好，我们去公园散步吧。这里有点凉，你要多穿点衣服。";
 
-const POLISH_PRESET_KEYS = [
-  "email",
-  "wechat",
-  "report",
-  "meeting_notes",
-  "social_post",
-] as const;
-type PolishPresetKey = (typeof POLISH_PRESET_KEYS)[number];
 const TRANSLATE_LANGS = ["en", "zh", "ja", "ko"] as const;
 const TRANSLATE_LANG_NAMES: Record<(typeof TRANSLATE_LANGS)[number], string> = {
   en: "English",
@@ -55,17 +50,8 @@ const TRANSLATE_LANG_NAMES: Record<(typeof TRANSLATE_LANGS)[number], string> = {
   ja: "Japanese (日本語)",
   ko: "Korean (한국어)",
 };
-const TRANSLATE_PROMPT = (langName: string) =>
-  `Translate the user's input into ${langName}. Output only the translation — no preamble, no quotes, no explanations.`;
 const TTS_VOICES = ["natural_f", "natural_m", "calm_f"] as const;
 const TTS_SPEEDS = [0.8, 1.0, 1.25, 1.5] as const;
-
-const MOCK_RESULTS: Record<Exclude<ToolKey, "tts">, string> = {
-  polish:
-    "各位同事好，明天我有事需要请假一天，工作如有紧急事项可以微信联系我。给大家添麻烦了，谢谢理解。",
-  translate:
-    "Hi all, I'll be off tomorrow for personal reasons. Feel free to reach me on WeChat if anything urgent comes up. Thanks for understanding.",
-};
 
 const BTN_BASE =
   "inline-flex items-center gap-1.5 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] transition-all";
@@ -325,7 +311,6 @@ type ToolBodyProps = {
   tool: ToolKey;
   text: string;
   hasInput: boolean;
-  onUseAsInput: (text: string) => void;
 };
 
 type ToolStatus =
@@ -334,11 +319,29 @@ type ToolStatus =
   | { kind: "done"; result: string }
   | { kind: "error"; message: string };
 
-function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
+function ToolBody({ tool, text, hasInput }: ToolBodyProps) {
   const { t } = useTranslation();
 
-  const [polishScenario, setPolishScenarioRaw] =
-    useState<PolishPresetKey>("email");
+  const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
+  const aiRefine = useSettingsStore((s) => s.aiRefine);
+  const promptLang = resolveLang(interfaceLang);
+  const polishScenarios = useMemo(
+    () => aiRefine.customPolishScenarios ?? DEFAULT_POLISH_SCENARIOS[promptLang],
+    [aiRefine.customPolishScenarios, promptLang],
+  );
+
+  const [polishScenarioId, setPolishScenarioIdRaw] = useState<string | null>(
+    polishScenarios[0]?.id ?? null,
+  );
+  useEffect(() => {
+    if (
+      polishScenarioId === null ||
+      !polishScenarios.some((s) => s.id === polishScenarioId)
+    ) {
+      setPolishScenarioIdRaw(polishScenarios[0]?.id ?? null);
+    }
+  }, [polishScenarios, polishScenarioId]);
+
   const [targetLang, setTargetLangRaw] =
     useState<(typeof TRANSLATE_LANGS)[number]>("en");
   const [voice, setVoiceRaw] =
@@ -346,15 +349,14 @@ function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
   const [speed, setSpeedRaw] = useState<(typeof TTS_SPEEDS)[number]>(1.0);
   const [status, setStatus] = useState<ToolStatus>({ kind: "idle" });
   const runStartRef = useRef<number>(0);
-  const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
     setStatus({ kind: "idle" });
   }, [text]);
 
   const resetStatus = () => setStatus({ kind: "idle" });
-  const setPolishScenario = (k: PolishPresetKey) => {
-    setPolishScenarioRaw(k);
+  const setPolishScenarioId = (id: string) => {
+    setPolishScenarioIdRaw(id);
     resetStatus();
   };
   const setTargetLang = (l: (typeof TRANSLATE_LANGS)[number]) => {
@@ -370,45 +372,50 @@ function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
     resetStatus();
   };
 
+  const runChat = async (systemPrompt: string) => {
+    const aiSettings = useSettingsStore.getState().aiRefine;
+    const provider =
+      aiSettings.mode === "custom"
+        ? aiSettings.customProviders.find(
+            (p) => p.id === aiSettings.activeCustomProviderId,
+          ) ?? null
+        : null;
+    if (aiSettings.mode === "custom" && !provider) {
+      throw new Error("no_active_custom_provider");
+    }
+    let acc = "";
+    const r = await refineTextViaChatStream(
+      {
+        mode: aiSettings.mode,
+        systemPrompt,
+        userText: text,
+        customBaseUrl: provider?.baseUrl,
+        customModel: provider?.model,
+        customKeyringId: provider ? `ai_provider_${provider.id}` : undefined,
+      },
+      (chunk) => {
+        acc += chunk;
+        setStatus({ kind: "running", partial: acc });
+      },
+    );
+    return r.refinedText || acc;
+  };
+
   const runTool = async () => {
     if (!hasInput) return;
     if (status.kind === "running") return;
     runStartRef.current = performance.now();
-    setElapsedMs(0);
     setStatus({ kind: "running", partial: "" });
 
     if (tool === "translate") {
       try {
-        const aiSettings = useSettingsStore.getState().aiRefine;
-        const provider =
-          aiSettings.mode === "custom"
-            ? aiSettings.customProviders.find(
-                (p) => p.id === aiSettings.activeCustomProviderId,
-              ) ?? null
-            : null;
-        if (aiSettings.mode === "custom" && !provider) {
-          throw new Error("no_active_custom_provider");
-        }
-        const sysPrompt = TRANSLATE_PROMPT(TRANSLATE_LANG_NAMES[targetLang]);
-        let acc = "";
-        const r = await refineTextViaChatStream(
-          {
-            mode: aiSettings.mode,
-            systemPrompt: sysPrompt,
-            userText: text,
-            customBaseUrl: provider?.baseUrl,
-            customModel: provider?.model,
-            customKeyringId: provider
-              ? `ai_provider_${provider.id}`
-              : undefined,
-          },
-          (chunk) => {
-            acc += chunk;
-            setStatus({ kind: "running", partial: acc });
-          },
+        const base = getEffectiveAiTranslationSystemPrompt(
+          aiRefine.customTranslationSystemPrompt,
+          promptLang,
         );
-        setElapsedMs(Math.round(performance.now() - runStartRef.current));
-        setStatus({ kind: "done", result: r.refinedText || acc });
+        const sysPrompt = `${base}\n\nTarget language: ${TRANSLATE_LANG_NAMES[targetLang]}`;
+        const result = await runChat(sysPrompt);
+        setStatus({ kind: "done", result });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setStatus({ kind: "error", message: msg });
@@ -416,14 +423,31 @@ function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
       return;
     }
 
+    if (tool === "polish") {
+      try {
+        const base = getEffectiveAiPolishSystemPrompt(
+          aiRefine.customPolishSystemPrompt,
+          promptLang,
+        );
+        const scenario = polishScenarios.find((s) => s.id === polishScenarioId);
+        const sysPrompt = scenario
+          ? `${base}\n\n${scenario.instruction}`
+          : base;
+        const result = await runChat(sysPrompt);
+        setStatus({ kind: "done", result });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setStatus({ kind: "error", message: msg });
+      }
+      return;
+    }
+
+    // TTS：尚未接入，保持占位
     setTimeout(() => {
-      setElapsedMs(Math.round(performance.now() - runStartRef.current));
-      const mock = tool === "tts" ? "" : MOCK_RESULTS[tool];
-      setStatus({ kind: "done", result: mock });
-    }, 800);
+      setStatus({ kind: "done", result: "" });
+    }, 600);
   };
 
-  const ready = status.kind === "done";
   const running = status.kind === "running";
 
   const paramRow =
@@ -432,16 +456,22 @@ function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-te-light-gray">
           {t("pages:toolbox.tools.polish.scenario_label")}
         </span>
-        {POLISH_PRESET_KEYS.map((k) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => setPolishScenario(k)}
-            className={polishScenario === k ? CHIP_ON : CHIP_OFF}
-          >
-            {t(`pages:toolbox.tools.polish.examples.${k}`)}
-          </button>
-        ))}
+        {polishScenarios.length === 0 ? (
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-te-light-gray/60">
+            {t("pages:toolbox.tools.polish.scenarios_empty")}
+          </span>
+        ) : (
+          polishScenarios.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setPolishScenarioId(s.id)}
+              className={polishScenarioId === s.id ? CHIP_ON : CHIP_OFF}
+            >
+              {s.name}
+            </button>
+          ))
+        )}
       </div>
     ) : tool === "translate" ? (
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-te-gray/30 bg-te-bg/60 px-4 py-2.5">
@@ -496,27 +526,6 @@ function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
   const isTts = tool === "tts";
   const outputText =
     status.kind === "done" ? status.result : status.kind === "running" ? status.partial : "";
-
-  let statusLabel: string;
-  let statusDot: string;
-  if (status.kind === "running") {
-    statusLabel = t("pages:toolbox.tools.running");
-    statusDot = "bg-te-accent animate-pulse";
-  } else if (status.kind === "error") {
-    statusLabel = t("pages:toolbox.tools.error", { message: status.message });
-    statusDot = "bg-red-500";
-  } else if (!hasInput) {
-    statusLabel = t("pages:toolbox.tools.idle");
-    statusDot = "bg-te-light-gray/40";
-  } else if (status.kind === "idle") {
-    statusLabel = t("pages:toolbox.tools.ready_to_run");
-    statusDot = "bg-te-accent/60";
-  } else {
-    statusLabel = t("pages:toolbox.tools.elapsed", {
-      seconds: (elapsedMs / 1000).toFixed(1),
-    });
-    statusDot = "bg-te-accent";
-  }
 
   return (
     <motion.div
@@ -597,52 +606,6 @@ function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
         )}
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-te-gray/40 bg-te-bg/60 px-4 py-2.5">
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-te-accent/90">
-          <span className={cn("inline-block size-1.5 rounded-full", statusDot)} />
-          {statusLabel}
-        </span>
-        <span className="mx-1 h-3 w-px bg-te-gray/40" />
-        <button
-          type="button"
-          className={BTN_GHOST}
-          disabled={!hasInput || running}
-          onClick={runTool}
-        >
-          <RotateCcw className="size-3" />
-          {t("pages:toolbox.tools.rerun")}
-        </button>
-        <button type="button" className={BTN_GHOST} disabled={!ready}>
-          <Copy className="size-3" />
-          {t("pages:toolbox.tools.copy")}
-        </button>
-        <button type="button" className={BTN_GHOST} disabled={!ready}>
-          <Save className="size-3" />
-          {t("pages:toolbox.tools.save_history")}
-        </button>
-        {!isTts ? (
-          <>
-            <div className="flex-1" />
-            <motion.button
-              type="button"
-              onClick={() => onUseAsInput(outputText)}
-              disabled={!ready}
-              className={cn(
-                "group inline-flex items-center gap-2 border px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.22em] transition-all",
-                ready
-                  ? "border-te-accent bg-te-accent text-te-bg shadow-[0_0_0_2px_rgba(0,0,0,0)] hover:shadow-[0_0_0_2px_var(--te-accent)]"
-                  : "cursor-not-allowed border-te-gray/40 bg-te-surface/40 text-te-light-gray/40",
-              )}
-              whileHover={ready ? { y: -1 } : undefined}
-              whileTap={ready ? { y: 0 } : undefined}
-            >
-              <ArrowUpFromLine className="size-3.5" />
-              {t("pages:toolbox.tools.use_as_input")}
-              <span className="ml-1 text-[10px] opacity-70">→ NEXT</span>
-            </motion.button>
-          </>
-        ) : null}
-      </div>
     </motion.div>
   );
 }
@@ -697,13 +660,6 @@ export default function ToolboxPage() {
     if (next === inputTab) return;
     setInputTab(next);
     setText("");
-    setSelectedHistoryId(null);
-  };
-
-  const useToolOutputAsInput = (output: string) => {
-    setInputTab("text");
-    setRevertSnapshot(text);
-    setTextRaw(output);
     setSelectedHistoryId(null);
   };
 
@@ -798,7 +754,6 @@ export default function ToolboxPage() {
                 tool={activeTool}
                 text={text}
                 hasInput={hasText}
-                onUseAsInput={useToolOutputAsInput}
               />
             </AnimatePresence>
           </div>

@@ -10,6 +10,7 @@
 //   - REST v3:    TC3-HMAC-SHA256，按官方 4 步派生（Date → Service → tc3_request → Signature）
 // 详见 signature.rs。
 
+pub mod cos;
 pub mod file;
 pub mod realtime;
 pub mod realtime_session;

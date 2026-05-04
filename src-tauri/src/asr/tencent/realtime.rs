@@ -111,6 +111,7 @@ impl std::error::Error for ParseError {}
 
 /// 错误码 → 稳定字符串（前端按串路由：unauthenticated / quota_exceeded / 等）。
 /// 错误码语义见 docs/tencent-asr/websocket-realtime-asr.md §"错误码"。
+#[allow(dead_code)] // backends/tencent.rs 目前自己 match code；该 helper 是官方错误码全量对照表
 pub fn classify_error_code(code: i32) -> &'static str {
     match code {
         4002 => "unauthenticated",                // 鉴权失败（SecretId / 签名错）

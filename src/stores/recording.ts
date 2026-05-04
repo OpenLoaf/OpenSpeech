@@ -29,6 +29,7 @@ import {
   transcribeRecordingFile,
 } from "@/lib/stt";
 import { buildProviderRef } from "@/lib/dictation-provider-ref";
+import { resolveDictationLang } from "@/lib/dictation-lang";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
 import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
@@ -103,6 +104,12 @@ interface RecordingStore {
   /** DEV-ONLY：把任意文本通过 inject_type 写到当前焦点应用；不走录音/转录/refine。 */
   debugReinject: (text: string) => Promise<void>;
 }
+
+// 当前 dictation.lang resolve 后给后端的稳定 ISO code（含 follow_interface 推导）。
+const currentDictationLang = (): string => {
+  const s = useSettingsStore.getState();
+  return resolveDictationLang(s.dictation.lang, s.general.interfaceLang);
+};
 
 const getEffectiveSegmentMode = (): AsrSegmentMode =>
   useRecordingStore.getState().segmentModeOverride ??
@@ -340,6 +347,9 @@ const humanizeSttError = (raw: unknown): string => {
     return i18n.t("overlay:error.aliyun_quota_exceeded");
   }
   // 阿里 BYOK 文件转写（PR-7）：OSS 上传 + filetrans 异步任务两段错误链路。
+  if (msg.includes("aliyun_oss_upload_failed")) {
+    return i18n.t("transcribe.aliyun_oss_upload_failed", { ns: "pages" });
+  }
   if (msg.includes("aliyun_file_too_large")) {
     return i18n.t("overlay:error.aliyun_file_too_large");
   }
@@ -381,6 +391,24 @@ const humanizeSttError = (raw: unknown): string => {
   }
   if (msg.includes("tencent_network_error")) {
     return i18n.t("overlay:error.stt_network");
+  }
+  if (msg.includes("tencent_cos_bucket_required")) {
+    return i18n.t("transcribe.tencent_cos_bucket_required", { ns: "pages" });
+  }
+  if (msg.includes("tencent_cos_upload_failed")) {
+    return i18n.t("transcribe.tencent_cos_upload_failed", { ns: "pages" });
+  }
+  if (msg.includes("tencent_cos_unauthenticated")) {
+    return i18n.t("overlay:error.tencent_cos_unauthenticated");
+  }
+  if (msg.includes("tencent_cos_forbidden")) {
+    return i18n.t("overlay:error.tencent_cos_forbidden");
+  }
+  if (msg.includes("tencent_cos_network")) {
+    return i18n.t("overlay:error.tencent_cos_network");
+  }
+  if (msg.includes("tencent_cos_unknown")) {
+    return i18n.t("overlay:error.tencent_cos_unknown");
   }
   if (msg.includes("not authenticated")) return i18n.t("overlay:error.stt_not_authenticated");
   if (msg.includes("HTTP error: 5")) return i18n.t("overlay:error.stt_5xx");
@@ -447,7 +475,11 @@ const startRecordingSession = (id: string) => {
       // 也省下一条 WS 心跳。WS 仅 REALTIME 模式开。
       const segmentMode = getEffectiveSegmentMode();
       if (segmentMode !== "REALTIME") return;
-      startSttSession({ mode: "auto", provider: buildProviderRef() }).catch((e) => {
+      startSttSession({
+        mode: "auto",
+        provider: buildProviderRef(),
+        lang: currentDictationLang(),
+      }).catch((e) => {
         const raw = String(e ?? "");
         if (isAuthError(raw)) {
           handleAuthLost();
@@ -546,6 +578,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           const r = await transcribeRecordingFile({
             audioPath: rec.audio_path,
             durationMs: rec.duration_ms,
+            lang: currentDictationLang(),
             provider: buildProviderRef(),
           });
           text = r.text;
@@ -763,22 +796,15 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // simulateCancel/discardRecording 的语义保持一致（取消即不留 history）；
   // 录音文件仍然在 rec.audio_path，以后想做"取消也保留音频"再单独走 abort 路径。
   if (rec && isInjectFlowActive()) {
-    const asrSource: AsrSource =
-      useSettingsStore.getState().general.dictationSource === "BYO"
-        ? "byo"
-        : realtimeDegradedToFile
-          ? "saas-rest"
-          : "saas-realtime";
+    const asrSource: AsrSource = realtimeDegradedToFile
+      ? "saas-rest"
+      : "saas-realtime";
     // PR-3：providerKind 优先取 Rust dispatch 给的真值（stt-provider-resolved
     // 事件 / transcribe 返回值）；缺失时按当前模式兜默认（兼容老调用 + degrade
     // 但 transcribe 出错没拿到 kind 的极端路径）。
     const providerKind =
       resolvedProviderKindForCurrentSession ??
-      (useSettingsStore.getState().general.dictationSource === "BYO"
-        ? null
-        : segmentMode === "REALTIME"
-          ? "saas-realtime"
-          : "saas-file");
+      (segmentMode === "REALTIME" ? "saas-realtime" : "saas-file");
     await useHistoryStore.getState().add({
       type: "dictation",
       text: text || transcriptPlaceholder(),
@@ -953,11 +979,7 @@ const abortAndSaveHistory = async (): Promise<void> => {
     const segmentMode = getEffectiveSegmentMode();
     const providerKind =
       resolvedProviderKindForCurrentSession ??
-      (useSettingsStore.getState().general.dictationSource === "BYO"
-        ? null
-        : segmentMode === "REALTIME"
-          ? "saas-realtime"
-          : "saas-file");
+      (segmentMode === "REALTIME" ? "saas-realtime" : "saas-file");
     try {
       await useHistoryStore.getState().add({
         type: "dictation",
@@ -1338,23 +1360,17 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           playStartCue();
 
           // Gate：转写后端必须至少一条可用，否则录了一段没人转的废录音是浪费。
-          //   saasReady = 已登录 OpenLoaf（默认 dictationSource=SAAS 走云端）
-          //   byoReady  = dictationSource=BYO 且填了 endpoint（用户自带 REST STT）
-          // 两者皆无则拦截：弹登录窗口（同时给"使用自己的 STT 端点"按钮跳设置）。
+          // 当前只剩 SAAS 路径：已登录 OpenLoaf 即可（custom 直连通道也复用同一登录态）。
           // 主窗 / overlay 都会跑到这里：overlay 没 init auth/settings，默认值
           // 也会判 blocked → return；openLogin 在 overlay 里写自己 store 没渲染 dialog，
           // 等价于 no-op，主窗弹窗由主窗 store 驱动。
           let auth = useAuthStore.getState();
-          const settingsGeneral = useSettingsStore.getState().general;
           let saasReady = auth.isAuthenticated;
-          const byoReady =
-            settingsGeneral.dictationSource === "BYO" &&
-            settingsGeneral.endpoint.trim() !== "";
           // 未登录但 keychain 里可能还有 refresh_token（启动时网络断或本地后端
           // 没起导致 bootstrap 没恢复成功）——把"按下快捷键"当作主动重试信号，
           // 静默尝试用 refresh_token 换一次 access_token。1.5s 超时兜底，避免
           // 服务器很慢时让用户感觉"按了没反应"；超时后走原弹登录 dialog 路径。
-          if (!saasReady && !byoReady) {
+          if (!saasReady) {
             const recovered = await Promise.race([
               invoke<boolean>("openloaf_try_recover").catch(() => false),
               new Promise<boolean>((r) => setTimeout(() => r(false), 1500)),
@@ -1364,7 +1380,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               saasReady = auth.isAuthenticated;
             }
           }
-          if (!saasReady && !byoReady) {
+          if (!saasReady) {
             console.log("[recording] gate blocked: no STT backend available");
             // 只有主窗"完全藏起来"（hide 到 tray / 最小化）时才推悬浮条 toast——
             // 此时用户多半在别的 app 里输入，强行拉前台打扰。其余只要主窗 visible
@@ -1397,7 +1413,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
 
           // 网络 gate：SAAS 路径必须连得上互联网，否则 realtime WebSocket 握手
-          // 必然失败、本地录音也无人转写。BYO 用户允许 endpoint 指 localhost / LAN，跳过。
+          // 必然失败、本地录音也无人转写。
           // 双重判定：
           //   1) 同步 `navigator.onLine === false` —— 系统层链路就断了，必拦，最快
           //   2) 异步 `invoke("openloaf_health_check")` —— SDK 0.2.7+ 通过
@@ -1407,8 +1423,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           //      preparing/recording 阶段则 cancel + 弹窗。
           // 与登录 gate 一样，overlay 也会跑到这里——openNoInternet 写自己 store
           // 不渲染 dialog 等价 no-op，主窗 dialog 由主窗 ui store 驱动。
-          const usingSaas =
-            saasReady && settingsGeneral.dictationSource !== "BYO";
+          const usingSaas = saasReady;
           if (
             usingSaas &&
             typeof navigator !== "undefined" &&
@@ -1417,8 +1432,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             console.warn("[recording] gate blocked: offline (SAAS path) — silent");
             return;
           }
+          // custom 听写通道直连 vendor，不经过 SaaS — 跳过 health probe，避免无意义网络开销。
+          const dictationMode = useSettingsStore.getState().dictation.mode;
           // 异步健康探针——只在主窗执行（IS_MAIN_WINDOW）以避免重复 invoke。
-          if (usingSaas && IS_MAIN_WINDOW) {
+          if (usingSaas && dictationMode !== "custom" && IS_MAIN_WINDOW) {
             invoke<boolean>("openloaf_health_check")
               .then((healthy) => {
                 if (healthy) return;
@@ -1960,6 +1977,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           const r = await transcribeRecordingFile({
             audioPath,
             durationMs,
+            lang: currentDictationLang(),
             provider: buildProviderRef(),
           });
           text = r.text ?? "";

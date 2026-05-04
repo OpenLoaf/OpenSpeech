@@ -11,7 +11,14 @@ import {
   error as logError,
 } from "@tauri-apps/plugin-log";
 import i18next from "i18next";
-import { useSettingsStore, DEFAULT_AI_SYSTEM_PROMPTS } from "@/stores/settings";
+import {
+  useSettingsStore,
+  DEFAULT_AI_SYSTEM_PROMPTS,
+  DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS,
+  DEFAULT_AI_POLISH_SYSTEM_PROMPTS,
+  DEFAULT_POLISH_SCENARIOS,
+  type PolishScenario,
+} from "@/stores/settings";
 import { resolveLang } from "@/i18n";
 import { useUIStore } from "@/stores/ui";
 import {
@@ -379,19 +386,6 @@ function GeneralTab() {
           ]}
         />
       </Row>
-      <Row label={t("general.dictation_lang")}>
-        <Select
-          value={general.dictationLang}
-          onChange={(v) => void setGeneral("dictationLang", v)}
-          options={[
-            { value: "自动检测", label: t("common:value.auto_detect") },
-            { value: "ZH", label: "ZH" },
-            { value: "EN", label: "EN" },
-            { value: "JA", label: "JA" },
-          ]}
-        />
-      </Row>
-
       {/* Behavior */}
       <SectionTitle>{t("section.behavior")}</SectionTitle>
       <Row label={t("general.launch_startup")}>
@@ -489,6 +483,7 @@ function DictationTab() {
   const setAiRefineEnabled = useSettingsStore((s) => s.setAiRefineEnabled);
   const dictation = useSettingsStore((s) => s.dictation);
   const setDictationMode = useSettingsStore((s) => s.setDictationMode);
+  const setDictationLang = useSettingsStore((s) => s.setDictationLang);
   const addDictationProvider = useSettingsStore((s) => s.addDictationProvider);
   const updateDictationProvider = useSettingsStore(
     (s) => s.updateDictationProvider,
@@ -612,7 +607,84 @@ function DictationTab() {
 
   return (
     <div>
-      {/* Dictation provider（听写云通道）*/}
+      {/* Audio */}
+      <SectionTitle>{t("section.audio")}</SectionTitle>
+      <Row label={t("general.input_device")}>
+        <Select
+          value={general.inputDevice}
+          onChange={(v) => void setGeneral("inputDevice", v)}
+          className="min-w-[18rem]"
+          options={deviceOptions}
+        />
+      </Row>
+      <Row
+        label={t("general.input_level")}
+        hint={
+          effectiveName
+            ? t("general.input_level_hint_listening", { name: effectiveName })
+            : t("general.input_level_hint")
+        }
+      >
+        <LevelMeter peak={peak} />
+      </Row>
+      <Row label={t("general.cue_sound")}>
+        <Switch
+          checked={general.cueSound}
+          onChange={(v) => void setGeneral("cueSound", v)}
+        />
+      </Row>
+      <Row label={t("dictation_lang.label")} hint={t("dictation_lang.hint")}>
+        <Select
+          value={dictation.lang}
+          onChange={(v) => void setDictationLang(v as typeof dictation.lang)}
+          options={[
+            { value: "follow_interface", label: t("dictation_lang.follow_interface") },
+            { value: "auto", label: t("dictation_lang.auto") },
+            { value: "zh", label: t("dictation_lang.zh") },
+            { value: "en", label: t("dictation_lang.en") },
+            { value: "ja", label: t("dictation_lang.ja") },
+            { value: "ko", label: t("dictation_lang.ko") },
+            { value: "yue", label: t("dictation_lang.yue") },
+          ]}
+        />
+      </Row>
+
+      {/* Dictation mode */}
+      <SectionTitle>{t("section.asr_segment")}</SectionTitle>
+      <div className="py-3">
+        <RadioBlock
+          value={general.asrSegmentMode}
+          onChange={(v) => void setGeneral("asrSegmentMode", v)}
+          options={[
+            {
+              value: "REALTIME",
+              label: t("asr_segment.realtime_label"),
+              hint: t("asr_segment.realtime_hint"),
+            },
+            {
+              value: "UTTERANCE",
+              label: t("asr_segment.utterance_label"),
+              hint: t("asr_segment.utterance_hint"),
+            },
+          ]}
+        />
+      </div>
+      <Row
+        label={t("asr_segment.ai_refine_toggle.label")}
+        hint={
+          general.asrSegmentMode === "REALTIME"
+            ? t("asr_segment.ai_refine_toggle.disabled_in_realtime")
+            : t("asr_segment.ai_refine_toggle.hint")
+        }
+      >
+        <Switch
+          checked={general.asrSegmentMode !== "REALTIME" && aiRefine.enabled}
+          disabled={general.asrSegmentMode === "REALTIME"}
+          onChange={(v) => void setAiRefineEnabled(v)}
+        />
+      </Row>
+
+      {/* Dictation provider（听写通道）*/}
       <SectionTitle>{t("dictation_provider.section_mode")}</SectionTitle>
       <div className="py-3">
         <RadioBlock
@@ -703,80 +775,6 @@ function DictationTab() {
         </>
       )}
 
-      {/* Dictation mode */}
-      <SectionTitle>{t("section.asr_segment")}</SectionTitle>
-      <div className="py-3">
-        <RadioBlock
-          value={general.asrSegmentMode}
-          onChange={(v) => void setGeneral("asrSegmentMode", v)}
-          options={[
-            {
-              value: "REALTIME",
-              label: t("asr_segment.realtime_label"),
-              hint: t("asr_segment.realtime_hint"),
-            },
-            {
-              value: "UTTERANCE",
-              label: t("asr_segment.utterance_label"),
-              hint: t("asr_segment.utterance_hint"),
-            },
-          ]}
-        />
-      </div>
-      <Row
-        label={t("asr_segment.ai_refine_toggle.label")}
-        hint={
-          general.asrSegmentMode === "REALTIME"
-            ? t("asr_segment.ai_refine_toggle.disabled_in_realtime")
-            : t("asr_segment.ai_refine_toggle.hint")
-        }
-      >
-        <Switch
-          checked={general.asrSegmentMode !== "REALTIME" && aiRefine.enabled}
-          disabled={general.asrSegmentMode === "REALTIME"}
-          onChange={(v) => void setAiRefineEnabled(v)}
-        />
-      </Row>
-
-      {/* Audio */}
-      <SectionTitle>{t("section.audio")}</SectionTitle>
-      <Row label={t("general.input_device")}>
-        <Select
-          value={general.inputDevice}
-          onChange={(v) => void setGeneral("inputDevice", v)}
-          className="min-w-[18rem]"
-          options={deviceOptions}
-        />
-      </Row>
-      <Row
-        label={t("general.input_level")}
-        hint={
-          effectiveName
-            ? t("general.input_level_hint_listening", { name: effectiveName })
-            : t("general.input_level_hint")
-        }
-      >
-        <LevelMeter peak={peak} />
-      </Row>
-      <Row label={t("general.cue_sound")}>
-        <Switch
-          checked={general.cueSound}
-          onChange={(v) => void setGeneral("cueSound", v)}
-        />
-      </Row>
-
-      {/* Text injection */}
-      <SectionTitle>{t("section.text_injection")}</SectionTitle>
-      <Row
-        label={t("general.restore_clipboard")}
-        hint={t("general.restore_clipboard_hint")}
-      >
-        <Switch
-          checked={general.restoreClipboard}
-          onChange={(v) => void setGeneral("restoreClipboard", v)}
-        />
-      </Row>
-
       {!loaded ? (
         <div className="mt-6 font-mono text-xs text-te-light-gray/70">
           {t("general.loading")}
@@ -795,10 +793,39 @@ function AiTab() {
   const removeAiProvider = useSettingsStore((s) => s.removeAiProvider);
   const setActiveAiProvider = useSettingsStore((s) => s.setActiveAiProvider);
   const setAiSystemPrompt = useSettingsStore((s) => s.setAiSystemPrompt);
+  const setAiTranslationSystemPrompt = useSettingsStore(
+    (s) => s.setAiTranslationSystemPrompt,
+  );
+  const setAiPolishSystemPrompt = useSettingsStore(
+    (s) => s.setAiPolishSystemPrompt,
+  );
+  const setPolishScenarios = useSettingsStore((s) => s.setPolishScenarios);
   const setAiIncludeHistory = useSettingsStore((s) => s.setAiIncludeHistory);
 
   return (
     <div>
+      <AiSystemPromptSection
+        refineCustom={aiRefine.customSystemPrompt}
+        onRefineChange={(v) => void setAiSystemPrompt(v)}
+        translationCustom={aiRefine.customTranslationSystemPrompt}
+        onTranslationChange={(v) => void setAiTranslationSystemPrompt(v)}
+        polishCustom={aiRefine.customPolishSystemPrompt}
+        onPolishChange={(v) => void setAiPolishSystemPrompt(v)}
+        polishScenarios={aiRefine.customPolishScenarios}
+        onPolishScenariosChange={(v) => void setPolishScenarios(v)}
+      />
+
+      <SectionTitle>{t("ai.section_history")}</SectionTitle>
+      <Row
+        label={t("ai.include_history")}
+        hint={t("ai.include_history_hint")}
+      >
+        <Switch
+          checked={aiRefine.includeHistory}
+          onChange={(v) => void setAiIncludeHistory(v)}
+        />
+      </Row>
+
       <SectionTitle>{t("ai.section_mode")}</SectionTitle>
       <div className="py-3">
         <RadioBlock
@@ -863,49 +890,93 @@ function AiTab() {
           </div>
         </>
       )}
-
-      <AiSystemPromptSection
-        custom={aiRefine.customSystemPrompt}
-        onChange={(v) => void setAiSystemPrompt(v)}
-      />
-
-
-      <SectionTitle>{t("ai.section_history")}</SectionTitle>
-      <Row
-        label={t("ai.include_history")}
-        hint={t("ai.include_history_hint")}
-      >
-        <Switch
-          checked={aiRefine.includeHistory}
-          onChange={(v) => void setAiIncludeHistory(v)}
-        />
-      </Row>
     </div>
   );
 }
 
+type PromptKind = "refine" | "translate" | "polish";
+
 function AiSystemPromptSection({
-  custom,
-  onChange,
+  refineCustom,
+  onRefineChange,
+  translationCustom,
+  onTranslationChange,
+  polishCustom,
+  onPolishChange,
+  polishScenarios,
+  onPolishScenariosChange,
 }: {
-  custom: string | null;
-  onChange: (value: string | null) => void;
+  refineCustom: string | null;
+  onRefineChange: (value: string | null) => void;
+  translationCustom: string | null;
+  onTranslationChange: (value: string | null) => void;
+  polishCustom: string | null;
+  onPolishChange: (value: string | null) => void;
+  polishScenarios: PolishScenario[] | null;
+  onPolishScenariosChange: (value: PolishScenario[] | null) => void;
 }) {
   const { t } = useTranslation("settings");
   const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
   const lang = resolveLang(interfaceLang);
-  const displayValue = custom ?? DEFAULT_AI_SYSTEM_PROMPTS[lang];
+  const [kind, setKind] = useState<PromptKind>("refine");
+
+  const custom =
+    kind === "refine"
+      ? refineCustom
+      : kind === "translate"
+        ? translationCustom
+        : polishCustom;
+  const onChange =
+    kind === "refine"
+      ? onRefineChange
+      : kind === "translate"
+        ? onTranslationChange
+        : onPolishChange;
+  const defaultValue =
+    kind === "refine"
+      ? DEFAULT_AI_SYSTEM_PROMPTS[lang]
+      : kind === "translate"
+        ? DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS[lang]
+        : DEFAULT_AI_POLISH_SYSTEM_PROMPTS[lang];
+  const displayValue = custom ?? defaultValue;
   const isCustom = custom !== null;
+
+  const tabs: { id: PromptKind; label: string }[] = [
+    { id: "refine", label: t("ai.prompt_tab_refine") },
+    { id: "translate", label: t("ai.prompt_tab_translate") },
+    { id: "polish", label: t("ai.prompt_tab_polish") },
+  ];
+
   return (
     <>
       <SectionTitle>{t("ai.section_prompts")}</SectionTitle>
       <div className="-mt-2 mb-3 px-1 font-mono text-[11px] leading-relaxed text-te-light-gray">
         {t("ai.prompts_hint")}
       </div>
+      <div className="mb-3 flex items-center gap-px border border-te-gray/60">
+        {tabs.map((tab) => {
+          const active = tab.id === kind;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setKind(tab.id)}
+              className={cn(
+                "px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] transition-colors",
+                active
+                  ? "bg-te-accent text-te-bg"
+                  : "bg-te-bg text-te-light-gray hover:text-te-fg",
+              )}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
       <textarea
         value={displayValue}
         onChange={(e) => onChange(e.target.value)}
-        rows={5}
+        rows={8}
         className="w-full resize-y border border-te-gray/40 bg-te-surface p-3 font-mono text-xs text-te-fg outline-none transition-colors focus:border-te-accent"
       />
       <div className="mt-2 flex items-center justify-end">
@@ -918,7 +989,128 @@ function AiSystemPromptSection({
           {t("ai.prompt_reset")}
         </button>
       </div>
+
+      {kind === "polish" ? (
+        <PolishScenariosEditor
+          scenarios={polishScenarios}
+          onChange={onPolishScenariosChange}
+        />
+      ) : null}
     </>
+  );
+}
+
+function PolishScenariosEditor({
+  scenarios,
+  onChange,
+}: {
+  scenarios: PolishScenario[] | null;
+  onChange: (next: PolishScenario[] | null) => void;
+}) {
+  const { t } = useTranslation("settings");
+  const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
+  const lang = resolveLang(interfaceLang);
+  const effective = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
+  const isCustom = scenarios !== null;
+
+  const updateAt = (idx: number, patch: Partial<PolishScenario>) => {
+    const base = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
+    const next = base.map((s, i) => (i === idx ? { ...s, ...patch } : s));
+    onChange(next);
+  };
+  const removeAt = (idx: number) => {
+    const base = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
+    const next = base.filter((_, i) => i !== idx);
+    onChange(next);
+  };
+  const addNew = () => {
+    const base = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `scn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const next: PolishScenario[] = [
+      ...base,
+      {
+        id,
+        name: t("ai.polish_scenario_default_name"),
+        instruction: "",
+      },
+    ];
+    onChange(next);
+  };
+
+  return (
+    <div className="mt-6">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+            {t("ai.polish_scenarios_title")}
+          </div>
+          <div className="mt-1 font-sans text-xs text-te-light-gray/80">
+            {t("ai.polish_scenarios_hint")}
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={!isCustom}
+          onClick={() => onChange(null)}
+          className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors enabled:hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {t("ai.prompt_reset")}
+        </button>
+      </div>
+
+      {effective.length === 0 ? (
+        <div className="border border-dashed border-te-gray/40 px-4 py-6 text-center font-mono text-xs text-te-light-gray">
+          {t("ai.polish_scenarios_empty")}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {effective.map((s, idx) => (
+            <div
+              key={s.id}
+              className="flex flex-col gap-2 border border-te-gray/40 bg-te-surface/50 px-3 py-3"
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={s.name}
+                  onChange={(e) => updateAt(idx, { name: e.target.value })}
+                  className="flex-1 border border-te-gray/40 bg-te-surface px-3 py-1.5 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeAt(idx)}
+                  className="inline-flex items-center gap-1 border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-red-400 hover:text-red-400"
+                >
+                  <Trash2 className="size-3" />
+                  {t("ai.polish_scenario_remove")}
+                </button>
+              </div>
+              <textarea
+                value={s.instruction}
+                onChange={(e) => updateAt(idx, { instruction: e.target.value })}
+                rows={3}
+                placeholder={t("ai.polish_scenario_instruction_placeholder") ?? ""}
+                className="w-full resize-y border border-te-gray/40 bg-te-surface p-2 font-mono text-xs text-te-fg outline-none transition-colors focus:border-te-accent"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={addNew}
+          className="inline-flex items-center gap-2 border border-te-gray/60 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+        >
+          <Plus className="size-3.5" />
+          {t("ai.polish_scenario_add")}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1189,6 +1381,7 @@ function DictationProviderCard({
               region: provider.tencentRegion ?? null,
               secretId: tencentSecretId,
               secretKey: tencentSecretKey,
+              cosBucket: provider.tencentCosBucket ?? null,
             },
       );
       if (result.ok) {
@@ -1280,16 +1473,38 @@ function DictationProviderCard({
               label={t("dictation_provider.tencent_app_id")}
               value={provider.tencentAppId ?? ""}
               onChange={(v) => onUpdate({ tencentAppId: v })}
+              required
             />
             <LabeledInput
               label={t("dictation_provider.tencent_region")}
               value={provider.tencentRegion ?? ""}
               onChange={(v) => onUpdate({ tencentRegion: v })}
+              required
             />
           </div>
           <div>
             <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+              {t("dictation_provider.tencent_cos_bucket_label")}
+              <RequiredMark />
+            </div>
+            <input
+              type="text"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              placeholder={t("dictation_provider.tencent_cos_bucket_placeholder") ?? ""}
+              value={provider.tencentCosBucket ?? ""}
+              onChange={(e) => onUpdate({ tencentCosBucket: e.target.value })}
+              className="w-full border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
+            />
+            <div className="mt-1 font-mono text-[11px] text-te-light-gray/80">
+              {t("dictation_provider.tencent_cos_bucket_hint")}
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
               {t("dictation_provider.tencent_secret_id")}
+              <RequiredMark />
             </div>
             <input
               type="text"
@@ -1308,6 +1523,7 @@ function DictationProviderCard({
           <div>
             <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
               {t("dictation_provider.tencent_secret_key")}
+              <RequiredMark />
             </div>
             <input
               type="password"
@@ -1328,6 +1544,7 @@ function DictationProviderCard({
         <div>
           <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
             {t("dictation_provider.aliyun_api_key")}
+            <RequiredMark />
           </div>
           <input
             type="password"
@@ -1348,19 +1565,26 @@ function DictationProviderCard({
   );
 }
 
+function RequiredMark() {
+  return <span className="ml-1 text-red-400">*</span>;
+}
+
 function LabeledInput({
   label,
   value,
   onChange,
+  required,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  required?: boolean;
 }) {
   return (
     <div>
       <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
         {label}
+        {required ? <RequiredMark /> : null}
       </div>
       <input
         type="text"

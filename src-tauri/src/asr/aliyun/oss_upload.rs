@@ -30,6 +30,7 @@ pub enum OssUploadError {
 }
 
 impl OssUploadError {
+    #[allow(dead_code)] // 与 FileTransError::code 对齐；前端按 Display 字符串路由
     pub fn code(&self) -> &'static str {
         match self {
             OssUploadError::Unauthenticated(_) => "aliyun_unauthenticated",
@@ -79,7 +80,10 @@ pub struct UploadPolicy {
     pub x_oss_object_acl: String,
     #[serde(default)]
     pub x_oss_forbid_overwrite: String,
+    /// policy 有效期（秒）。当前实现不做缓存，每次走 filetrans 都重新 getPolicy；
+    /// 留下字段是为了将来想加 TTL 缓存时直接读这个值。
     #[serde(default)]
+    #[allow(dead_code)]
     pub expire_in_seconds: u64,
     #[serde(default)]
     pub max_file_size_mb: u64,
@@ -89,9 +93,10 @@ pub struct UploadPolicy {
 }
 
 impl UploadPolicy {
-    /// 根据 upload_host 推导 bucket（filetrans 协议要求传 oss://{bucket}/...）。
-    /// upload_host 形如 https://dashscope-instant.oss-cn-beijing.aliyuncs.com，
-    /// bucket = `dashscope-instant`。
+    /// 早期路径：从 upload_host 二级域名推导 bucket。现网 upload_host 已迁到物理桶
+    /// `dashscope-file-mgr`，filetrans 实际期望的是 `key` 第一段对应的逻辑桶
+    /// `dashscope-instant`，所以 oss_url_for 不再用这条路。保留方法当历史 reference。
+    #[allow(dead_code)]
     pub fn bucket_from_upload_host(&self) -> Option<String> {
         let host = self
             .upload_host

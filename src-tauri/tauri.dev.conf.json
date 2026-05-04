@@ -5,7 +5,9 @@
   "app": {
     "windows": [
       {
-        "title": "OpenSpeech Dev"
+        "title": "OpenSpeech Dev",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ]
   }

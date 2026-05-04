@@ -6,22 +6,26 @@ import { deleteAiProviderKey, deleteDictationProviderKey } from "@/lib/secrets";
 import {
   DEFAULT_AI_SYSTEM_PROMPTS,
   type AiPromptLang as AiPromptLangFromDefaults,
+  type PolishScenario,
 } from "@/lib/defaultAiPrompts";
 
 export {
   DEFAULT_AI_SYSTEM_PROMPTS,
+  DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS,
+  DEFAULT_AI_POLISH_SYSTEM_PROMPTS,
+  DEFAULT_POLISH_SCENARIOS,
   getEffectiveAiSystemPrompt,
+  getEffectiveAiTranslationSystemPrompt,
+  getEffectiveAiPolishSystemPrompt,
 } from "@/lib/defaultAiPrompts";
+export type { PolishScenario } from "@/lib/defaultAiPrompts";
 
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
-// 听写源：SAAS = OpenLoaf 云端（扣积分 / Pro+ 无限）；BYO = 用户自己的 REST 端点。
-// 详见 docs/subscription.md。
-export type DictationSource = "SAAS" | "BYO";
 // 听写模式：
 //   REALTIME — 实时听写，ASR partial 直接落文本（所见即所得，边说边出）
 //   AI       — AI 听写（默认），松开后取 final 文本，再经 LLM 自动润色/总结后一次性注入
@@ -42,17 +46,9 @@ export type UpdatePolicy = "PROMPT" | "AUTO" | "DISABLED";
 
 export interface GeneralSettings {
   interfaceLang: LanguagePref;
-  dictationLang: string;
   // 空串 = 跟随系统默认麦克风；非空 = cpal 枚举出的设备名
   inputDevice: string;
   cueSound: boolean;
-  // 听写源：SAAS 默认（需登录 OpenLoaf）；BYO 用户自带 REST 端点，不走 SaaS 不扣积分。
-  // UI 开关尚未接入（文档已描述），字段先在 schema 里占位。
-  dictationSource: DictationSource;
-  endpoint: string;
-  modelName: string;
-  timeout: string;
-  audioFormat: string;
   restoreClipboard: boolean;
   launchStartup: boolean;
   // 仅 macOS：是否在 Dock 中显示应用图标。off ⇒ 应用变成纯菜单栏应用（Accessory
@@ -101,6 +97,13 @@ export interface AiRefineSettings {
   activeCustomProviderId: string | null;
   // null = 跟随当前 UI 语言用 DEFAULT_AI_SYSTEM_PROMPTS；非 null = 用户自定义（不分语言）。
   customSystemPrompt: string | null;
+  // 翻译用的系统提示词；与 customSystemPrompt 同样的 null 语义。
+  customTranslationSystemPrompt: string | null;
+  // 润色用的系统提示词；与 customSystemPrompt 同样的 null 语义。
+  customPolishSystemPrompt: string | null;
+  // 润色场景（chip）。null = 跟随当前界面语言用 DEFAULT_POLISH_SCENARIOS；
+  // 非 null = 用户自定义条目（可空数组表示"用户主动清空"）。
+  customPolishScenarios: PolishScenario[] | null;
   includeHistory: boolean;
 }
 
@@ -118,6 +121,17 @@ export interface AiRefineSettings {
 export type DictationProviderMode = "saas" | "custom";
 export type DictationVendor = "tencent" | "aliyun";
 
+// 听写口语语种。follow_interface = 跟随界面语言（在调用层 resolve）；
+// auto = 显式让上游做语种检测；其它是稳定 ISO code，对齐 Rust parse_language。
+export type DictationLang =
+  | "follow_interface"
+  | "auto"
+  | "zh"
+  | "en"
+  | "ja"
+  | "ko"
+  | "yue";
+
 export interface DictationCustomProvider {
   id: string;
   /// 用户给这条 provider 起的别名，UI 展示用
@@ -127,12 +141,17 @@ export interface DictationCustomProvider {
   tencentAppId?: string;
   /// 腾讯录音文件接口要带 region（默认 ap-shanghai）。aliyun 留空。
   tencentRegion?: string;
+  /// 腾讯云 COS bucket 名（含 appid 后缀，如 myaudio-1234567890）。留空 = 走 base64
+  /// 上传，单文件 ≤5MB；填了 = 上传到 COS 解除限制，单文件 ≤512MB。
+  tencentCosBucket?: string;
 }
 
 export interface DictationSettings {
   mode: DictationProviderMode;
   customProviders: DictationCustomProvider[];
   activeCustomProviderId: string | null;
+  // 听写口语语种。默认 follow_interface（resolve 时按 interfaceLang 推导）。
+  lang: DictationLang;
 }
 
 interface PersistShape {
@@ -144,14 +163,8 @@ interface PersistShape {
 
 const DEFAULT_GENERAL: GeneralSettings = {
   interfaceLang: "system",
-  dictationLang: "自动检测",
   inputDevice: "",
   cueSound: true,
-  dictationSource: "SAAS",
-  endpoint: "",
-  modelName: "",
-  timeout: "30",
-  audioFormat: "WAV",
   restoreClipboard: true,
   launchStartup: false,
   showDockIcon: true,
@@ -174,6 +187,9 @@ const DEFAULT_AI_REFINE: AiRefineSettings = {
   customProviders: [],
   activeCustomProviderId: null,
   customSystemPrompt: null,
+  customTranslationSystemPrompt: null,
+  customPolishSystemPrompt: null,
+  customPolishScenarios: null,
   includeHistory: true,
 };
 
@@ -181,6 +197,7 @@ const DEFAULT_DICTATION: DictationSettings = {
   mode: "saas",
   customProviders: [],
   activeCustomProviderId: null,
+  lang: "follow_interface",
 };
 
 interface SettingsState {
@@ -200,8 +217,12 @@ interface SettingsState {
   removeAiProvider: (id: string) => Promise<void>;
   setActiveAiProvider: (id: string | null) => Promise<void>;
   setAiSystemPrompt: (value: string | null) => Promise<void>;
+  setAiTranslationSystemPrompt: (value: string | null) => Promise<void>;
+  setAiPolishSystemPrompt: (value: string | null) => Promise<void>;
+  setPolishScenarios: (value: PolishScenario[] | null) => Promise<void>;
   setAiIncludeHistory: (v: boolean) => Promise<void>;
   setDictationMode: (mode: DictationProviderMode) => Promise<void>;
+  setDictationLang: (lang: DictationLang) => Promise<void>;
   addDictationProvider: (provider: DictationCustomProvider) => Promise<void>;
   updateDictationProvider: (
     id: string,
@@ -353,12 +374,43 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
         ? r.enabled
         : DEFAULT_AI_REFINE.enabled;
 
+  const customTranslationSystemPrompt =
+    typeof r.customTranslationSystemPrompt === "string"
+      ? r.customTranslationSystemPrompt
+      : r.customTranslationSystemPrompt === null
+        ? null
+        : null;
+
+  const customPolishSystemPrompt =
+    typeof r.customPolishSystemPrompt === "string"
+      ? r.customPolishSystemPrompt
+      : r.customPolishSystemPrompt === null
+        ? null
+        : null;
+
+  let customPolishScenarios: PolishScenario[] | null;
+  if (Array.isArray(r.customPolishScenarios)) {
+    customPolishScenarios = r.customPolishScenarios.filter(
+      (s): s is PolishScenario =>
+        !!s &&
+        typeof s === "object" &&
+        typeof (s as PolishScenario).id === "string" &&
+        typeof (s as PolishScenario).name === "string" &&
+        typeof (s as PolishScenario).instruction === "string",
+    );
+  } else {
+    customPolishScenarios = null;
+  }
+
   return {
     enabled,
     mode: r.mode === "custom" ? "custom" : "saas",
     customProviders: providers,
     activeCustomProviderId: active,
     customSystemPrompt,
+    customTranslationSystemPrompt,
+    customPolishSystemPrompt,
+    customPolishScenarios,
     includeHistory: typeof r.includeHistory === "boolean" ? r.includeHistory : true,
   };
 }
@@ -382,9 +434,13 @@ function migrateV11(
 }
 
 // v10 → v11：加 dictation slice，原字段不动；老版本没有该字段时落默认（saas + 空 customProviders）。
-function mergeDictation(raw: unknown): DictationSettings {
-  if (!raw || typeof raw !== "object") return { ...DEFAULT_DICTATION };
-  const r = raw as Partial<DictationSettings>;
+// v12 → v13：把 general.dictationLang 搬到 dictation.lang，并把字面值统一成稳定 code。
+function mergeDictation(raw: unknown, langOverride?: DictationLang): DictationSettings {
+  const base: DictationSettings = { ...DEFAULT_DICTATION };
+  if (!raw || typeof raw !== "object") {
+    return { ...base, lang: langOverride ?? base.lang };
+  }
+  const r = raw as Partial<DictationSettings> & { lang?: unknown };
   const providers = Array.isArray(r.customProviders)
     ? r.customProviders.filter(
         (p): p is DictationCustomProvider =>
@@ -399,14 +455,66 @@ function mergeDictation(raw: unknown): DictationSettings {
     providers.some((p) => p.id === r.activeCustomProviderId)
       ? r.activeCustomProviderId
       : providers[0]?.id ?? null;
+  const lang = langOverride ?? normalizeDictationLang(r.lang);
   return {
     mode: r.mode === "custom" ? "custom" : "saas",
     customProviders: providers,
     activeCustomProviderId: active,
+    lang,
   };
 }
 
-async function readPersisted(): Promise<PersistShape> {
+// 把任意旧值（包括 v12 的 "自动检测" / "ZH" / "EN" / "JA"）规范成稳定 code。
+function normalizeDictationLang(v: unknown): DictationLang {
+  if (typeof v !== "string") return "follow_interface";
+  switch (v) {
+    case "follow_interface":
+    case "auto":
+    case "zh":
+    case "en":
+    case "ja":
+    case "ko":
+    case "yue":
+      return v;
+    case "自动检测":
+      return "follow_interface";
+    case "ZH":
+    case "zh-CN":
+    case "zh-TW":
+      return "zh";
+    case "EN":
+      return "en";
+    case "JA":
+      return "ja";
+    case "KO":
+      return "ko";
+    case "YUE":
+      return "yue";
+    default:
+      return "follow_interface";
+  }
+}
+
+// v12 → v13：把 general.dictationLang 搬到 dictation slice 并规范化字面值；
+// 同时清掉始终未接入 UI 的 BYO REST 僵尸字段（dictationSource / endpoint /
+// modelName / timeout / audioFormat），避免持久化里继续夹带死数据。
+function migrateV12(
+  oldGeneral: Record<string, unknown>,
+): { general: Record<string, unknown>; dictationLang: DictationLang } {
+  const cleaned = { ...oldGeneral };
+  const oldLang = cleaned.dictationLang;
+  delete cleaned.dictationLang;
+  delete cleaned.dictationSource;
+  delete cleaned.endpoint;
+  delete cleaned.modelName;
+  delete cleaned.timeout;
+  delete cleaned.audioFormat;
+  return { general: cleaned, dictationLang: normalizeDictationLang(oldLang) };
+}
+
+// 返回 { shape, migrated }——migrated=true 时调用方才需要 writePersisted；
+// 否则保持磁盘原样，避免多窗口（main + overlay）并发覆写丢数据。
+async function readPersisted(): Promise<{ shape: PersistShape; migrated: boolean }> {
   const s = await store();
   const raw = await s.get<unknown>("root");
   const defaults: PersistShape = {
@@ -415,17 +523,18 @@ async function readPersisted(): Promise<PersistShape> {
     aiRefine: { ...DEFAULT_AI_REFINE },
     dictation: { ...DEFAULT_DICTATION },
   };
-  if (!raw || typeof raw !== "object") return defaults;
+  if (!raw || typeof raw !== "object") return { shape: defaults, migrated: true };
   const r = raw as Partial<PersistShape> & { schemaVersion?: number };
 
   const finalize = (
     general: Partial<GeneralSettings>,
     forceEnabled?: boolean,
+    langOverride?: DictationLang,
   ): PersistShape => ({
     schemaVersion: SCHEMA_VERSION,
     general: { ...DEFAULT_GENERAL, ...general },
     aiRefine: mergeAiRefine((r as { aiRefine?: unknown }).aiRefine, forceEnabled),
-    dictation: mergeDictation((r as { dictation?: unknown }).dictation),
+    dictation: mergeDictation((r as { dictation?: unknown }).dictation, langOverride),
   });
 
   // 老 schema(<11) 都先按链迁到 v11 形态，再统一过 migrateV11 决定 aiRefine.enabled。
@@ -441,18 +550,32 @@ async function readPersisted(): Promise<PersistShape> {
     return g;
   };
 
-  if (typeof r.schemaVersion === "number" && r.schemaVersion >= 1 && r.schemaVersion <= 11) {
-    const v11General = runChainToV11(
-      (r.general ?? {}) as Record<string, unknown>,
-      r.schemaVersion,
-    );
-    const { general: v12General, aiRefineEnabled } = migrateV11(v11General);
-    return finalize(v12General, aiRefineEnabled);
+  if (typeof r.schemaVersion === "number" && r.schemaVersion >= 1 && r.schemaVersion <= 12) {
+    const fromVersion = r.schemaVersion;
+    const v11General =
+      fromVersion <= 11
+        ? runChainToV11((r.general ?? {}) as Record<string, unknown>, fromVersion)
+        : ((r.general ?? {}) as Record<string, unknown>);
+    let aiRefineEnabled: boolean | undefined;
+    let v12General = v11General;
+    if (fromVersion <= 11) {
+      const r11 = migrateV11(v11General);
+      v12General = r11.general as Record<string, unknown>;
+      aiRefineEnabled = r11.aiRefineEnabled;
+    }
+    const { general: v13General, dictationLang } = migrateV12(v12General);
+    return {
+      shape: finalize(v13General as Partial<GeneralSettings>, aiRefineEnabled, dictationLang),
+      migrated: true,
+    };
   }
 
-  if (r.schemaVersion !== SCHEMA_VERSION) return defaults;
+  if (r.schemaVersion !== SCHEMA_VERSION) return { shape: defaults, migrated: true };
 
-  return finalize((r.general ?? {}) as Partial<GeneralSettings>);
+  return {
+    shape: finalize((r.general ?? {}) as Partial<GeneralSettings>),
+    migrated: false,
+  };
 }
 
 async function writePersisted(shape: PersistShape): Promise<void> {
@@ -480,14 +603,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     loaded: false,
 
     init: async () => {
-      const p = await readPersisted();
+      const { shape, migrated } = await readPersisted();
       set({
-        general: p.general,
-        aiRefine: p.aiRefine,
-        dictation: p.dictation,
+        general: shape.general,
+        aiRefine: shape.aiRefine,
+        dictation: shape.dictation,
         loaded: true,
       });
-      await writePersisted(p);
+      console.info(
+        `[settings] init: providers=${shape.dictation.customProviders.length} ai_providers=${shape.aiRefine.customProviders.length} schemaVersion=${shape.schemaVersion} migrated=${migrated}`,
+      );
+      // 多窗口（main + overlay）会各自 init；只有发生迁移 / 默认补全时才回写，
+      // 否则不动磁盘——避免后启动的窗口拿旧 store 状态把别人刚保存的设置覆盖。
+      if (migrated) {
+        await writePersisted(shape);
+      }
     },
 
     setGeneral: async (key, value) => {
@@ -564,6 +694,27 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       await persist({ aiRefine: next });
     },
 
+    setAiTranslationSystemPrompt: async (value) => {
+      const cur = get().aiRefine;
+      const next = { ...cur, customTranslationSystemPrompt: value };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setAiPolishSystemPrompt: async (value) => {
+      const cur = get().aiRefine;
+      const next = { ...cur, customPolishSystemPrompt: value };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setPolishScenarios: async (value) => {
+      const cur = get().aiRefine;
+      const next = { ...cur, customPolishScenarios: value };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
     setAiIncludeHistory: async (v) => {
       const cur = get().aiRefine;
       const next = { ...cur, includeHistory: v };
@@ -573,6 +724,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     setDictationMode: async (mode) => {
       const next = { ...get().dictation, mode };
+      set({ dictation: next });
+      await persist({ dictation: next });
+    },
+
+    setDictationLang: async (lang) => {
+      const next = { ...get().dictation, lang };
       set({ dictation: next });
       await persist({ dictation: next });
     },

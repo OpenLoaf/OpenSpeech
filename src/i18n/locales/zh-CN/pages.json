@@ -1,6 +1,11 @@
 {
   "transcribe": {
-    "too_long_for_utterance": "单次录音超过 5 分钟，UTTERANCE 模式不支持，请切换到 REALTIME 模式"
+    "too_long_for_utterance": "单次录音超过 5 分钟，UTTERANCE 模式不支持，请切换到 REALTIME 模式",
+    "aliyun_oss_upload_failed": "阿里云 OSS 上传失败，凭证可能已过期或网络不稳定",
+    "aliyun_filetrans_failed": "阿里云文件转写任务失败，请稍后重试",
+    "aliyun_file_too_large": "文件超过 100 MB，已达到阿里云 OSS 单文件上限",
+    "tencent_cos_upload_failed": "腾讯云 COS 上传失败，请检查凭证与网络",
+    "tencent_cos_bucket_required": "需要先在听写设置中填写腾讯 COS 存储桶才能转写（旧凭证可能没填）"
   },
   "home": {
     "hero": {
@@ -248,6 +253,7 @@
       },
       "polish": {
         "scenario_label": "场景",
+        "scenarios_empty": "未配置场景",
         "examples": {
           "email": "邮件",
           "wechat": "微信",
