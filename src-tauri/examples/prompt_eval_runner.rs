@@ -36,6 +36,11 @@ struct Args {
     user_file: PathBuf,
     context_file: Option<PathBuf>,
     variant: Option<String>,
+    // custom 模式：三者必须同时给。给了就跳过 dev_session / SaaS variant 解析，
+    // 直接拿这三个值打 OpenAI 协议 chat completions，对齐 ai_refine 的 custom 分支。
+    custom_base_url: Option<String>,
+    custom_model: Option<String>,
+    custom_api_key: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -44,12 +49,18 @@ fn parse_args() -> Result<Args, String> {
     let mut user_file: Option<PathBuf> = None;
     let mut context_file: Option<PathBuf> = None;
     let mut variant: Option<String> = None;
+    let mut custom_base_url: Option<String> = None;
+    let mut custom_model: Option<String> = None;
+    let mut custom_api_key: Option<String> = None;
     while let Some(flag) = iter.next() {
         match flag.as_str() {
             "--system-file" => system_file = iter.next().map(PathBuf::from),
             "--user-file" => user_file = iter.next().map(PathBuf::from),
             "--context-file" => context_file = iter.next().map(PathBuf::from),
             "--variant" => variant = iter.next(),
+            "--custom-base-url" => custom_base_url = iter.next(),
+            "--custom-model" => custom_model = iter.next(),
+            "--custom-api-key" => custom_api_key = iter.next(),
             other => return Err(format!("unknown arg: {other}")),
         }
     }
@@ -58,7 +69,17 @@ fn parse_args() -> Result<Args, String> {
         user_file: user_file.ok_or("--user-file required")?,
         context_file,
         variant,
+        custom_base_url,
+        custom_model,
+        custom_api_key,
     })
+}
+
+struct Resolved {
+    url: String,
+    api_key: String,
+    model: String,
+    is_custom: bool,
 }
 
 #[tokio::main]
@@ -81,42 +102,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
 
-    let home = std::env::var("HOME")?;
-    let session_path = PathBuf::from(&home).join(".openspeech/dev_session.json");
-    if !session_path.exists() {
-        return Err(format!(
-            "missing {}\n→ 先跑一次 `pnpm tauri dev` 并登录",
-            session_path.display()
-        )
-        .into());
-    }
-    let sess: DevSession = serde_json::from_slice(&fs::read(&session_path)?)?;
+    let resolved = match (
+        args.custom_base_url.as_deref(),
+        args.custom_model.as_deref(),
+        args.custom_api_key.as_deref(),
+    ) {
+        (Some(base), Some(model), Some(key))
+            if !base.is_empty() && !model.is_empty() && !key.is_empty() =>
+        {
+            let url = format!(
+                "{}/chat/completions",
+                base.trim_end_matches('/').trim_end_matches("/chat/completions")
+            );
+            eprintln!("[runner] mode=custom base_url={base} model={model}");
+            Resolved {
+                url,
+                api_key: key.to_string(),
+                model: model.to_string(),
+                is_custom: true,
+            }
+        }
+        (None, None, None) => {
+            let home = std::env::var("HOME")?;
+            let session_path = PathBuf::from(&home).join(".openspeech/dev_session.json");
+            if !session_path.exists() {
+                return Err(format!(
+                    "missing {}\n→ 先跑一次 `pnpm tauri dev` 并登录",
+                    session_path.display()
+                )
+                .into());
+            }
+            let sess: DevSession = serde_json::from_slice(&fs::read(&session_path)?)?;
 
-    let cfg = SaaSClientConfig {
-        base_url: sess.base_url.clone(),
-        ..Default::default()
+            let cfg = SaaSClientConfig {
+                base_url: sess.base_url.clone(),
+                ..Default::default()
+            };
+            let client = SaaSClient::new(cfg);
+            client.set_access_token(Some(sess.access_token.clone()));
+
+            let variant_id = match args.variant {
+                Some(v) => v,
+                None => tokio::task::spawn_blocking({
+                    let client = client.clone();
+                    move || client.ai().fast_chat_variant()
+                })
+                .await??
+                .ok_or("no fast_chat_variant — server returned None")?
+                .id,
+            };
+
+            eprintln!("[runner] mode=saas base_url={}", sess.base_url);
+            eprintln!("[runner] variant={}", variant_id);
+
+            let url = format!(
+                "{}/api/v1/chat/completions",
+                sess.base_url.trim_end_matches('/')
+            );
+            Resolved {
+                url,
+                api_key: sess.access_token,
+                model: variant_id,
+                is_custom: false,
+            }
+        }
+        _ => {
+            return Err(
+                "custom 模式需同时给 --custom-base-url / --custom-model / --custom-api-key".into(),
+            );
+        }
     };
-    let client = SaaSClient::new(cfg);
-    client.set_access_token(Some(sess.access_token.clone()));
-
-    let variant_id = match args.variant {
-        Some(v) => v,
-        None => tokio::task::spawn_blocking({
-            let client = client.clone();
-            move || client.ai().fast_chat_variant()
-        })
-        .await??
-        .ok_or("no fast_chat_variant — server returned None")?
-        .id,
-    };
-
-    eprintln!("[runner] base_url={}", sess.base_url);
-    eprintln!("[runner] variant={}", variant_id);
-
-    let url = format!(
-        "{}/api/v1/chat/completions",
-        sess.base_url.trim_end_matches('/')
-    );
 
     let mut messages = vec![json!({ "role": "system", "content": system_prompt })];
     if let Some(ctx) = context_msg {
@@ -124,22 +179,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     messages.push(json!({ "role": "user", "content": user_text }));
 
-    let body = json!({
-        "variant": variant_id,
-        "model": variant_id,
-        "messages": messages,
-        "stream": true,
-        "stream_options": { "include_usage": true },
-        "temperature": 0,
-        "enable_thinking": false,
-    });
+    let body = if resolved.is_custom {
+        json!({
+            "model": resolved.model,
+            "messages": messages,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+            "temperature": 0,
+        })
+    } else {
+        json!({
+            "variant": resolved.model,
+            "model": resolved.model,
+            "messages": messages,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+            "temperature": 0,
+            "enable_thinking": false,
+        })
+    };
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
     let resp = http
-        .post(&url)
-        .bearer_auth(&sess.access_token)
+        .post(&resolved.url)
+        .bearer_auth(&resolved.api_key)
         .json(&body)
         .send()
         .await?;

@@ -18,6 +18,7 @@
 | [onboarding.md](./onboarding.md) | 首次启动向导 + 持久横条 |
 | [subscription.md](./subscription.md) | 订阅与计费规则 |
 | [speech-providers.md](./speech-providers.md) | 语音引擎 Provider 抽象规划（多服务商 / 开源适配器） |
+| [cloud-endpoints.md](./cloud-endpoints.md) | 云接口接入点 × 供应商能力矩阵（实现层快照）|
 
 ## 术语
 

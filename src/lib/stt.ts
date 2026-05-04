@@ -14,6 +14,7 @@
 //   "openspeech://asr-credits"  payload: number — 余额变化
 
 import { invoke } from "@tauri-apps/api/core";
+import type { ProviderRef } from "@/lib/dictation-provider-ref";
 
 // V4 OL-TL-RT-002 的 vadMode 透传：
 //   "auto"   → ServerVad（服务端按停顿切句，多段 Final）
@@ -21,9 +22,13 @@ import { invoke } from "@tauri-apps/api/core";
 export type SttMode = "auto" | "manual";
 
 export async function startSttSession(
-  options: { lang?: string; mode?: SttMode } = {},
+  options: { lang?: string; mode?: SttMode; provider?: ProviderRef } = {},
 ): Promise<void> {
-  await invoke("stt_start", { lang: options.lang, mode: options.mode });
+  await invoke("stt_start", {
+    lang: options.lang,
+    mode: options.mode,
+    provider: options.provider,
+  });
 }
 
 export async function finalizeSttSession(): Promise<string> {
@@ -46,17 +51,28 @@ export interface TranscribeFileResult {
   text: string;
   variant: "asrShort" | "asrLong";
   creditsConsumed: number;
+  /// 实际承载本次转写的 vendor + 通道（与 history.provider_kind 列对齐）。
+  /// PR-3 起由 Rust 直接给出，前端不再凭设置反推。
+  providerKind:
+    | "saas-realtime"
+    | "saas-file"
+    | "tencent-realtime"
+    | "tencent-file"
+    | "aliyun-realtime"
+    | "aliyun-file";
 }
 
 export async function transcribeRecordingFile(args: {
   audioPath: string;
   durationMs: number;
   lang?: string;
+  provider?: ProviderRef;
 }): Promise<TranscribeFileResult> {
   return await invoke<TranscribeFileResult>("transcribe_recording_file", {
     audioPath: args.audioPath,
     durationMs: args.durationMs,
     lang: args.lang,
+    provider: args.provider,
   });
 }
 

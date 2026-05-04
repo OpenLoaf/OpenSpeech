@@ -8,9 +8,9 @@
   },
   "tabs": {
     "general": "通用",
+    "hotkeys": "快捷键",
     "dictation": "听写",
     "model": "模型",
-    "personalization": "个性化",
     "ai": "AI",
     "about": "关于"
   },
@@ -26,8 +26,6 @@
     "text_injection": "文本注入",
     "behavior": "行为",
     "model_rest": "大模型（REST）",
-    "ai_enhance": "AI 增强",
-    "dictionary_learning": "词典学习",
     "build": "构建"
   },
   "general": {
@@ -73,8 +71,11 @@
     "realtime_hint": "服务端按停顿自动切句、录音过程中实时回填；适合长会议字幕、直播转写等无人值守场景。",
     "utterance_label": "整句听写",
     "utterance_hint": "整段录音视为一次完整对话，松开按键后再返回转写结果；模型有完整上下文，更准、更不易被停顿误切。",
-    "ai_refine_label": "AI 优化（推荐）",
-    "ai_refine_hint": "在「整句听写」基础上额外调用大模型整理：去口头禅、消重、识别自我修正、按顺序词列表化；同语言不翻译。"
+    "ai_refine_toggle": {
+      "label": "启用 AI 优化",
+      "hint": "在「整句听写」基础上调用大模型整理：去口头禅、消重、识别自我修正；同语言不翻译。",
+      "disabled_in_realtime": "实时转换模式下不可用"
+    }
   },
   "model": {
     "byo_unavailable_tag": "// BYO-MODEL · 暂未实现",
@@ -90,17 +91,6 @@
     "hide_key": "隐藏 API Key",
     "key_saved_toast": "API Key 已保存到系统密钥链",
     "key_save_failed_toast": "API Key 保存失败: {{error}}"
-  },
-  "personalization": {
-    "auto_polish": "AI 自动润色",
-    "auto_polish_hint": "移除口头禅与口误",
-    "context_style": "上下文风格",
-    "context_style_hint": "将前台应用名传给模型以适配语气",
-    "sensitivity": "学习灵敏度",
-    "sensitivity_hint": "控制新词汇被自动收集的积极程度",
-    "low": "低",
-    "normal": "标准",
-    "high": "高"
   },
   "ai": {
     "section_mode": "改写模式",
@@ -118,6 +108,12 @@
     "provider_active": "当前激活",
     "provider_set_active": "设为激活",
     "provider_remove": "删除",
+    "provider_test": "测试",
+    "provider_test_running": "测试中…",
+    "provider_test_pass": "测试通过",
+    "provider_test_fail": "测试失败：{{message}}",
+    "provider_test_missing_fields": "Base URL 或模型未填写",
+    "provider_test_empty_reply": "模型未返回内容",
     "provider_add": "新增供应商",
     "provider_default_name": "新供应商",
     "provider_default_base_url": "https://api.openai.com/v1",
@@ -129,6 +125,47 @@
     "include_history": "把最近 5 条历史一起发送",
     "include_history_hint": "把最近的 transcript 作为参考上下文，帮助模型沿用一致的语气与术语。",
     "minutes_ago": "分钟前"
+  },
+  "dictation_provider": {
+    "section_mode": "听写云通道",
+    "mode_saas_label": "OpenLoaf 云端（默认）",
+    "mode_saas_hint": "使用已登录账号走 OpenLoaf 托管的语音识别，按积分计费。",
+    "mode_custom_label": "自定义供应商",
+    "mode_custom_hint": "用自己的腾讯云 / 阿里云密钥直连厂商 API，不经过 SaaS。",
+    "section_providers": "自定义供应商",
+    "providers_empty": "尚未添加任何自定义供应商",
+    "add_tencent": "新增腾讯云",
+    "add_aliyun": "新增阿里云",
+    "vendor_tencent": "腾讯云",
+    "vendor_aliyun": "阿里云 DashScope",
+    "active_label": "当前激活 · {{vendor}}",
+    "set_active": "设为激活",
+    "remove": "删除",
+    "name_label": "名称",
+    "tencent_default_name": "腾讯云语音识别",
+    "tencent_app_id": "AppID",
+    "tencent_region": "区域（Region）",
+    "tencent_secret_id": "SecretId",
+    "tencent_secret_key": "SecretKey",
+    "tencent_credentials_hint": "凭证存储于系统密钥链；失去焦点时自动保存。可在腾讯云控制台 → API 密钥管理获取。",
+    "aliyun_default_name": "阿里云 DashScope",
+    "aliyun_api_key": "ApiKey",
+    "aliyun_api_key_hint": "存储于系统密钥链；失去焦点时自动保存。可在 DashScope 控制台获取。",
+    "test": "测试",
+    "test_running": "测试中…",
+    "test_pass": "测试通过：凭证有效",
+    "test_fail": "测试失败：{{message}}",
+    "test_missing_fields": "必填字段未填",
+    "test_code": {
+      "ok": "测试通过",
+      "unauthenticated": "鉴权失败：请检查 Secret/ApiKey 是否正确",
+      "service_not_enabled": "凭证有效，但语音识别服务尚未在该账号下开通",
+      "missing_fields": "必填字段未填",
+      "network": "网络不可达，请检查链路与防火墙",
+      "timeout": "请求超时，请稍后重试",
+      "rate_limited": "调用过于频繁",
+      "unknown": "未知错误"
+    }
   },
   "about": {
     "version": "版本",

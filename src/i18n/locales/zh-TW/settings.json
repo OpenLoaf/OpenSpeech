@@ -8,9 +8,9 @@
   },
   "tabs": {
     "general": "一般",
+    "hotkeys": "快速鍵",
     "dictation": "聽寫",
     "model": "模型",
-    "personalization": "個人化",
     "ai": "AI",
     "about": "關於"
   },
@@ -26,8 +26,6 @@
     "text_injection": "文字注入",
     "behavior": "行為",
     "model_rest": "大型模型（REST）",
-    "ai_enhance": "AI 增強",
-    "dictionary_learning": "詞典學習",
     "build": "建置"
   },
   "general": {
@@ -73,8 +71,11 @@
     "realtime_hint": "伺服器端依停頓自動切句，錄音過程中即時回填；適合長時間會議字幕、直播轉寫等無人值守情境。",
     "utterance_label": "整句聽寫",
     "utterance_hint": "整段錄音視為一次完整對話，放開按鍵後再回傳轉寫結果；模型擁有完整上下文，更準確且不易被停頓誤切。",
-    "ai_refine_label": "AI 優化（推薦）",
-    "ai_refine_hint": "在「整句聽寫」基礎上再呼叫大型模型整理：去口頭禪、消重、識別自我修正、依序詞列表化；同語言不翻譯。"
+    "ai_refine_toggle": {
+      "label": "啟用 AI 優化",
+      "hint": "在「整句聽寫」基礎上呼叫大型模型整理：去口頭禪、消重、識別自我修正；同語言不翻譯。",
+      "disabled_in_realtime": "即時轉換模式下不可用"
+    }
   },
   "model": {
     "byo_unavailable_tag": "// BYO-MODEL · 尚未實作",
@@ -90,17 +91,6 @@
     "hide_key": "隱藏 API Key",
     "key_saved_toast": "API Key 已儲存至系統金鑰圈",
     "key_save_failed_toast": "API Key 儲存失敗: {{error}}"
-  },
-  "personalization": {
-    "auto_polish": "AI 自動潤飾",
-    "auto_polish_hint": "移除口頭禪與口誤",
-    "context_style": "上下文風格",
-    "context_style_hint": "將前景應用程式名稱傳給模型以調整語氣",
-    "sensitivity": "學習靈敏度",
-    "sensitivity_hint": "控制新詞彙被自動收集的積極程度",
-    "low": "低",
-    "normal": "標準",
-    "high": "高"
   },
   "ai": {
     "section_mode": "改寫模式",
@@ -118,6 +108,12 @@
     "provider_active": "目前啟用",
     "provider_set_active": "設為啟用",
     "provider_remove": "刪除",
+    "provider_test": "測試",
+    "provider_test_running": "測試中…",
+    "provider_test_pass": "測試通過",
+    "provider_test_fail": "測試失敗：{{message}}",
+    "provider_test_missing_fields": "Base URL 或模型未填寫",
+    "provider_test_empty_reply": "模型未回傳內容",
     "provider_add": "新增供應商",
     "provider_default_name": "新供應商",
     "provider_default_base_url": "https://api.openai.com/v1",
@@ -129,6 +125,47 @@
     "include_history": "把最近 5 條歷史一同送出",
     "include_history_hint": "把最近的 transcript 作為參考上下文，協助模型沿用一致的語氣與術語。",
     "minutes_ago": "分鐘前"
+  },
+  "dictation_provider": {
+    "section_mode": "聽寫雲端通道",
+    "mode_saas_label": "OpenLoaf 雲端（預設）",
+    "mode_saas_hint": "使用已登入帳號走 OpenLoaf 託管的語音辨識，按點數計費。",
+    "mode_custom_label": "自訂供應商",
+    "mode_custom_hint": "用自己的騰訊雲 / 阿里雲金鑰直連廠商 API，不經 SaaS。",
+    "section_providers": "自訂供應商",
+    "providers_empty": "尚未新增任何自訂供應商",
+    "add_tencent": "新增騰訊雲",
+    "add_aliyun": "新增阿里雲",
+    "vendor_tencent": "騰訊雲",
+    "vendor_aliyun": "阿里雲 DashScope",
+    "active_label": "目前啟用 · {{vendor}}",
+    "set_active": "設為啟用",
+    "remove": "刪除",
+    "name_label": "名稱",
+    "tencent_default_name": "騰訊雲語音辨識",
+    "tencent_app_id": "AppID",
+    "tencent_region": "區域（Region）",
+    "tencent_secret_id": "SecretId",
+    "tencent_secret_key": "SecretKey",
+    "tencent_credentials_hint": "憑證儲存於系統金鑰鏈；失去焦點時自動儲存。可至騰訊雲主控台 → API 金鑰管理取得。",
+    "aliyun_default_name": "阿里雲 DashScope",
+    "aliyun_api_key": "ApiKey",
+    "aliyun_api_key_hint": "儲存於系統金鑰鏈；失去焦點時自動儲存。可至 DashScope 主控台取得。",
+    "test": "測試",
+    "test_running": "測試中…",
+    "test_pass": "測試通過：憑證有效",
+    "test_fail": "測試失敗：{{message}}",
+    "test_missing_fields": "必填欄位未填",
+    "test_code": {
+      "ok": "測試通過",
+      "unauthenticated": "驗證失敗：請檢查 Secret/ApiKey 是否正確",
+      "service_not_enabled": "憑證有效，但語音辨識服務尚未在此帳號下開通",
+      "missing_fields": "必填欄位未填",
+      "network": "網路不可達，請檢查連線與防火牆",
+      "timeout": "請求逾時，請稍後重試",
+      "rate_limited": "呼叫過於頻繁",
+      "unknown": "未知錯誤"
+    }
   },
   "about": {
     "version": "版本",

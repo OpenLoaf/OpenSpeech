@@ -24,7 +24,6 @@ import {
   ChevronDown,
   ExternalLink,
   Sliders,
-  Sparkles,
   Info,
   Rocket,
   MessageSquare,
@@ -33,10 +32,22 @@ import {
   Bot,
   Trash2,
   Plus,
+  FlaskConical,
+  Loader2,
+  Keyboard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { syncAutostart } from "@/lib/autostart";
-import { loadAiProviderKey, saveAiProviderKey } from "@/lib/secrets";
+import {
+  loadAiProviderKey,
+  saveAiProviderKey,
+  loadDictationProviderCredentials,
+  saveDictationProviderCredentials,
+  type DictationCredentials,
+} from "@/lib/secrets";
+import type { DictationCustomProvider } from "@/stores/settings";
+import { testDictationProvider } from "@/lib/dictation-provider";
+import { refineTextViaChatStream } from "@/lib/ai-refine";
 import {
   checkForUpdateForChannel,
   installUpdateWithProgress,
@@ -75,9 +86,9 @@ function useTabs(): TabDef[] {
   const { t } = useTranslation("settings");
   return [
     { id: "GENERAL", label: t("tabs.general"), icon: Sliders },
+    { id: "HOTKEYS", label: t("tabs.hotkeys"), icon: Keyboard },
     { id: "DICTATION", label: t("tabs.dictation"), icon: Mic },
     { id: "AI", label: t("tabs.ai"), icon: Bot },
-    { id: "PERSONALIZATION", label: t("tabs.personalization"), icon: Sparkles },
     { id: "ABOUT", label: t("tabs.about"), icon: Info },
   ];
 }
@@ -125,21 +136,26 @@ function Row({
 function Switch({
   checked,
   onChange,
+  disabled,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
         "relative flex h-[22px] w-10 items-center rounded-sm border transition-colors",
         checked
           ? "border-te-accent bg-te-accent"
           : "border-te-gray/60 bg-te-gray",
+        disabled && "cursor-not-allowed opacity-40",
       )}
       aria-pressed={checked}
+      aria-disabled={disabled}
     >
       <motion.span
         layout
@@ -188,40 +204,6 @@ function Select<T extends string>({
         ))}
       </select>
       <ChevronDown className="pointer-events-none absolute right-2 size-3.5 text-te-light-gray" />
-    </div>
-  );
-}
-
-function SegButton<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div className="inline-flex items-stretch border border-te-gray/40 bg-te-surface">
-      {options.map((o, i) => {
-        const active = o.value === value;
-        return (
-          <button
-            key={o.value}
-            type="button"
-            onClick={() => onChange(o.value)}
-            className={cn(
-              "px-3 py-2 font-mono text-xs uppercase tracking-[0.15em] transition-colors",
-              i !== 0 && "border-l border-te-gray/40",
-              active
-                ? "bg-te-accent/8 text-te-accent"
-                : "text-te-light-gray hover:text-te-fg",
-            )}
-          >
-            {o.label}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -488,11 +470,35 @@ function GeneralTab() {
   );
 }
 
+function HotkeysTab() {
+  const { t } = useTranslation("settings");
+  return (
+    <div>
+      <SectionTitle>{t("section.shortcuts")}</SectionTitle>
+      <HotkeysSection />
+    </div>
+  );
+}
+
 function DictationTab() {
   const { t } = useTranslation("settings");
   const general = useSettingsStore((s) => s.general);
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const loaded = useSettingsStore((s) => s.loaded);
+  const aiRefine = useSettingsStore((s) => s.aiRefine);
+  const setAiRefineEnabled = useSettingsStore((s) => s.setAiRefineEnabled);
+  const dictation = useSettingsStore((s) => s.dictation);
+  const setDictationMode = useSettingsStore((s) => s.setDictationMode);
+  const addDictationProvider = useSettingsStore((s) => s.addDictationProvider);
+  const updateDictationProvider = useSettingsStore(
+    (s) => s.updateDictationProvider,
+  );
+  const removeDictationProvider = useSettingsStore(
+    (s) => s.removeDictationProvider,
+  );
+  const setActiveDictationProvider = useSettingsStore(
+    (s) => s.setActiveDictationProvider,
+  );
 
   // 真实输入设备列表（cpal 枚举）
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
@@ -606,9 +612,96 @@ function DictationTab() {
 
   return (
     <div>
-      {/* Keyboard shortcuts */}
-      <SectionTitle>{t("section.shortcuts")}</SectionTitle>
-      <HotkeysSection />
+      {/* Dictation provider（听写云通道）*/}
+      <SectionTitle>{t("dictation_provider.section_mode")}</SectionTitle>
+      <div className="py-3">
+        <RadioBlock
+          value={dictation.mode}
+          onChange={(v) => void setDictationMode(v)}
+          options={[
+            {
+              value: "saas",
+              label: t("dictation_provider.mode_saas_label"),
+              hint: t("dictation_provider.mode_saas_hint"),
+            },
+            {
+              value: "custom",
+              label: t("dictation_provider.mode_custom_label"),
+              hint: t("dictation_provider.mode_custom_hint"),
+            },
+          ]}
+        />
+      </div>
+
+      {dictation.mode === "custom" && (
+        <>
+          <SectionTitle>
+            {t("dictation_provider.section_providers")}
+          </SectionTitle>
+          {dictation.customProviders.length === 0 ? (
+            <div className="border border-dashed border-te-gray/40 px-4 py-6 text-center font-mono text-xs text-te-light-gray">
+              {t("dictation_provider.providers_empty")}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {dictation.customProviders.map((p) => (
+                <DictationProviderCard
+                  key={p.id}
+                  provider={p}
+                  isActive={p.id === dictation.activeCustomProviderId}
+                  onUpdate={(patch) => void updateDictationProvider(p.id, patch)}
+                  onRemove={() => void removeDictationProvider(p.id)}
+                  onSetActive={() => void setActiveDictationProvider(p.id)}
+                />
+              ))}
+            </div>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const id =
+                  typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `dict_${Date.now()}_${Math.random()
+                        .toString(36)
+                        .slice(2, 8)}`;
+                void addDictationProvider({
+                  id,
+                  name: t("dictation_provider.tencent_default_name"),
+                  vendor: "tencent",
+                  tencentAppId: "",
+                  tencentRegion: "ap-shanghai",
+                });
+              }}
+              className="inline-flex items-center gap-2 border border-te-gray/60 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+            >
+              <Plus className="size-3.5" />
+              {t("dictation_provider.add_tencent")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const id =
+                  typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `dict_${Date.now()}_${Math.random()
+                        .toString(36)
+                        .slice(2, 8)}`;
+                void addDictationProvider({
+                  id,
+                  name: t("dictation_provider.aliyun_default_name"),
+                  vendor: "aliyun",
+                });
+              }}
+              className="inline-flex items-center gap-2 border border-te-gray/60 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+            >
+              <Plus className="size-3.5" />
+              {t("dictation_provider.add_aliyun")}
+            </button>
+          </div>
+        </>
+      )}
 
       {/* Dictation mode */}
       <SectionTitle>{t("section.asr_segment")}</SectionTitle>
@@ -627,14 +720,23 @@ function DictationTab() {
               label: t("asr_segment.utterance_label"),
               hint: t("asr_segment.utterance_hint"),
             },
-            {
-              value: "AI_REFINE",
-              label: t("asr_segment.ai_refine_label"),
-              hint: t("asr_segment.ai_refine_hint"),
-            },
           ]}
         />
       </div>
+      <Row
+        label={t("asr_segment.ai_refine_toggle.label")}
+        hint={
+          general.asrSegmentMode === "REALTIME"
+            ? t("asr_segment.ai_refine_toggle.disabled_in_realtime")
+            : t("asr_segment.ai_refine_toggle.hint")
+        }
+      >
+        <Switch
+          checked={general.asrSegmentMode !== "REALTIME" && aiRefine.enabled}
+          disabled={general.asrSegmentMode === "REALTIME"}
+          onChange={(v) => void setAiRefineEnabled(v)}
+        />
+      </Row>
 
       {/* Audio */}
       <SectionTitle>{t("section.audio")}</SectionTitle>
@@ -680,52 +782,6 @@ function DictationTab() {
           {t("general.loading")}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function PersonalizationTab() {
-  const { t } = useTranslation("settings");
-  const personalization = useSettingsStore((s) => s.personalization);
-  const setPersonalization = useSettingsStore((s) => s.setPersonalization);
-
-  return (
-    <div>
-      <SectionTitle>{t("section.ai_enhance")}</SectionTitle>
-      <Row
-        label={t("personalization.auto_polish")}
-        hint={t("personalization.auto_polish_hint")}
-      >
-        <Switch
-          checked={personalization.autoPolish}
-          onChange={(v) => void setPersonalization("autoPolish", v)}
-        />
-      </Row>
-      <Row
-        label={t("personalization.context_style")}
-        hint={t("personalization.context_style_hint")}
-      >
-        <Switch
-          checked={personalization.contextStyle}
-          onChange={(v) => void setPersonalization("contextStyle", v)}
-        />
-      </Row>
-
-      <SectionTitle>{t("section.dictionary_learning")}</SectionTitle>
-      <Row
-        label={t("personalization.sensitivity")}
-        hint={t("personalization.sensitivity_hint")}
-      >
-        <SegButton
-          value={personalization.sensitivity}
-          onChange={(v) => void setPersonalization("sensitivity", v)}
-          options={[
-            { value: "LOW", label: t("personalization.low") },
-            { value: "NORMAL", label: t("personalization.normal") },
-            { value: "HIGH", label: t("personalization.high") },
-          ]}
-        />
-      </Row>
     </div>
   );
 }
@@ -908,6 +964,48 @@ function AiProviderCard({
     }
   };
 
+  const [testing, setTesting] = useState(false);
+  const runTest = async () => {
+    if (testing) return;
+    setTesting(true);
+    try {
+      await persistKey();
+      const baseUrl = (provider.baseUrl ?? "").trim();
+      const model = (provider.model ?? "").trim();
+      if (!baseUrl || !model) {
+        toast.error(t("ai.provider_test_fail", { message: t("ai.provider_test_missing_fields") }));
+        return;
+      }
+      let acc = "";
+      const result = await refineTextViaChatStream(
+        {
+          mode: "custom",
+          systemPrompt: "Reply with the single word: OK.",
+          userText: "ping",
+          customBaseUrl: baseUrl,
+          customModel: model,
+          customKeyringId: `ai_provider_${provider.id}`,
+        },
+        (chunk) => {
+          acc += chunk;
+        },
+      );
+      const reply = (result.refinedText ?? acc).trim();
+      console.info("[ai-refine][test] reply:", reply);
+      void logInfo(`[ai-refine][test] provider=${provider.id} reply=${JSON.stringify(reply)}`);
+      if (reply.length === 0) {
+        toast.error(t("ai.provider_test_fail", { message: t("ai.provider_test_empty_reply") }));
+        return;
+      }
+      toast.success(t("ai.provider_test_pass"));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(t("ai.provider_test_fail", { message: msg }));
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div
       className={cn(
@@ -932,6 +1030,19 @@ function AiProviderCard({
               {t("ai.provider_set_active")}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => void runTest()}
+            disabled={testing}
+            className="inline-flex items-center gap-1 border border-te-accent bg-te-accent px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-bg transition-colors enabled:hover:bg-te-accent/85 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {testing ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <FlaskConical className="size-3" />
+            )}
+            {testing ? t("ai.provider_test_running") : t("ai.provider_test")}
+          </button>
           <button
             type="button"
             onClick={onRemove}
@@ -977,6 +1088,262 @@ function AiProviderCard({
           {t("ai.provider_api_key_hint")}
         </div>
       </div>
+    </div>
+  );
+}
+
+function DictationProviderCard({
+  provider,
+  isActive,
+  onUpdate,
+  onRemove,
+  onSetActive,
+}: {
+  provider: DictationCustomProvider;
+  isActive: boolean;
+  onUpdate: (patch: Partial<Omit<DictationCustomProvider, "id">>) => void;
+  onRemove: () => void;
+  onSetActive: () => void;
+}) {
+  const { t } = useTranslation("settings");
+  // 双字段（腾讯）/ 单字段（阿里）凭证统一存为 keyring 里的 JSON。
+  const [aliApiKey, setAliApiKey] = useState<string>("");
+  const [tencentSecretId, setTencentSecretId] = useState<string>("");
+  const [tencentSecretKey, setTencentSecretKey] = useState<string>("");
+  const [credsDirty, setCredsDirty] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const c = await loadDictationProviderCredentials(provider.id);
+        if (cancelled || !c) return;
+        if (c.vendor === "aliyun") setAliApiKey(c.apiKey);
+        if (c.vendor === "tencent") {
+          setTencentSecretId(c.secretId);
+          setTencentSecretKey(c.secretKey);
+        }
+      } catch (e) {
+        console.warn("[dictation] load credentials failed:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider.id]);
+
+  const persistCreds = async () => {
+    if (!credsDirty) return;
+    try {
+      const creds: DictationCredentials =
+        provider.vendor === "aliyun"
+          ? { vendor: "aliyun", apiKey: aliApiKey }
+          : {
+              vendor: "tencent",
+              secretId: tencentSecretId,
+              secretKey: tencentSecretKey,
+            };
+      await saveDictationProviderCredentials(provider.id, creds);
+      setCredsDirty(false);
+    } catch (e) {
+      console.warn("[dictation] save credentials failed:", e);
+    }
+  };
+
+  const [testing, setTesting] = useState(false);
+  const runTest = async () => {
+    if (testing) return;
+    setTesting(true);
+    try {
+      // 测试前先持久化最新凭证（这样下次打开 settings 也能看到）；测试本身用内存值
+      await persistCreds();
+      if (provider.vendor === "aliyun") {
+        if (!aliApiKey.trim()) {
+          toast.error(
+            t("dictation_provider.test_fail", {
+              message: t("dictation_provider.test_missing_fields"),
+            }),
+          );
+          return;
+        }
+      } else {
+        const missing =
+          !(provider.tencentAppId ?? "").trim() ||
+          !tencentSecretId.trim() ||
+          !tencentSecretKey.trim();
+        if (missing) {
+          toast.error(
+            t("dictation_provider.test_fail", {
+              message: t("dictation_provider.test_missing_fields"),
+            }),
+          );
+          return;
+        }
+      }
+      const result = await testDictationProvider(
+        provider.vendor === "aliyun"
+          ? { vendor: "aliyun", apiKey: aliApiKey }
+          : {
+              vendor: "tencent",
+              appId: provider.tencentAppId ?? "",
+              region: provider.tencentRegion ?? null,
+              secretId: tencentSecretId,
+              secretKey: tencentSecretKey,
+            },
+      );
+      if (result.ok) {
+        toast.success(t("dictation_provider.test_pass"));
+      } else {
+        const reason =
+          t(`dictation_provider.test_code.${result.code}`, {
+            defaultValue: result.message,
+          }) || result.message;
+        toast.error(t("dictation_provider.test_fail", { message: reason }));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(t("dictation_provider.test_fail", { message: msg }));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const vendorLabel =
+    provider.vendor === "tencent"
+      ? t("dictation_provider.vendor_tencent")
+      : t("dictation_provider.vendor_aliyun");
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 border px-4 py-3 transition-colors",
+        isActive ? "border-te-accent bg-te-accent/8" : "border-te-gray/40",
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={cn("size-2", isActive ? "bg-te-accent" : "bg-te-gray")}
+          />
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+            {isActive
+              ? t("dictation_provider.active_label", { vendor: vendorLabel })
+              : `${vendorLabel} · ${provider.id.slice(0, 8)}`}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {!isActive && (
+            <button
+              type="button"
+              onClick={onSetActive}
+              className="border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+            >
+              {t("dictation_provider.set_active")}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void runTest()}
+            disabled={testing}
+            className="inline-flex items-center gap-1 border border-te-accent bg-te-accent px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-bg transition-colors enabled:hover:bg-te-accent/85 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {testing ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <FlaskConical className="size-3" />
+            )}
+            {testing
+              ? t("dictation_provider.test_running")
+              : t("dictation_provider.test")}
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="inline-flex items-center gap-1 border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-red-400 hover:text-red-400"
+          >
+            <Trash2 className="size-3" />
+            {t("dictation_provider.remove")}
+          </button>
+        </div>
+      </div>
+
+      <LabeledInput
+        label={t("dictation_provider.name_label")}
+        value={provider.name}
+        onChange={(v) => onUpdate({ name: v })}
+      />
+
+      {provider.vendor === "tencent" ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <LabeledInput
+              label={t("dictation_provider.tencent_app_id")}
+              value={provider.tencentAppId ?? ""}
+              onChange={(v) => onUpdate({ tencentAppId: v })}
+            />
+            <LabeledInput
+              label={t("dictation_provider.tencent_region")}
+              value={provider.tencentRegion ?? ""}
+              onChange={(v) => onUpdate({ tencentRegion: v })}
+            />
+          </div>
+          <div>
+            <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+              {t("dictation_provider.tencent_secret_id")}
+            </div>
+            <input
+              type="text"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={tencentSecretId}
+              onChange={(e) => {
+                setTencentSecretId(e.target.value);
+                setCredsDirty(true);
+              }}
+              onBlur={() => void persistCreds()}
+              className="w-full border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
+            />
+          </div>
+          <div>
+            <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+              {t("dictation_provider.tencent_secret_key")}
+            </div>
+            <input
+              type="password"
+              value={tencentSecretKey}
+              onChange={(e) => {
+                setTencentSecretKey(e.target.value);
+                setCredsDirty(true);
+              }}
+              onBlur={() => void persistCreds()}
+              className="w-full border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
+            />
+            <div className="mt-1 font-mono text-[11px] text-te-light-gray/80">
+              {t("dictation_provider.tencent_credentials_hint")}
+            </div>
+          </div>
+        </>
+      ) : (
+        <div>
+          <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+            {t("dictation_provider.aliyun_api_key")}
+          </div>
+          <input
+            type="password"
+            value={aliApiKey}
+            onChange={(e) => {
+              setAliApiKey(e.target.value);
+              setCredsDirty(true);
+            }}
+            onBlur={() => void persistCreds()}
+            className="w-full border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
+          />
+          <div className="mt-1 font-mono text-[11px] text-te-light-gray/80">
+            {t("dictation_provider.aliyun_api_key_hint")}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1090,9 +1457,20 @@ function AboutTab() {
     <div>
       <SectionTitle>{t("section.build")}</SectionTitle>
       <Row label={t("about.version")}>
-        <span className="font-mono text-sm text-te-fg">
-          {appVersion ? `v${appVersion}` : "—"}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-sm text-te-fg">
+            {appVersion ? `v${appVersion}` : "—"}
+          </span>
+          <button
+            type="button"
+            onClick={() => void handleCheckUpdate()}
+            disabled={checkingUpdate}
+            className="inline-flex items-center gap-2 border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className={cn("size-1.5 bg-te-accent", checkingUpdate && "animate-pulse")} />
+            {t("about.check_update")}
+          </button>
+        </div>
       </Row>
       <Row label={t("about.license")}>
         <span className="font-mono text-sm text-te-fg">MIT</span>
@@ -1136,15 +1514,6 @@ function AboutTab() {
       </div>
 
       <div className="flex flex-wrap items-center gap-3 py-4">
-        <button
-          type="button"
-          onClick={() => void handleCheckUpdate()}
-          disabled={checkingUpdate}
-          className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <span className={cn("size-1.5 bg-te-accent", checkingUpdate && "animate-pulse")} />
-          {t("about.check_update")}
-        </button>
         <button
           type="button"
           onClick={() => void rerunOnboarding()}
@@ -1276,9 +1645,9 @@ export default function SettingsContent({
         transition={{ duration: 0.3 }}
       >
         {tab === "GENERAL" && <GeneralTab />}
+        {tab === "HOTKEYS" && <HotkeysTab />}
         {tab === "DICTATION" && <DictationTab />}
         {tab === "AI" && <AiTab />}
-        {tab === "PERSONALIZATION" && <PersonalizationTab />}
         {tab === "ABOUT" && <AboutTab />}
       </motion.div>
     </div>

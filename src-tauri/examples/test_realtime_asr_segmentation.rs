@@ -20,7 +20,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use hound::{SampleFormat, WavReader};
 use openloaf_saas::v4_tools::{
-    RealtimeAsrLlmLanguage, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmVadMode, RealtimeEvent,
+    RealtimeAsrLlmOlTlRt002Lang, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmOlTlRt002ServerVad,
+    RealtimeAsrLlmOlTlRt002Transcription, RealtimeEvent,
 };
 use openloaf_saas::{SaaSClient, SaaSClientConfig};
 use serde::Deserialize;
@@ -58,14 +59,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(2)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let vad_mode = match std::env::args().nth(3).as_deref() {
-        Some("manual") | Some("none") => RealtimeAsrLlmVadMode::None,
-        _ => RealtimeAsrLlmVadMode::ServerVad,
-    };
+    let use_server_vad = !matches!(
+        std::env::args().nth(3).as_deref(),
+        Some("manual") | Some("none")
+    );
 
     println!("🎵 wav: {}", wav_path.display());
     println!("🤐 silence inject (mid): {} ms", silence_inject_ms);
-    println!("🎚 vad mode: {:?}", vad_mode);
+    println!("🎚 server_vad: {}", use_server_vad);
 
     let file = fs::File::open(&wav_path)?;
     let mut reader = WavReader::new(BufReader::new(file))?;
@@ -125,8 +126,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rt = client
         .tools_v4()
         .realtime_asr_llm_ol_tl_rt_002(&RealtimeAsrLlmOlTlRt002Params {
-            language: Some(RealtimeAsrLlmLanguage::Auto),
-            vad_mode: Some(vad_mode),
+            input_audio_transcription: Some(RealtimeAsrLlmOlTlRt002Transcription {
+                language: Some(RealtimeAsrLlmOlTlRt002Lang::Auto),
+                context: None,
+            }),
+            turn_detection: if use_server_vad {
+                Some(RealtimeAsrLlmOlTlRt002ServerVad::default())
+            } else {
+                None
+            },
             ..Default::default()
         })?;
     println!("   connected in {} ms", t0.elapsed().as_millis());

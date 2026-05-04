@@ -1,9 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { HotkeyDictationCard } from "@/components/HotkeyDictationCard";
 import { useHistoryStore } from "@/stores/history";
+import { useStatsStore } from "@/stores/stats";
+
+type StatsView = "today" | "all";
 
 // 假设打字基线速度：用于"节省时间"估算。40 WPM 是普通用户中位打字速度。
 // （专业打字员 ~70+，纯中文拼音 ~30，混合 ~40）；该值为粗估，未来可放设置项。
@@ -81,19 +84,27 @@ export default function HomePage() {
   const { t } = useTranslation();
 
   const historyItems = useHistoryStore((s) => s.items);
+  const cachedDuration = useStatsStore((s) => s.totalDurationMs);
+  const cachedWords = useStatsStore((s) => s.totalWords);
+  const [view, setView] = useState<StatsView>("all");
+
+  // "今日"实时扫 historyItems；"历史"= stats 缓存 + 今日实时增量
+  // （缓存只到上次 init/bump 时刻，今日新发生的会话也得叠加进来）。
   const stats = useMemo(() => {
     const since = todayMidnightLocal();
-    let totalDurationMs = 0;
-    let totalWords = 0;
+    let todayDurationMs = 0;
+    let todayWords = 0;
     for (const it of historyItems) {
       if (it.created_at < since) continue;
       if (it.type !== "dictation" || it.status !== "success") continue;
-      totalDurationMs += it.duration_ms;
-      totalWords += countWords(it.text);
+      todayDurationMs += it.duration_ms;
+      todayWords += countWords(it.text);
     }
+
+    const totalDurationMs = view === "today" ? todayDurationMs : cachedDuration;
+    const totalWords = view === "today" ? todayWords : cachedWords;
     const minutes = totalDurationMs / 60_000;
     const wpmValue = minutes > 0 ? totalWords / minutes : 0;
-    // 节省时间 = 同字数按 baseline 打字耗时 - 实际口述耗时；负值 clamp 到 0。
     const savedMs = Math.max(
       0,
       (totalWords / TYPING_BASELINE_WPM) * 60_000 - totalDurationMs,
@@ -104,7 +115,7 @@ export default function HomePage() {
       wpm: minutes > 0 ? String(Math.round(wpmValue)) : "—",
       saved: formatHHMM(savedMs),
     };
-  }, [historyItems]);
+  }, [historyItems, cachedDuration, cachedWords, view]);
 
   return (
     <section className="relative flex h-full flex-col overflow-hidden bg-te-bg">
@@ -164,11 +175,34 @@ export default function HomePage() {
           <div className="flex min-h-0 flex-[3_1_0%] flex-col">
             <div className="mb-2 flex shrink-0 items-end justify-between md:mb-3">
               <h2 className="font-mono text-base font-bold uppercase tracking-tighter text-te-fg md:text-lg">
-                {t("pages:home.stats.section_title")}
+                {view === "today"
+                  ? t("pages:home.stats.section_title_today")
+                  : t("pages:home.stats.section_title_all")}
               </h2>
-              <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-                {t("pages:home.stats.live_metrics")}
-              </span>
+              <div
+                className="flex shrink-0 border border-te-gray/60 bg-te-surface font-mono text-[10px] uppercase tracking-widest"
+                role="tablist"
+              >
+                {(["today", "all"] as const).map((mode) => {
+                  const active = view === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setView(mode)}
+                      className={
+                        active
+                          ? "px-2.5 py-1 bg-te-accent text-te-bg"
+                          : "px-2.5 py-1 text-te-light-gray hover:text-te-fg"
+                      }
+                    >
+                      {t(`pages:home.stats.tab_${mode}`)}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="grid min-h-0 flex-1 grid-cols-4 gap-px bg-te-gray/40">

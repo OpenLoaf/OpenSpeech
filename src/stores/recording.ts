@@ -11,7 +11,7 @@ import {
   getEffectiveAiSystemPrompt,
   type AsrSegmentMode,
 } from "@/stores/settings";
-import { useHistoryStore } from "@/stores/history";
+import { useHistoryStore, type AsrSource } from "@/stores/history";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
 import {
@@ -28,6 +28,7 @@ import {
   cancelSttSession,
   transcribeRecordingFile,
 } from "@/lib/stt";
+import { buildProviderRef } from "@/lib/dictation-provider-ref";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
 import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
@@ -70,7 +71,7 @@ interface RecordingStore {
    */
   liveTranscript: string;
   /**
-   * 注入末尾段提前隐藏悬浮栏：AI_REFINE 流式 token 全部敲完、只剩末尾 diff
+   * 注入末尾段提前隐藏悬浮栏：refine 流式 token 全部敲完、只剩末尾 diff
    * 那一小段兜底 paste 时置 true，让 overlay pill 在用户看到几乎全部文字时
    * 同步退场，比"全部敲完 + 800ms idle 延迟"快一拍。idle / 新一轮录音都重置为 false。
    */
@@ -92,7 +93,7 @@ interface RecordingStore {
   simulateFinalize: () => void;
   /**
    * DEV-ONLY：用历史里某条听写录音的音频文件，跑一遍正常 dictation pipeline
-   * （REST ASR → AI_REFINE 流式 → 注入到光标），免去每次手动说话调试。
+   * （REST ASR → refine 流式 → 注入到光标），免去每次手动说话调试。
    * 不写新历史。仅 type=dictation 才允许调用，调用方自己 gate；
    * 长录音（>5min）不支持（OL-TL-003 限制）。
    */
@@ -106,6 +107,13 @@ interface RecordingStore {
 const getEffectiveSegmentMode = (): AsrSegmentMode =>
   useRecordingStore.getState().segmentModeOverride ??
   useSettingsStore.getState().general.asrSegmentMode;
+
+// REALTIME 下 aiRefine 强制短路；UTTERANCE 下看用户开关。
+const isAiRefineActive = (): boolean => {
+  const mode = getEffectiveSegmentMode();
+  if (mode !== "UTTERANCE") return false;
+  return useSettingsStore.getState().aiRefine.enabled === true;
+};
 
 const PREPARING_MS = 300;
 // 录音净时长 < MIN_RECORD_MS 视为"没说出有效内容"——直接丢弃，不转录、不保存
@@ -196,7 +204,7 @@ const notifyOverlay = (
 // 网络问题——重连同一 realtime 通道大概率仍会复现（特定音频特征触发）。兜底策略：
 // 落本地录音文件后走 REST 一次性 ASR（OL-TL-003）替代实时通道。
 //
-// 仅 MANUAL / AI_REFINE 模式触发降级——REALTIME（VAD 边说边出字）已经把前半段
+// 仅 UTTERANCE 模式触发降级——REALTIME（VAD 边说边出字）已经把前半段
 // partial 注入到光标，REST 重转拿到的整段会与已注入文本拼接错乱，那条路径不降级，
 // 仅 toast 让用户事后从历史里手动重试。
 const isRealtimeRepeatError = (code: string, message: string): boolean => {
@@ -281,6 +289,18 @@ let currentSttSessionId: string | null = null;
 // 与历史记录里「重试」按钮同一条降级路径。
 let realtimeReadyDuringRecording = false;
 
+// Rust dispatch 完成后通过 stt-provider-resolved 事件透出本次会话最终落到的通道。
+// REALTIME 主路径用它写 history.provider_kind；UTTERANCE 主路径不开 WS，由
+// transcribe_recording_file 的返回值给出 providerKind。
+let resolvedProviderKindForCurrentSession:
+  | "saas-realtime"
+  | "saas-file"
+  | "tencent-realtime"
+  | "tencent-file"
+  | "aliyun-realtime"
+  | "aliyun-file"
+  | null = null;
+
 // 失败原因翻译：Rust 端 stt_start 失败典型文案：
 //   "not authenticated; login first"
 //   "audio stream not running; start mic first"
@@ -290,6 +310,78 @@ let realtimeReadyDuringRecording = false;
 // 归一成一句人话给 toast——用户不需要看 Rust 层层包装的原文。
 const humanizeSttError = (raw: unknown): string => {
   const msg = String(raw ?? "");
+  if (msg === "byok_not_implemented_yet" || msg.includes("byok_not_implemented_yet")) {
+    return i18n.t("overlay:error.byok_not_implemented");
+  }
+  if (msg === "byok_missing_credentials" || msg.includes("byok_missing_credentials")) {
+    return i18n.t("overlay:error.byok_missing_credentials");
+  }
+  if (msg.startsWith("byok_keyring_error") || msg.includes("byok_keyring_error")) {
+    return i18n.t("overlay:error.byok_keyring_error");
+  }
+  // 腾讯 BYOK 实时通道的 vendor 错误码（PR-4）。Rust 端 backends/tencent.rs 把
+  // 4002 / 4004-4005 / 4008 映射成下面三个稳定字符串后透传 asr-error。
+  if (msg === "unauthenticated_byok" || msg.includes("unauthenticated_byok")) {
+    return i18n.t("overlay:error.unauthenticated_byok");
+  }
+  if (msg === "insufficient_funds" || msg.includes("insufficient_funds")) {
+    return i18n.t("overlay:error.insufficient_funds");
+  }
+  if (msg === "idle_timeout" || msg.includes("idle_timeout")) {
+    return i18n.t("overlay:error.idle_timeout");
+  }
+  if (msg === "rate_limited" || msg.includes("rate_limited")) {
+    return i18n.t("overlay:error.rate_limited");
+  }
+  if (msg.includes("aliyun_invalid_audio_format")) {
+    return i18n.t("overlay:error.aliyun_invalid_audio_format");
+  }
+  if (msg.includes("aliyun_quota_exceeded")) {
+    return i18n.t("overlay:error.aliyun_quota_exceeded");
+  }
+  // 阿里 BYOK 文件转写（PR-7）：OSS 上传 + filetrans 异步任务两段错误链路。
+  if (msg.includes("aliyun_file_too_large")) {
+    return i18n.t("overlay:error.aliyun_file_too_large");
+  }
+  if (msg.includes("aliyun_filetrans_timeout")) {
+    return i18n.t("overlay:error.aliyun_filetrans_timeout");
+  }
+  if (msg.includes("aliyun_filetrans_failed")) {
+    const detail = msg.split("aliyun_filetrans_failed:").pop()?.trim() || "";
+    return i18n.t("overlay:error.aliyun_filetrans_failed", { msg: detail });
+  }
+  if (msg.includes("aliyun_upload_failed")) {
+    const detail = msg.split("aliyun_upload_failed:").pop()?.trim() || "";
+    return i18n.t("overlay:error.aliyun_upload_failed", { msg: detail });
+  }
+  if (msg.includes("aliyun_unauthenticated")) {
+    return i18n.t("overlay:error.aliyun_unauthenticated");
+  }
+  if (msg.includes("aliyun_rate_limited")) {
+    return i18n.t("overlay:error.aliyun_rate_limited");
+  }
+  if (msg.includes("aliyun_network_error")) {
+    return i18n.t("overlay:error.stt_network");
+  }
+  if (msg.includes("file_too_large_for_tencent_byok")) {
+    return i18n.t("overlay:error.file_too_large_for_tencent_byok");
+  }
+  if (msg.includes("tencent_task_timeout")) {
+    return i18n.t("overlay:error.tencent_task_timeout");
+  }
+  if (msg.includes("tencent_task_failed")) {
+    const detail = msg.split("tencent_task_failed:").pop()?.trim() || "";
+    return i18n.t("overlay:error.tencent_task_failed", { msg: detail });
+  }
+  if (msg.includes("tencent_unauthenticated")) {
+    return i18n.t("overlay:error.tencent_unauthenticated");
+  }
+  if (msg.includes("tencent_rate_limited")) {
+    return i18n.t("overlay:error.tencent_rate_limited");
+  }
+  if (msg.includes("tencent_network_error")) {
+    return i18n.t("overlay:error.stt_network");
+  }
   if (msg.includes("not authenticated")) return i18n.t("overlay:error.stt_not_authenticated");
   if (msg.includes("HTTP error: 5")) return i18n.t("overlay:error.stt_5xx");
   if (msg.includes("HTTP error: 4")) return i18n.t("overlay:error.stt_4xx");
@@ -348,11 +440,14 @@ const startRecordingSession = (id: string) => {
   // 每次 start 前清掉上一次会话残留的 sessionId，避免本次 stt-ready 还没到时
   // 把上一次的 sessionId 误带给本次 refine。
   currentSttSessionId = null;
+  resolvedProviderKindForCurrentSession = null;
   void startRecordingToFile(id)
     .then(() => {
+      // UTTERANCE 走"录音→文件转写"主路径，全程不开 WS——避免网络抖动半路截断，
+      // 也省下一条 WS 心跳。WS 仅 REALTIME 模式开。
       const segmentMode = getEffectiveSegmentMode();
-      const sttMode = segmentMode === "REALTIME" ? "auto" : "manual";
-      startSttSession({ mode: sttMode }).catch((e) => {
+      if (segmentMode !== "REALTIME") return;
+      startSttSession({ mode: "auto", provider: buildProviderRef() }).catch((e) => {
         const raw = String(e ?? "");
         if (isAuthError(raw)) {
           handleAuthLost();
@@ -393,24 +488,27 @@ type FinalizeOutcome = {
  */
 const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   if (!IS_MAIN_WINDOW) return { rec: null, text: "" };
+  const segmentModeAtStop = getEffectiveSegmentMode();
   const recSettled = await Promise.allSettled([stopRecordingAndSave()]).then((r) => r[0]);
 
-  // WS 握手慢于录音时长（stt-ready 整段都没到）：会话一帧 audio 都没送到服务端，
-  // stt_finalize 必然空转 FINALIZE_WAIT_MS 后返回空串。直接降级走 REST 文件
-  // 转写，与历史「重试」按钮同一路径，省掉这 3s 等待。REALTIME 模式不走：
-  // 与既有 repeat-bug 降级口径一致——已经增量注入的 partial 会和重转的整段拼接错乱。
-  if (
+  // UTTERANCE：主路径直接走文件转写——录音过程压根没开 WS，没有 finalize 可调。
+  // 与原"WS 握手没到 → degrade"分支语义合并；保留 realtimeDegradedToFile 仅给
+  // REALTIME 失败兜底用。
+  if (segmentModeAtStop !== "REALTIME") {
+    realtimeDegradedToFile = true;
+  } else if (
     !realtimeReadyDuringRecording &&
-    !realtimeDegradedToFile &&
-    getEffectiveSegmentMode() !== "REALTIME"
+    !realtimeDegradedToFile
   ) {
+    // REALTIME 但 WS 握手始终没到：会话一帧 audio 都没送到服务端，
+    // stt_finalize 必然空转 FINALIZE_WAIT_MS 后返回空串。直接 cancel ws 走文件转写兜底。
     console.info("[stt] ws never ready during recording → degrade to file transcribe");
     realtimeDegradedToFile = true;
     void cancelSttSession();
   }
 
-  // degrade 时跳过 finalize 的 3s 兜底等待——asr-error 与 ws-not-ready 两条入口
-  // 设 degrade 后 finalize 都拿不到 Final，等待纯属浪费用户从松手到出字的延迟。
+  // degrade 时跳过 finalize 的 3s 兜底等待——asr-error / ws-not-ready / UTTERANCE
+  // 主路径都拿不到 Final，等待纯属浪费用户从松手到出字的延迟。
   const sttSettled: PromiseSettledResult<string> = realtimeDegradedToFile
     ? { status: "fulfilled", value: "" }
     : await Promise.allSettled([finalizeSttSession()]).then((r) => r[0]);
@@ -418,40 +516,58 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   let text =
     sttSettled.status === "fulfilled" && sttSettled.value ? sttSettled.value : "";
   console.info(
-    `[finalize] sttStatus=${sttSettled.status} textLen=${text.length} recDurMs=${rec?.duration_ms ?? "n/a"} degraded=${realtimeDegradedToFile}`,
+    `[finalize] mode=${segmentModeAtStop} sttStatus=${sttSettled.status} textLen=${text.length} recDurMs=${rec?.duration_ms ?? "n/a"} degraded=${realtimeDegradedToFile}`,
   );
 
-  // DashScope realtime 模型层 repeat bug 降级：原 realtime 通道在 worker_dead /
-  // asr-error 后 finalize 大概率拿到空 text。直接对刚落盘的录音文件用 OL-TL-003
-  // REST ASR 重转一次，结果替换 text。仅 MANUAL / AI_REFINE 路径走此分支（REALTIME
-  // 已在 asr-error 阶段决定不降级，flag 保持 false）。这条分支同时**抑制**原 stt
-  // 错误 toast——"实时识别异常，正在用录音重转"已经在 asr-error 阶段提示过了。
+  // 文件转写主线：
+  //   - UTTERANCE 主路径——录音结束后整段提交（无 partial，松手才出字）。
+  //   - REALTIME repeat-bug / WS 握手没到的兜底——复用同一文件转写接口。
+  // 5min 上限护栏只对 UTTERANCE 主路径触发：REALTIME 失败兜底已经把前半段 partial
+  // 注入到光标，超长拒转更难收尾，按现状放过（后续 REALTIME 文件兜底另行限制）。
   if (realtimeDegradedToFile) {
     if (rec) {
-      try {
-        console.info(
-          "[stt] degraded → REST file transcribe, audio=",
-          rec.audio_path,
-          "duration=",
-          rec.duration_ms,
+      const TOO_LONG_MS = 5 * 60 * 1000;
+      if (segmentModeAtStop !== "REALTIME" && rec.duration_ms > TOO_LONG_MS) {
+        console.warn(
+          `[stt] utterance recording too long (${rec.duration_ms}ms) → skip transcribe`,
         );
-        const r = await transcribeRecordingFile({
-          audioPath: rec.audio_path,
-          durationMs: rec.duration_ms,
-        });
-        text = r.text;
-        console.info(
-          `[stt] degraded → got ${r.text.length} chars (variant=${r.variant})`,
-        );
-      } catch (e) {
-        console.warn("[stt] REST fallback failed:", e);
-        notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
-          description: humanizeSttError(e),
+        notifyOverlay("error", i18n.t("transcribe.too_long_for_utterance", { ns: "pages" }), {
+          durationMs: 6000,
         });
         text = "";
+      } else {
+        try {
+          console.info(
+            "[stt] file transcribe, audio=",
+            rec.audio_path,
+            "duration=",
+            rec.duration_ms,
+          );
+          const r = await transcribeRecordingFile({
+            audioPath: rec.audio_path,
+            durationMs: rec.duration_ms,
+            provider: buildProviderRef(),
+          });
+          text = r.text;
+          resolvedProviderKindForCurrentSession = r.providerKind;
+          console.info(
+            `[stt] file transcribe → got ${r.text.length} chars (variant=${r.variant} kind=${r.providerKind})`,
+          );
+        } catch (e) {
+          const raw = String(e ?? "");
+          if (isAuthError(raw)) {
+            handleAuthLost();
+            return { rec, text: "" };
+          }
+          console.warn("[stt] file transcribe failed:", e);
+          notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
+            description: humanizeSttError(e),
+          });
+          text = "";
+        }
       }
     } else {
-      console.warn("[stt] degraded but no rec; can't REST fallback");
+      console.warn("[stt] degraded but no rec; can't file transcribe");
     }
   } else if (sttSettled.status === "rejected") {
     console.warn("[stt] finalize failed:", sttSettled.reason);
@@ -473,9 +589,19 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     });
   }
 
-  // 拿到 transcript 后切到 "injecting"——overlay 把"思考中"切成"输出中"，
-  // 反映真实进度（接下来要么走 AI_REFINE 流式逐字敲、要么末尾整段 paste）。
-  if (text && IS_MAIN_WINDOW && useRecordingStore.getState().state === "transcribing") {
+  // 拿到 transcript 后切到 "injecting"（"输出中"）的时机分两种：
+  // - 非 refine：直接整段贴到光标，没有"模型思考"阶段，立即切。
+  // - refine 启用：模型还在思考、首 token 没到，UI 留在 transcribing
+  //   （"思考中"）。等 onDelta 拿到第一个 chunk 再切；catch 路径在 try 块
+  //   出来时兜底切，保证非正常路径也能进入"输出中"。
+  const segmentMode = getEffectiveSegmentMode();
+  const refineActive = isAiRefineActive();
+  if (
+    text &&
+    IS_MAIN_WINDOW &&
+    useRecordingStore.getState().state === "transcribing" &&
+    !refineActive
+  ) {
     useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
   }
   if (recSettled.status === "rejected") {
@@ -485,7 +611,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     });
   }
 
-  // AI_REFINE：拿到原始 transcript 后强制走 AI refine chat stream，每个 Delta 通过
+  // refine 启用：拿到原始 transcript 后强制走 AI refine chat stream，每个 Delta 通过
   // injectIncremental 实时敲到光标位置（剪贴板 + Cmd/Ctrl+V 单字符段）。
   // 流结束后把整段 refinedText 写回剪贴板，覆盖最后一段 delta，让用户后续
   // Cmd+V / Cmd+C 都拿到完整内容。
@@ -495,12 +621,13 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   //
   // 流式失败 / auth 异常时 refinedText 保持 null，最终 finalText = text，
   // 走原 UTTERANCE 路径整段贴到光标。
-  const segmentMode = getEffectiveSegmentMode();
   let refinedText: string | null = null;
+  // history 详情底部要显示"实际调用的 AI 模型"。即便 refine 失败也要记录"试过谁"。
+  let aiModelLabel: string | null = null;
   console.info(
-    `[refine] gate textLen=${text.length} segmentMode=${segmentMode} willCallRefine=${!!text && segmentMode === "AI_REFINE"}`,
+    `[refine] gate textLen=${text.length} segmentMode=${segmentMode} refineEnabled=${refineActive} willCallRefine=${!!text && refineActive}`,
   );
-  if (text && segmentMode === "AI_REFINE") {
+  if (text && refineActive) {
     const hotwords = getHotwordsArray();
     resetIncrementalInject();
     let streamedSoFar = "";
@@ -541,6 +668,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           (p) => p.id === aiSettings.activeCustomProviderId,
         ) ?? null;
     }
+    aiModelLabel =
+      aiSettings.mode === "custom" && activeProvider
+        ? `${activeProvider.name} · ${activeProvider.model}`
+        : aiSettings.mode === "saas"
+          ? "OpenLoaf SaaS"
+          : null;
     console.info(
       `[ai-refine] stream start mode=${aiSettings.mode} textLen=${text.length} hotwordsLen=${hotwords.length} historyLen=${historyEntries?.length ?? 0} provider=${activeProvider?.id ?? "saas"}`,
     );
@@ -565,6 +698,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         },
         (chunk) => {
           streamedSoFar += chunk;
+          if (
+            IS_MAIN_WINDOW &&
+            useRecordingStore.getState().state === "transcribing"
+          ) {
+            useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
+          }
           injectIncremental(streamedSoFar);
         },
       );
@@ -609,9 +748,14 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         );
       }
     }
+    // refine 一个 chunk 都没到就抛错（network / auth / 0 token） →
+    // 仍停留在 transcribing。让"输出中"在末尾兜底 paste 时显示，与正常路径一致。
+    if (IS_MAIN_WINDOW && useRecordingStore.getState().state === "transcribing") {
+      useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
+    }
     void streamedSoFar;
-  } else if (text && segmentMode !== "AI_REFINE") {
-    console.info(`[refine] skipped, segmentMode=${segmentMode}`);
+  } else if (text && !refineActive) {
+    console.info(`[refine] skipped, segmentMode=${segmentMode} refineEnabled=${refineActive}`);
   }
   const finalText = refinedText ?? text;
 
@@ -619,6 +763,22 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // simulateCancel/discardRecording 的语义保持一致（取消即不留 history）；
   // 录音文件仍然在 rec.audio_path，以后想做"取消也保留音频"再单独走 abort 路径。
   if (rec && isInjectFlowActive()) {
+    const asrSource: AsrSource =
+      useSettingsStore.getState().general.dictationSource === "BYO"
+        ? "byo"
+        : realtimeDegradedToFile
+          ? "saas-rest"
+          : "saas-realtime";
+    // PR-3：providerKind 优先取 Rust dispatch 给的真值（stt-provider-resolved
+    // 事件 / transcribe 返回值）；缺失时按当前模式兜默认（兼容老调用 + degrade
+    // 但 transcribe 出错没拿到 kind 的极端路径）。
+    const providerKind =
+      resolvedProviderKindForCurrentSession ??
+      (useSettingsStore.getState().general.dictationSource === "BYO"
+        ? null
+        : segmentMode === "REALTIME"
+          ? "saas-realtime"
+          : "saas-file");
     await useHistoryStore.getState().add({
       type: "dictation",
       text: text || transcriptPlaceholder(),
@@ -627,11 +787,15 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       error: text ? undefined : "no final transcript",
       duration_ms: rec.duration_ms,
       audio_path: rec.audio_path,
+      asr_source: asrSource,
+      ai_model: aiModelLabel,
+      segment_mode: segmentMode,
+      provider_kind: providerKind,
     });
   }
 
   // 末尾兜底：把"还没敲到光标的剩余部分"补完。三种模式统一走 lastInjectedText
-  // diff，不再以"流过任何一段"作为整段 paste 的开关——AI_REFINE 流式中途抛错
+  // diff，不再以"流过任何一段"作为整段 paste 的开关——refine 流式中途抛错
   // 或 startsWith 短路（前缀被纠错）会让 lastInjectedText 落后于真实 finalText，
   // 之前用 aiRefineStreamed 一刀切跳过 paste 会导致"前半敲到了、后半凭空丢失"，
   // 而历史 / 剪贴板里仍是完整文本——这正是用户报告的"另一半没了"根因。
@@ -786,6 +950,14 @@ const abortAndSaveHistory = async (): Promise<void> => {
     console.warn("[recording] abort: stopRecordingAndSave failed:", e);
   }
   if (rec) {
+    const segmentMode = getEffectiveSegmentMode();
+    const providerKind =
+      resolvedProviderKindForCurrentSession ??
+      (useSettingsStore.getState().general.dictationSource === "BYO"
+        ? null
+        : segmentMode === "REALTIME"
+          ? "saas-realtime"
+          : "saas-file");
     try {
       await useHistoryStore.getState().add({
         type: "dictation",
@@ -793,6 +965,8 @@ const abortAndSaveHistory = async (): Promise<void> => {
         status: "cancelled",
         duration_ms: rec.duration_ms,
         audio_path: rec.audio_path,
+        segment_mode: segmentMode,
+        provider_kind: providerKind,
       });
     } catch (e) {
       console.warn("[recording] abort: history.add failed:", e);
@@ -1357,21 +1531,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      let levelTickCount = 0;
       const u3 = await listen<number>(
         "openspeech://audio-level",
         (evt) => {
           const v = Math.max(0, Math.min(1, Number(evt.payload) || 0));
-          levelTickCount += 1;
-          // 每秒打一次（20Hz emit），便于在 overlay devtools 里观察事件是否到达
-          if (levelTickCount % 20 === 0) {
-            console.log(
-              "[recording] audio-level tick",
-              levelTickCount,
-              "v=",
-              v.toFixed(3),
-            );
-          }
           set((s) => ({
             audioLevels: [v, ...s.audioLevels.slice(0, -1)],
           }));
@@ -1535,6 +1698,25 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
         },
       );
+      // Rust dispatch 完成后立刻广播本次会话最终落到了哪条通道。
+      // 主路径（REALTIME / 文件转写）写 history 时直接读这个值，不再凭设置反推。
+      const u7p = await listen<string>(
+        "openspeech://stt-provider-resolved",
+        (evt) => {
+          const kind = evt.payload;
+          if (
+            kind === "saas-realtime" ||
+            kind === "saas-file" ||
+            kind === "tencent-realtime" ||
+            kind === "tencent-file" ||
+            kind === "aliyun-realtime" ||
+            kind === "aliyun-file"
+          ) {
+            resolvedProviderKindForCurrentSession = kind;
+            console.info(`[stt] provider resolved: ${kind}`);
+          }
+        },
+      );
 
       // Esc 取消——走 Rust modifier_only 的预览通道（`openspeech://key-preview`），
       // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc）。状态门控：录音 /
@@ -1656,7 +1838,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u7r, u8, u9);
+      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u7r, u7p, u8, u9);
       console.log(
         "[recording] listeners attached (hotkey + register-failed + audio-level + asr-* + stream-error)",
       );
@@ -1775,7 +1957,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       try {
         let text = "";
         try {
-          const r = await transcribeRecordingFile({ audioPath, durationMs });
+          const r = await transcribeRecordingFile({
+            audioPath,
+            durationMs,
+            provider: buildProviderRef(),
+          });
           text = r.text ?? "";
         } catch (e) {
           console.warn("[debug] transcribe failed:", e);
@@ -1794,13 +1980,15 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           return;
         }
 
-      set({ state: "injecting", pillEarlyHide: false });
-
-      // 复用 finalize 里的 AI_REFINE 流式注入逻辑——这里只内联必要部分，不写历史，
-      // 不动录音/STT 会话状态机。
-      const segmentMode = getEffectiveSegmentMode();
+      // 复用 finalize 里的 refine 流式注入逻辑——这里只内联必要部分，不写历史，
+      // 不动录音/STT 会话状态机。切 injecting 的时机与正常路径对齐：非 refine
+      // 立即切；refine 启用时等首个 chunk 到达再切，让 UI 区分"模型思考"与"流式输出"。
+      const refineActive = isAiRefineActive();
+      if (!refineActive) {
+        set({ state: "injecting", pillEarlyHide: false });
+      }
       let refinedText: string | null = null;
-      if (segmentMode === "AI_REFINE") {
+      if (refineActive) {
         const hotwords = getHotwordsArray();
         let streamedSoFar = "";
         const aiSettings = useSettingsStore.getState().aiRefine;
@@ -1859,6 +2047,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             },
             (chunk) => {
               streamedSoFar += chunk;
+              if (get().state === "transcribing") {
+                set({ state: "injecting", pillEarlyHide: false });
+              }
               injectIncremental(streamedSoFar);
             },
           );
@@ -1886,6 +2077,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               { description: humanizeSttError(e) },
             );
           }
+        }
+        // refine 0 chunk 抛错路径兜底：留在 transcribing 时补切 injecting，
+        // 与正常路径一致，让"输出中"在末尾兜底 paste 时显示。
+        if (get().state === "transcribing") {
+          set({ state: "injecting", pillEarlyHide: false });
         }
         void streamedSoFar;
       }

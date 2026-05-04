@@ -1,12 +1,13 @@
 {
   "feedback": "意見回饋",
-  "open_home": "開啟 OpenSpeech 主頁",
+  "open_home": "開啟首頁",
+  "open_toolbox": "AI 工具",
+  "open_history": "歷史紀錄",
   "open_settings": "設定…",
   "mic_submenu": "選擇麥克風",
   "auto_detect": "Auto-detect",
   "auto_detect_with_name": "Auto-detect ({{name}})",
-  "open_dictionary": "將詞彙加入詞典",
-  "version_prefix": "版本 {{version}}",
+  "open_dictionary": "字典",
   "check_update": "檢查更新",
   "quit": "結束 OpenSpeech"
 }

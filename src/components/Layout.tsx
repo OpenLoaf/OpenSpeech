@@ -286,6 +286,12 @@ export default function Layout() {
       await addSub<unknown>("openspeech://tray-open-dictionary", () => {
         navigate("/dictionary");
       });
+      await addSub<unknown>("openspeech://tray-open-toolbox", () => {
+        navigate("/toolbox");
+      });
+      await addSub<unknown>("openspeech://tray-open-history", () => {
+        navigate("/history");
+      });
       await addSub<unknown>("openspeech://tray-open-feedback", () => {
         openFeedback();
       });

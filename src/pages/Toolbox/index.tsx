@@ -10,6 +10,7 @@ import {
   History as HistoryIcon,
   Languages,
   Mic,
+  Play,
   RotateCcw,
   Save,
   Sparkles,
@@ -21,6 +22,8 @@ import { cn } from "@/lib/utils";
 import { HotkeyDictationCard } from "@/components/HotkeyDictationCard";
 import { useRecordingStore, type RecordingState } from "@/stores/recording";
 import { useHistoryStore } from "@/stores/history";
+import { useSettingsStore } from "@/stores/settings";
+import { refineTextViaChatStream } from "@/lib/ai-refine";
 
 type InputTab = "text" | "voice" | "history" | "file";
 type ToolKey = "polish" | "translate" | "tts";
@@ -46,6 +49,14 @@ const POLISH_PRESET_KEYS = [
 ] as const;
 type PolishPresetKey = (typeof POLISH_PRESET_KEYS)[number];
 const TRANSLATE_LANGS = ["en", "zh", "ja", "ko"] as const;
+const TRANSLATE_LANG_NAMES: Record<(typeof TRANSLATE_LANGS)[number], string> = {
+  en: "English",
+  zh: "Simplified Chinese (简体中文)",
+  ja: "Japanese (日本語)",
+  ko: "Korean (한국어)",
+};
+const TRANSLATE_PROMPT = (langName: string) =>
+  `Translate the user's input into ${langName}. Output only the translation — no preamble, no quotes, no explanations.`;
 const TTS_VOICES = ["natural_f", "natural_m", "calm_f"] as const;
 const TTS_SPEEDS = [0.8, 1.0, 1.25, 1.5] as const;
 
@@ -274,8 +285,8 @@ type ToolTabsProps = {
 function ToolTabs({ tool, onChange }: ToolTabsProps) {
   const { t } = useTranslation();
   const items: { key: ToolKey; icon: typeof Wand2 }[] = [
-    { key: "polish", icon: Wand2 },
     { key: "translate", icon: Languages },
+    { key: "polish", icon: Wand2 },
     { key: "tts", icon: Volume2 },
   ];
   return (
@@ -312,19 +323,108 @@ function ToolTabs({ tool, onChange }: ToolTabsProps) {
 
 type ToolBodyProps = {
   tool: ToolKey;
+  text: string;
   hasInput: boolean;
   onUseAsInput: (text: string) => void;
 };
 
-function ToolBody({ tool, hasInput, onUseAsInput }: ToolBodyProps) {
+type ToolStatus =
+  | { kind: "idle" }
+  | { kind: "running"; partial: string }
+  | { kind: "done"; result: string }
+  | { kind: "error"; message: string };
+
+function ToolBody({ tool, text, hasInput, onUseAsInput }: ToolBodyProps) {
   const { t } = useTranslation();
 
-  const [polishScenario, setPolishScenario] =
+  const [polishScenario, setPolishScenarioRaw] =
     useState<PolishPresetKey>("email");
-  const [targetLang, setTargetLang] =
+  const [targetLang, setTargetLangRaw] =
     useState<(typeof TRANSLATE_LANGS)[number]>("en");
-  const [voice, setVoice] = useState<(typeof TTS_VOICES)[number]>("natural_f");
-  const [speed, setSpeed] = useState<(typeof TTS_SPEEDS)[number]>(1.0);
+  const [voice, setVoiceRaw] =
+    useState<(typeof TTS_VOICES)[number]>("natural_f");
+  const [speed, setSpeedRaw] = useState<(typeof TTS_SPEEDS)[number]>(1.0);
+  const [status, setStatus] = useState<ToolStatus>({ kind: "idle" });
+  const runStartRef = useRef<number>(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
+
+  useEffect(() => {
+    setStatus({ kind: "idle" });
+  }, [text]);
+
+  const resetStatus = () => setStatus({ kind: "idle" });
+  const setPolishScenario = (k: PolishPresetKey) => {
+    setPolishScenarioRaw(k);
+    resetStatus();
+  };
+  const setTargetLang = (l: (typeof TRANSLATE_LANGS)[number]) => {
+    setTargetLangRaw(l);
+    resetStatus();
+  };
+  const setVoice = (v: (typeof TTS_VOICES)[number]) => {
+    setVoiceRaw(v);
+    resetStatus();
+  };
+  const setSpeed = (s: (typeof TTS_SPEEDS)[number]) => {
+    setSpeedRaw(s);
+    resetStatus();
+  };
+
+  const runTool = async () => {
+    if (!hasInput) return;
+    if (status.kind === "running") return;
+    runStartRef.current = performance.now();
+    setElapsedMs(0);
+    setStatus({ kind: "running", partial: "" });
+
+    if (tool === "translate") {
+      try {
+        const aiSettings = useSettingsStore.getState().aiRefine;
+        const provider =
+          aiSettings.mode === "custom"
+            ? aiSettings.customProviders.find(
+                (p) => p.id === aiSettings.activeCustomProviderId,
+              ) ?? null
+            : null;
+        if (aiSettings.mode === "custom" && !provider) {
+          throw new Error("no_active_custom_provider");
+        }
+        const sysPrompt = TRANSLATE_PROMPT(TRANSLATE_LANG_NAMES[targetLang]);
+        let acc = "";
+        const r = await refineTextViaChatStream(
+          {
+            mode: aiSettings.mode,
+            systemPrompt: sysPrompt,
+            userText: text,
+            customBaseUrl: provider?.baseUrl,
+            customModel: provider?.model,
+            customKeyringId: provider
+              ? `ai_provider_${provider.id}`
+              : undefined,
+          },
+          (chunk) => {
+            acc += chunk;
+            setStatus({ kind: "running", partial: acc });
+          },
+        );
+        setElapsedMs(Math.round(performance.now() - runStartRef.current));
+        setStatus({ kind: "done", result: r.refinedText || acc });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setStatus({ kind: "error", message: msg });
+      }
+      return;
+    }
+
+    setTimeout(() => {
+      setElapsedMs(Math.round(performance.now() - runStartRef.current));
+      const mock = tool === "tts" ? "" : MOCK_RESULTS[tool];
+      setStatus({ kind: "done", result: mock });
+    }, 800);
+  };
+
+  const ready = status.kind === "done";
+  const running = status.kind === "running";
 
   const paramRow =
     tool === "polish" ? (
@@ -394,7 +494,29 @@ function ToolBody({ tool, hasInput, onUseAsInput }: ToolBodyProps) {
     );
 
   const isTts = tool === "tts";
-  const outputText = !hasInput || isTts ? "" : MOCK_RESULTS[tool];
+  const outputText =
+    status.kind === "done" ? status.result : status.kind === "running" ? status.partial : "";
+
+  let statusLabel: string;
+  let statusDot: string;
+  if (status.kind === "running") {
+    statusLabel = t("pages:toolbox.tools.running");
+    statusDot = "bg-te-accent animate-pulse";
+  } else if (status.kind === "error") {
+    statusLabel = t("pages:toolbox.tools.error", { message: status.message });
+    statusDot = "bg-red-500";
+  } else if (!hasInput) {
+    statusLabel = t("pages:toolbox.tools.idle");
+    statusDot = "bg-te-light-gray/40";
+  } else if (status.kind === "idle") {
+    statusLabel = t("pages:toolbox.tools.ready_to_run");
+    statusDot = "bg-te-accent/60";
+  } else {
+    statusLabel = t("pages:toolbox.tools.elapsed", {
+      seconds: (elapsedMs / 1000).toFixed(1),
+    });
+    statusDot = "bg-te-accent";
+  }
 
   return (
     <motion.div
@@ -413,7 +535,42 @@ function ToolBody({ tool, hasInput, onUseAsInput }: ToolBodyProps) {
               {t("pages:toolbox.tools.output_empty")}
             </p>
           </div>
-        ) : isTts ? (
+        ) : status.kind === "idle" ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 border border-dashed border-te-accent/40 bg-te-bg/40 px-4 py-6">
+            <motion.button
+              type="button"
+              onClick={runTool}
+              className="inline-flex items-center gap-2 border border-te-accent bg-te-accent px-6 py-3 font-mono text-[12px] font-bold uppercase tracking-[0.28em] text-te-bg shadow-[0_0_0_2px_rgba(0,0,0,0)] transition-all hover:shadow-[0_0_0_2px_var(--te-accent)]"
+              whileHover={{ y: -1 }}
+              whileTap={{ y: 0 }}
+            >
+              <Play className="size-3.5 fill-current" />
+              {t("pages:toolbox.tools.run")}
+            </motion.button>
+            <p className="text-center font-mono text-[10px] uppercase tracking-[0.22em] text-te-light-gray/60">
+              {t("pages:toolbox.tools.run_hint")}
+            </p>
+          </div>
+        ) : status.kind === "error" ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 border border-red-500/40 bg-red-500/[0.04] px-4 py-6">
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-red-400">
+              {t("pages:toolbox.tools.error_title")}
+            </p>
+            <p className="max-w-md text-center font-mono text-[12px] leading-relaxed text-te-light-gray break-words">
+              {status.message}
+            </p>
+            <motion.button
+              type="button"
+              onClick={runTool}
+              className="inline-flex items-center gap-2 border border-te-gray/50 bg-te-surface px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.22em] text-te-fg hover:border-te-accent hover:text-te-accent"
+              whileHover={{ y: -1 }}
+              whileTap={{ y: 0 }}
+            >
+              <RotateCcw className="size-3" />
+              {t("pages:toolbox.tools.rerun")}
+            </motion.button>
+          </div>
+        ) : isTts && status.kind === "done" ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 border border-te-accent/70 bg-te-bg p-4">
             <p className="font-mono text-sm tracking-wider text-te-fg">
               {t("pages:toolbox.tools.tts.audio_placeholder")}
@@ -428,6 +585,13 @@ function ToolBody({ tool, hasInput, onUseAsInput }: ToolBodyProps) {
             <span className="pointer-events-none absolute top-0 left-0 h-full w-0.5 bg-te-accent" />
             <p className="h-full overflow-y-auto whitespace-pre-wrap border border-te-accent/40 bg-te-bg p-3 pl-4 font-mono text-sm leading-relaxed text-te-fg">
               {outputText}
+              {running ? (
+                <motion.span
+                  className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-te-accent align-baseline"
+                  animate={{ opacity: [1, 0.2, 1] }}
+                  transition={{ repeat: Infinity, duration: 1, ease: "easeInOut" }}
+                />
+              ) : null}
             </p>
           </div>
         )}
@@ -435,26 +599,24 @@ function ToolBody({ tool, hasInput, onUseAsInput }: ToolBodyProps) {
 
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-te-gray/40 bg-te-bg/60 px-4 py-2.5">
         <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-te-accent/90">
-          <span
-            className={cn(
-              "inline-block size-1.5 rounded-full",
-              hasInput ? "bg-te-accent" : "bg-te-light-gray/40",
-            )}
-          />
-          {hasInput
-            ? t("pages:toolbox.tools.elapsed", { seconds: "1.4" })
-            : t("pages:toolbox.tools.idle")}
+          <span className={cn("inline-block size-1.5 rounded-full", statusDot)} />
+          {statusLabel}
         </span>
         <span className="mx-1 h-3 w-px bg-te-gray/40" />
-        <button type="button" className={BTN_GHOST} disabled={!hasInput}>
+        <button
+          type="button"
+          className={BTN_GHOST}
+          disabled={!hasInput || running}
+          onClick={runTool}
+        >
           <RotateCcw className="size-3" />
           {t("pages:toolbox.tools.rerun")}
         </button>
-        <button type="button" className={BTN_GHOST} disabled={!hasInput}>
+        <button type="button" className={BTN_GHOST} disabled={!ready}>
           <Copy className="size-3" />
           {t("pages:toolbox.tools.copy")}
         </button>
-        <button type="button" className={BTN_GHOST} disabled={!hasInput}>
+        <button type="button" className={BTN_GHOST} disabled={!ready}>
           <Save className="size-3" />
           {t("pages:toolbox.tools.save_history")}
         </button>
@@ -464,15 +626,15 @@ function ToolBody({ tool, hasInput, onUseAsInput }: ToolBodyProps) {
             <motion.button
               type="button"
               onClick={() => onUseAsInput(outputText)}
-              disabled={!hasInput}
+              disabled={!ready}
               className={cn(
                 "group inline-flex items-center gap-2 border px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.22em] transition-all",
-                hasInput
+                ready
                   ? "border-te-accent bg-te-accent text-te-bg shadow-[0_0_0_2px_rgba(0,0,0,0)] hover:shadow-[0_0_0_2px_var(--te-accent)]"
                   : "cursor-not-allowed border-te-gray/40 bg-te-surface/40 text-te-light-gray/40",
               )}
-              whileHover={hasInput ? { y: -1 } : undefined}
-              whileTap={hasInput ? { y: 0 } : undefined}
+              whileHover={ready ? { y: -1 } : undefined}
+              whileTap={ready ? { y: 0 } : undefined}
             >
               <ArrowUpFromLine className="size-3.5" />
               {t("pages:toolbox.tools.use_as_input")}
@@ -634,6 +796,7 @@ export default function ToolboxPage() {
               <ToolBody
                 key={activeTool}
                 tool={activeTool}
+                text={text}
                 hasInput={hasText}
                 onUseAsInput={useToolOutputAsInput}
               />

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { deleteRecordingFile } from "@/lib/audio";
 import { transcribeRecordingFile } from "@/lib/stt";
+import { buildProviderRef } from "@/lib/dictation-provider-ref";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { useAuthStore } from "@/stores/auth";
@@ -14,6 +15,7 @@ import {
 import { resolveLang } from "@/i18n";
 import i18n from "@/i18n";
 import { useUIStore } from "@/stores/ui";
+import { useStatsStore } from "@/stores/stats";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -42,11 +44,37 @@ export class NotAuthenticatedError extends Error {
 export type HistoryType = "dictation" | "ask" | "translate";
 export type HistoryStatus = "success" | "failed" | "cancelled";
 
+/**
+ * 实际调用的 ASR 通道。UI 通过 i18n key 翻译显示：
+ * - "saas-realtime"：默认 OpenLoaf SaaS realtime ASR（WebSocket 流式）
+ * - "saas-rest"：SaaS REST 文件转写（OL-TL-003）；realtime degrade 与 retry 路径
+ * - "byo"：用户自带 STT endpoint
+ */
+export type AsrSource = "saas-realtime" | "saas-rest" | "byo";
+
+/** 该次记录使用的听写分段模式（与 settings.AsrSegmentMode 对齐）。 */
+export type HistorySegmentMode = "REALTIME" | "UTTERANCE";
+
+/**
+ * 实际承载本次转写的供应商通道。命名规则 `<vendor>-<channel>`：
+ * - saas-realtime / saas-file：OpenLoaf SaaS realtime ASR / 文件转写
+ * - tencent-realtime / tencent-file：腾讯 BYOK 实时 / 文件
+ * - aliyun-realtime / aliyun-file：阿里 BYOK 实时 / 文件
+ * 老条目 / 未识别值显示为 "—"。
+ */
+export type ProviderKind =
+  | "saas-realtime"
+  | "saas-file"
+  | "tencent-realtime"
+  | "tencent-file"
+  | "aliyun-realtime"
+  | "aliyun-file";
+
 export interface HistoryItem {
   id: string;
   type: HistoryType;
   text: string;
-  /** AI 整理后的书面化文本；仅 AI_REFINE 模式产生，其它模式为 null。 */
+  /** AI 整理后的书面化文本；仅 UTTERANCE + aiRefine.enabled 时产生，否则 null。 */
   refined_text?: string | null;
   status: HistoryStatus;
   error?: string | null;
@@ -61,6 +89,19 @@ export interface HistoryItem {
    * 物理文件写入由 Rust 录音管线负责（task #13），DB 只记录引用。
    */
   audio_path?: string | null;
+  /** 实际走的 ASR 通道。null = 老记录（schema v3 之前）。 */
+  asr_source?: AsrSource | null;
+  /**
+   * 实际用的 AI 优化模型。预格式化的展示字符串：
+   * - "OpenLoaf SaaS"（saas 默认）
+   * - "{provider name} · {model}"（自定义 provider）
+   * null = 未启用 AI 优化 / 未尝试调用 AI。
+   */
+  ai_model?: string | null;
+  /** 听写分段模式。null = schema v4 之前的老记录。 */
+  segment_mode?: HistorySegmentMode | null;
+  /** 供应商通道（vendor + 实时/文件）。null = schema v4 之前的老记录。 */
+  provider_kind?: ProviderKind | null;
 }
 
 /** 新增一条记录时的入参；id 与 created_at 由 store 生成。 */
@@ -73,6 +114,10 @@ export interface HistoryInput {
   duration_ms: number;
   target_app?: string | null;
   audio_path?: string | null;
+  asr_source?: AsrSource | null;
+  ai_model?: string | null;
+  segment_mode?: HistorySegmentMode | null;
+  provider_kind?: ProviderKind | null;
 }
 
 // SQLite 取出来的原始行（bind 会回 camelCase 的字段，这里统一保留 snake_case）。
@@ -87,6 +132,10 @@ interface Row {
   created_at: number;
   target_app: string | null;
   audio_path: string | null;
+  asr_source: AsrSource | null;
+  ai_model: string | null;
+  segment_mode: HistorySegmentMode | null;
+  provider_kind: ProviderKind | null;
 }
 
 function rowToItem(r: Row): HistoryItem {
@@ -101,6 +150,10 @@ function rowToItem(r: Row): HistoryItem {
     created_at: r.created_at,
     target_app: r.target_app,
     audio_path: r.audio_path,
+    asr_source: r.asr_source,
+    ai_model: r.ai_model,
+    segment_mode: r.segment_mode,
+    provider_kind: r.provider_kind,
   };
 }
 
@@ -163,7 +216,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   reload: async () => {
     const d = await db();
     const rows = await d.select<Row[]>(
-      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path FROM history ORDER BY created_at DESC",
+      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind FROM history ORDER BY created_at DESC",
     );
     set({ items: rows.map(rowToItem) });
   },
@@ -180,6 +233,10 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       text: input.text,
       status: input.status,
       duration_ms: input.duration_ms,
+      asr_source: input.asr_source ?? null,
+      ai_model: input.ai_model ?? null,
+      segment_mode: input.segment_mode ?? null,
+      provider_kind: input.provider_kind ?? null,
     };
 
     // retention='off'：不写 DB，只塞内存；重启后清空，与 docs/history.md 一致。
@@ -192,12 +249,13 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         );
       }
       set({ items: [item, ...get().items] });
+      void useStatsStore.getState().bump(item);
       return item;
     }
 
     const d = await db();
     await d.execute(
-      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
       [
         item.id,
         item.type,
@@ -209,13 +267,18 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         item.created_at,
         item.target_app,
         item.audio_path,
+        item.asr_source,
+        item.ai_model,
+        item.segment_mode,
+        item.provider_kind,
       ],
     );
     set({ items: [item, ...get().items] });
+    void useStatsStore.getState().bump(item);
     return item;
   },
 
-  /** AI_REFINE 模式异步整理完后回写：仅更新 refined_text，不影响 text/status。 */
+  /** refine 异步整理完后回写：仅更新 refined_text，不影响 text/status。 */
   setRefinedText: async (id: string, refined: string) => {
     const d = await db();
     await d.execute("UPDATE history SET refined_text = $1 WHERE id = $2", [refined, id]);
@@ -245,6 +308,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const d = await db();
     await d.execute("DELETE FROM history");
     set({ items: [] });
+    void useStatsStore.getState().reset();
     for (const p of paths) {
       void deleteRecordingFile(p).catch((e) =>
         console.warn("[history] clearAll: delete file failed:", p, e),
@@ -274,14 +338,21 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       const r = await transcribeRecordingFile({
         audioPath: target.audio_path,
         durationMs: target.duration_ms,
+        provider: buildProviderRef(),
       });
       const text = r.text ?? "";
+      // retry 永远走 SaaS REST 文件转写，与 recording.ts degrade 路径一致。
+      const asrSource: AsrSource = "saas-rest";
 
-      // 跟随当前用户偏好——AI_REFINE 时走新 chat 通道整理；refine 失败回退原文，
-      // 与 recording.ts::finalizeAndWriteHistory 的两步行为对齐。
+      // 跟随当前用户偏好——UTTERANCE + aiRefine.enabled 时走新 chat 通道整理；
+      // refine 失败回退原文，与 recording.ts::finalizeAndWriteHistory 的两步行为对齐。
       const segmentMode = useSettingsStore.getState().general.asrSegmentMode;
+      const refineEnabled =
+        segmentMode === "UTTERANCE" &&
+        useSettingsStore.getState().aiRefine.enabled === true;
       let refinedText: string | null = null;
-      if (text && segmentMode === "AI_REFINE") {
+      let aiModel: string | null = null;
+      if (text && refineEnabled) {
         const aiSettings = useSettingsStore.getState().aiRefine;
         const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
         const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
@@ -319,6 +390,12 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
               (p) => p.id === aiSettings.activeCustomProviderId,
             ) ?? null;
         }
+        aiModel =
+          aiSettings.mode === "custom" && activeProvider
+            ? `${activeProvider.name} · ${activeProvider.model}`
+            : aiSettings.mode === "saas"
+              ? "OpenLoaf SaaS"
+              : null;
         try {
           if (aiSettings.mode === "custom" && !activeProvider) {
             throw new Error("no_active_custom_provider");
@@ -353,13 +430,21 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
       const d = await db();
       await d.execute(
-        "UPDATE history SET text = $1, refined_text = $2, status = 'success', error = NULL WHERE id = $3",
-        [text, refinedText, id],
+        "UPDATE history SET text = $1, refined_text = $2, status = 'success', error = NULL, asr_source = $3, ai_model = $4 WHERE id = $5",
+        [text, refinedText, asrSource, aiModel, id],
       );
       set({
         items: get().items.map((it) =>
           it.id === id
-            ? { ...it, text, refined_text: refinedText, status: "success", error: null }
+            ? {
+                ...it,
+                text,
+                refined_text: refinedText,
+                status: "success",
+                error: null,
+                asr_source: asrSource,
+                ai_model: aiModel,
+              }
             : it,
         ),
       });

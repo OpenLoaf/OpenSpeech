@@ -6,7 +6,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -264,7 +263,7 @@ function NewWordDialog({
           )}
         </div>
 
-        <DialogFooter className="flex flex-row justify-end gap-2 border-t border-te-gray/40 bg-te-surface-hover px-4 py-3">
+        <div className="flex flex-row justify-end gap-2 border-t border-te-gray/40 bg-te-surface-hover px-4 py-3">
           <button
             type="button"
             onClick={() => handleOpenChange(false)}
@@ -282,7 +281,7 @@ function NewWordDialog({
               ? t("pages:dictionary.new_dialog.submitting")
               : t("pages:dictionary.new_dialog.submit")}
           </button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

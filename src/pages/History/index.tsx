@@ -911,6 +911,24 @@ function HistoryDetailDialog({
               <span className="text-te-light-gray/60">→</span> {item.target_app}
             </span>
           )}
+          {item.segment_mode && (
+            <span>
+              <span className="text-te-light-gray/60">
+                {t("pages:history.detail.meta.segment_mode")}
+              </span>{" "}
+              {t(`pages:history.detail.segment_mode.${item.segment_mode}`)}
+            </span>
+          )}
+          {item.provider_kind && (
+            <span>
+              <span className="text-te-light-gray/60">
+                {t("pages:history.detail.meta.provider_kind")}
+              </span>{" "}
+              {t(`pages:history.detail.provider_kind.${item.provider_kind}`, {
+                defaultValue: item.provider_kind,
+              })}
+            </span>
+          )}
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
@@ -963,7 +981,9 @@ function HistoryDetailDialog({
           />
         )}
 
-        <DialogFooter className="m-0 flex shrink-0 flex-row flex-wrap items-center justify-end gap-2 rounded-none border-t border-te-gray/40 bg-te-surface-hover px-4 py-3">
+        <DialogFooter className="m-0 flex shrink-0 flex-row flex-wrap items-center gap-x-3 gap-y-2 rounded-none border-t border-te-gray/40 bg-te-surface-hover px-4 py-3">
+          <ModelMeta item={item} />
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {!isFailed && !isCancelled && rawText && (
             <DetailActionButton
               onClick={onCopy}
@@ -1006,9 +1026,37 @@ function HistoryDetailDialog({
             icon={<Trash2 />}
             label={t("pages:history.row.delete")}
           />
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ModelMeta({ item }: { item: HistoryItem }) {
+  const { t } = useTranslation();
+  if (!item.asr_source && !item.ai_model) return null;
+  const asrLabel = item.asr_source
+    ? t(`pages:history.detail.asr.${item.asr_source}`)
+    : null;
+  const aiLabel = item.ai_model ?? t("pages:history.detail.ai.none");
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5 text-[11px] leading-tight text-te-fg">
+      {asrLabel && (
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray/60">
+            {t("pages:history.detail.meta.asr")}
+          </span>
+          <span className="truncate">{asrLabel}</span>
+        </div>
+      )}
+      <div className="flex items-center gap-1.5">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray/60">
+          {t("pages:history.detail.meta.ai")}
+        </span>
+        <span className="truncate">{aiLabel}</span>
+      </div>
+    </div>
   );
 }
 

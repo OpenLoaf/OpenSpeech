@@ -1,6 +1,8 @@
 {
   "binding": {
-    "dictate_ptt": "Dictation"
+    "dictate_ptt": "Dictation",
+    "show_main_window": "Open main window",
+    "open_toolbox": "Open AI Tools"
   },
   "format": {
     "unbound": "Unbound",

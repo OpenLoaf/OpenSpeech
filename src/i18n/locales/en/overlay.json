@@ -113,6 +113,26 @@
     "register_failed": "Registration failed: {{id}} ({{error}})",
     "sync_hotkey_failed": "Failed to sync hotkeys to Rust: {{error}}",
     "preflight_permission_denied": "Microphone permission not granted",
-    "preflight_no_device": "No microphone available"
+    "preflight_no_device": "No microphone available",
+    "byok_not_implemented": "Custom BYOK channel under development; ships in the next release",
+    "byok_missing_credentials": "Custom provider credentials missing — set them in Settings → Dictation → Custom providers",
+    "byok_keyring_error": "Failed to read custom provider credentials from the system keychain",
+    "file_too_large_for_tencent_byok": "Recording exceeds the Tencent BYOK file transcription limit (~5 minutes). Switch to REALTIME mode or shorten the recording.",
+    "tencent_task_failed": "Tencent task failed: {{msg}}",
+    "tencent_task_timeout": "Tencent task timed out (no result after 24 minutes)",
+    "tencent_unauthenticated": "Tencent BYOK auth failed — check the SecretId / SecretKey in Settings",
+    "tencent_rate_limited": "Tencent BYOK rate-limited — wait a moment and retry",
+    "unauthenticated_byok": "Custom credentials rejected — check the SecretId / SecretKey",
+    "insufficient_funds": "Tencent Cloud account is out of credits or service is not enabled",
+    "idle_timeout": "Disconnected after a long silence with no audio",
+    "rate_limited": "Provider rate-limited the request — wait a moment and retry",
+    "aliyun_invalid_audio_format": "Audio format not supported by Aliyun DashScope — check the sample rate / bit depth",
+    "aliyun_quota_exceeded": "Aliyun DashScope quota exhausted",
+    "aliyun_unauthenticated": "Aliyun DashScope auth failed — check the ApiKey in Settings",
+    "aliyun_rate_limited": "Aliyun DashScope rate-limited — wait a moment and retry",
+    "aliyun_upload_failed": "Aliyun DashScope OSS upload failed: {{msg}}",
+    "aliyun_filetrans_failed": "Aliyun DashScope task failed: {{msg}}",
+    "aliyun_filetrans_timeout": "Aliyun DashScope task timed out (no result after 24 minutes)",
+    "aliyun_file_too_large": "Recording exceeds the Aliyun DashScope BYOK single-file limit (default 100 MB)"
   }
 }

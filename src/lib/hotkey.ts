@@ -28,9 +28,13 @@ export const MOD_ORDER: readonly HotkeyMod[] = [
   "meta",
 ];
 
-// 听写为单一 binding（id 名沿用 "dictate_ptt"，Rust 侧解析与历史 hotkeys.json
-// 都用此名）。统一为 toggle 行为：按一下开始、再按一下结束。
-export const BINDING_IDS = ["dictate_ptt"] as const;
+// 听写 PTT + 唤起主窗口 + 跳到 AI 工具页。`dictate_ptt` 名称沿用 v1 数据兼容；
+// 后两个走 combo，只在 pressed 边沿触发一次，避免与录音 FSM 串扰。
+export const BINDING_IDS = [
+  "dictate_ptt",
+  "show_main_window",
+  "open_toolbox",
+] as const;
 export type BindingId = (typeof BINDING_IDS)[number];
 
 /**
@@ -39,6 +43,9 @@ export type BindingId = (typeof BINDING_IDS)[number];
  *            上单 Fn 不可达 + 减少与系统 Fn 行为的歧义）
  * - Windows: PTT = `Ctrl + Win`（modifier-only，Win 键在内部抽象为 `meta`）
  * - Linux:   PTT = `Ctrl + Super`（modifier-only）
+ *
+ * 唤起主窗口统一 `Ctrl + Alt + O`（macOS = ⌃⌥O）。三平台无系统占用，O 对应
+ * OpenSpeech 助记，不与 PTT 默认（Fn+Ctrl / Ctrl+Meta）冲突。
  */
 export function getDefaultBindings(
   platform: Platform,
@@ -48,8 +55,22 @@ export function getDefaultBindings(
       ? { kind: "modifierOnly", mods: ["fn", "ctrl"], code: "" }
       : { kind: "modifierOnly", mods: ["ctrl", "meta"], code: "" };
 
+  const showMainWindow: HotkeyBinding = {
+    kind: "combo",
+    mods: ["ctrl", "alt"],
+    code: "KeyO",
+  };
+
+  const openToolbox: HotkeyBinding = {
+    kind: "combo",
+    mods: ["ctrl", "alt"],
+    code: "KeyT",
+  };
+
   return {
     dictate_ptt: ptt,
+    show_main_window: showMainWindow,
+    open_toolbox: openToolbox,
   };
 }
 

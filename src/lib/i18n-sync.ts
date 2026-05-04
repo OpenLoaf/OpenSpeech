@@ -6,6 +6,8 @@ import i18n, {
   type LanguagePref,
   type SupportedLang,
 } from "@/i18n";
+import { useHotkeysStore } from "@/stores/hotkeys";
+import type { HotkeyBinding, HotkeyMod } from "@/lib/hotkey";
 
 const LANG_CHANGED = "openspeech://lang-changed";
 
@@ -37,17 +39,47 @@ export function listenLangChanged(): Promise<UnlistenFn> {
   });
 }
 
-async function pushTrayLabels(): Promise<void> {
+// muda accelerator 字符串：mods 里 ctrl/alt/shift 直接对应；meta=Cmd（macOS 是 ⌘，
+// 其它平台是 Super/Win）；fn 没有 muda 等价物 → 跳过。modifierOnly / doubleTap
+// 在系统菜单里没法显示成 accelerator，返回空字符串让 Rust 侧不调 .accelerator()。
+function bindingToAccelerator(binding: HotkeyBinding | null): string {
+  if (!binding || binding.kind !== "combo" || !binding.code) return "";
+  const MOD_MAP: Record<HotkeyMod, string | null> = {
+    ctrl: "Ctrl",
+    alt: "Alt",
+    shift: "Shift",
+    meta: "Cmd",
+    fn: null,
+  };
+  const parts: string[] = [];
+  for (const m of binding.mods) {
+    const mapped = MOD_MAP[m];
+    if (!mapped) return "";
+    parts.push(mapped);
+  }
+  let key = binding.code;
+  const keyMatch = /^Key([A-Z])$/.exec(key);
+  const digitMatch = /^Digit(\d)$/.exec(key);
+  if (keyMatch) key = keyMatch[1]!;
+  else if (digitMatch) key = digitMatch[1]!;
+  parts.push(key);
+  return parts.join("+");
+}
+
+export async function pushTrayLabels(): Promise<void> {
   const t = i18n.getFixedT(null, "tray");
+  const showMain = useHotkeysStore.getState().bindings["show_main_window"] ?? null;
   const labels = {
     feedback: t("feedback"),
     open_home: t("open_home"),
+    open_home_accel: bindingToAccelerator(showMain),
+    open_toolbox: t("open_toolbox"),
+    open_history: t("open_history"),
     open_settings: t("open_settings"),
     mic_submenu: t("mic_submenu"),
     auto_detect: t("auto_detect"),
     auto_detect_with_name: t("auto_detect_with_name"),
     open_dictionary: t("open_dictionary"),
-    version_prefix: t("version_prefix"),
     check_update: t("check_update"),
     quit: t("quit"),
   };

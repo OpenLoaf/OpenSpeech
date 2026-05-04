@@ -1,12 +1,13 @@
 {
   "feedback": "Feedback",
-  "open_home": "Open OpenSpeech",
+  "open_home": "Open home",
+  "open_toolbox": "AI Tools",
+  "open_history": "History",
   "open_settings": "Settings…",
   "mic_submenu": "Microphone",
   "auto_detect": "Auto-detect",
   "auto_detect_with_name": "Auto-detect ({{name}})",
-  "open_dictionary": "Add to dictionary",
-  "version_prefix": "Version {{version}}",
+  "open_dictionary": "Dictionary",
   "check_update": "Check for updates",
   "quit": "Quit OpenSpeech"
 }

@@ -1,6 +1,8 @@
 {
   "binding": {
-    "dictate_ptt": "听写"
+    "dictate_ptt": "听写",
+    "show_main_window": "打开主窗口",
+    "open_toolbox": "打开 AI 工具"
   },
   "format": {
     "unbound": "未绑定",

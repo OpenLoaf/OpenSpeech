@@ -113,6 +113,26 @@
     "register_failed": "注册失败：{{id}}（{{error}}）",
     "sync_hotkey_failed": "同步快捷键到 Rust 失败：{{error}}",
     "preflight_permission_denied": "未授予麦克风权限",
-    "preflight_no_device": "未找到可用麦克风"
+    "preflight_no_device": "未找到可用麦克风",
+    "byok_not_implemented": "自定义 BYOK 通道开发中，将在下个版本启用",
+    "byok_missing_credentials": "自定义供应商凭证缺失，请到设置 → 听写 → 自定义供应商配置",
+    "byok_keyring_error": "无法从系统密钥链读取自定义供应商凭证",
+    "file_too_large_for_tencent_byok": "单个文件超过腾讯 BYOK 文件转写上限（约 5 分钟），请改用 REALTIME 模式或缩短录音",
+    "tencent_task_failed": "腾讯任务执行失败：{{msg}}",
+    "tencent_task_timeout": "腾讯任务超时（>24 分钟未返回结果）",
+    "tencent_unauthenticated": "腾讯 BYOK 鉴权失败 —— 请检查设置里的 SecretId / SecretKey",
+    "tencent_rate_limited": "腾讯 BYOK 触发限流，请稍候再试",
+    "unauthenticated_byok": "自定义凭证鉴权失败：请检查 SecretId / SecretKey",
+    "insufficient_funds": "腾讯云账户余额不足或服务未开通",
+    "idle_timeout": "长时间无音频，已自动断开",
+    "rate_limited": "供应商触发限流，请稍候再试",
+    "aliyun_invalid_audio_format": "音频格式不被阿里 DashScope 支持，请检查采样率与位深",
+    "aliyun_quota_exceeded": "阿里 DashScope 配额已用尽",
+    "aliyun_unauthenticated": "阿里 DashScope 鉴权失败 —— 请检查设置里的 ApiKey",
+    "aliyun_rate_limited": "阿里 DashScope 触发限流，请稍候再试",
+    "aliyun_upload_failed": "阿里 DashScope OSS 上传失败：{{msg}}",
+    "aliyun_filetrans_failed": "阿里 DashScope 任务执行失败：{{msg}}",
+    "aliyun_filetrans_timeout": "阿里 DashScope 任务超时（>24 分钟未返回结果）",
+    "aliyun_file_too_large": "文件大小超过阿里 DashScope BYOK 单文件上限（默认 100MB）"
   }
 }

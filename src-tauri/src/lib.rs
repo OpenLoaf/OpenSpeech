@@ -21,6 +21,7 @@ use tauri_plugin_store::StoreExt;
 use tauri::ActivationPolicy;
 
 mod ai_refine;
+mod asr;
 mod audio;
 mod db;
 mod hotkey;
@@ -46,10 +47,11 @@ const QUIT_REQUESTED_EVENT: &str = "openspeech://quit-requested";
 const TRAY_OPEN_HOME_EVENT: &str = "openspeech://tray-open-home";
 const TRAY_OPEN_SETTINGS_EVENT: &str = "openspeech://tray-open-settings";
 const TRAY_OPEN_DICTIONARY_EVENT: &str = "openspeech://tray-open-dictionary";
+const TRAY_OPEN_TOOLBOX_EVENT: &str = "openspeech://tray-open-toolbox";
+const TRAY_OPEN_HISTORY_EVENT: &str = "openspeech://tray-open-history";
+const TRAY_OPEN_FEEDBACK_EVENT: &str = "openspeech://tray-open-feedback";
 const TRAY_CHECK_UPDATE_EVENT: &str = "openspeech://tray-check-update";
 const TRAY_SELECT_MIC_EVENT: &str = "openspeech://tray-select-mic";
-// 反馈入口 MVP 走邮件，未来迁到网站可改常量。
-const FEEDBACK_URL: &str = "mailto:feedback@openspeech.app";
 
 // 托盘菜单文案：Rust 不嵌 i18n，文案完全由前端按当前语言推过来。bootPromise 完成后
 // 前端 syncI18nFromSettings 会调用 update_tray_labels 一次；之后切语言再推。空槽位
@@ -59,13 +61,18 @@ const FEEDBACK_URL: &str = "mailto:feedback@openspeech.app";
 pub struct TrayLabels {
     pub feedback: String,
     pub open_home: String,
+    /// `show_main_window` 当前 binding 的 muda accelerator 字符串（如 "Ctrl+Alt+O"）。
+    /// 空字符串 = 不显示快捷键。前端 i18n-sync 在 binding 变动 / 切语言时一起 push。
+    #[serde(default)]
+    pub open_home_accel: String,
+    pub open_toolbox: String,
+    pub open_history: String,
     pub open_settings: String,
     pub mic_submenu: String,
     pub auto_detect: String,
     // "Auto-detect ({name})" 模板里的前缀，用于显示当前默认设备名。
     pub auto_detect_with_name: String,
     pub open_dictionary: String,
-    pub version_prefix: String,
     pub check_update: String,
     pub quit: String,
 }
@@ -74,13 +81,15 @@ impl Default for TrayLabels {
     fn default() -> Self {
         Self {
             feedback: "Feedback".into(),
-            open_home: "Open OpenSpeech".into(),
+            open_home: "Open home".into(),
+            open_home_accel: String::new(),
+            open_toolbox: "AI Tools".into(),
+            open_history: "History".into(),
             open_settings: "Settings…".into(),
             mic_submenu: "Microphone".into(),
             auto_detect: "Auto-detect".into(),
             auto_detect_with_name: "Auto-detect ({{name}})".into(),
-            open_dictionary: "Add to dictionary".into(),
-            version_prefix: "Version {{version}}".into(),
+            open_dictionary: "Dictionary".into(),
             check_update: "Check for updates".into(),
             quit: "Quit OpenSpeech".into(),
         }
@@ -291,7 +300,7 @@ fn apply_dock_icon_policy<R: Runtime>(app: &tauri::AppHandle<R>) {
     let _ = app.set_activation_policy(policy);
 }
 
-fn hide_main_window(app: &tauri::AppHandle) {
+fn hide_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
@@ -302,7 +311,24 @@ fn hide_main_window(app: &tauri::AppHandle) {
     }
 }
 
-pub(crate) fn show_main_window(app: &tauri::AppHandle) {
+/// 全局 toggle：可见 + 已聚焦 → 隐藏；其它一律 show + focus。
+/// 拆出来给 ShowMainWindow hotkey 用——单一入口避免和 show_main_window
+/// / hide_main_window 各自的竞态走两套路径。
+pub(crate) fn toggle_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(window) = app.get_webview_window("main") else {
+        show_main_window(app);
+        return;
+    };
+    let visible = window.is_visible().unwrap_or(false);
+    let focused = window.is_focused().unwrap_or(false);
+    if visible && focused {
+        hide_main_window(app);
+    } else {
+        show_main_window(app);
+    }
+}
+
+pub(crate) fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     // macOS：按用户偏好切换 activation policy——默认 Regular（Dock 显示图标），
     // 若设置里关了 showDockIcon 则切 Accessory（纯菜单栏应用）。前一次隐藏时
     // hide_main_window 已统一切到 Accessory，这里必须再读一次用户设定重新 apply。
@@ -333,12 +359,19 @@ fn read_input_device_from_store<R: Runtime>(app: &tauri::AppHandle<R>) -> Option
 fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let devices = audio::audio_list_input_devices();
     let current = read_input_device_from_store(app);
-    let version = app.package_info().version.to_string();
 
     let labels = current_tray_labels();
 
     let feedback = MenuItemBuilder::with_id("tray::feedback", &labels.feedback).build(app)?;
-    let home = MenuItemBuilder::with_id("tray::open_home", &labels.open_home).build(app)?;
+    let mut home_builder = MenuItemBuilder::with_id("tray::open_home", &labels.open_home);
+    if !labels.open_home_accel.is_empty() {
+        home_builder = home_builder.accelerator(&labels.open_home_accel);
+    }
+    let home = home_builder.build(app)?;
+    let toolbox =
+        MenuItemBuilder::with_id("tray::open_toolbox", &labels.open_toolbox).build(app)?;
+    let history =
+        MenuItemBuilder::with_id("tray::open_history", &labels.open_history).build(app)?;
     let settings = MenuItemBuilder::with_id("tray::open_settings", &labels.open_settings)
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
@@ -377,10 +410,6 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
 
     let dict =
         MenuItemBuilder::with_id("tray::open_dictionary", &labels.open_dictionary).build(app)?;
-    let version_label = labels.version_prefix.replace("{{version}}", &version);
-    let version_item = MenuItemBuilder::with_id("tray::version", version_label)
-        .enabled(false)
-        .build(app)?;
     let check_update =
         MenuItemBuilder::with_id("tray::check_update", &labels.check_update).build(app)?;
     let quit = MenuItemBuilder::with_id("tray::quit", &labels.quit)
@@ -388,14 +417,15 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
         .build(app)?;
 
     MenuBuilder::new(app)
-        .item(&feedback)
         .item(&home)
+        .item(&toolbox)
+        .item(&history)
+        .item(&dict)
         .separator()
         .item(&settings)
         .item(&mic_submenu)
-        .item(&dict)
         .separator()
-        .item(&version_item)
+        .item(&feedback)
         .item(&check_update)
         .separator()
         .item(&quit)
@@ -705,7 +735,8 @@ pub fn run() {
                     }
                     match id {
                         "tray::feedback" => {
-                            let _ = app.opener().open_url(FEEDBACK_URL, None::<&str>);
+                            show_main_window(app);
+                            let _ = app.emit(TRAY_OPEN_FEEDBACK_EVENT, ());
                         }
                         "tray::open_home" => {
                             show_main_window(app);
@@ -718,6 +749,14 @@ pub fn run() {
                         "tray::open_dictionary" => {
                             show_main_window(app);
                             let _ = app.emit(TRAY_OPEN_DICTIONARY_EVENT, ());
+                        }
+                        "tray::open_toolbox" => {
+                            show_main_window(app);
+                            let _ = app.emit(TRAY_OPEN_TOOLBOX_EVENT, ());
+                        }
+                        "tray::open_history" => {
+                            show_main_window(app);
+                            let _ = app.emit(TRAY_OPEN_HISTORY_EVENT, ());
                         }
                         "tray::check_update" => {
                             show_main_window(app);
@@ -817,6 +856,7 @@ pub fn run() {
             ai_refine::refine_text_via_chat_stream,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
+            asr::test_provider::dictation_test_provider,
             inject::inject_paste,
             inject::inject_type,
             permissions::permission_check_microphone,

@@ -11,8 +11,8 @@ const IS_MAIN_WINDOW = getCurrentWebviewWindow().label === "main";
 
 export type SettingsTabId =
   | "GENERAL"
+  | "HOTKEYS"
   | "DICTATION"
-  | "PERSONALIZATION"
   | "AI"
   | "ABOUT";
 

@@ -1,4 +1,7 @@
 {
+  "transcribe": {
+    "too_long_for_utterance": "单次录音超过 5 分钟，UTTERANCE 模式不支持，请切换到 REALTIME 模式"
+  },
   "home": {
     "hero": {
       "title_line1": "说出来。",
@@ -10,6 +13,10 @@
     "hotkey_hint": "按一下快捷键开始录音，再按一下结束并把文字写入当前输入框。按 <esc>Esc</esc> 取消；焦点必须在可编辑区域。",
     "stats": {
       "section_title": "今日 / 本次会话",
+      "section_title_today": "今日会话统计",
+      "section_title_all": "累计会话统计",
+      "tab_today": "今日",
+      "tab_all": "累计",
       "live_metrics": "// LIVE METRICS",
       "duration_label": "口述时长",
       "duration_unit": "HH:MM",
@@ -86,8 +93,33 @@
       "meta": {
         "duration": "时长",
         "target": "目标应用",
-        "error": "错误"
+        "error": "错误",
+        "asr": "音频识别",
+        "ai": "AI 优化",
+        "segment_mode": "模式",
+        "provider_kind": "通道"
       },
+      "asr": {
+        "saas-realtime": "OpenLoaf SaaS · 实时识别",
+        "saas-rest": "OpenLoaf SaaS · REST 转写",
+        "byo": "自定义 STT 端点"
+      },
+      "ai": {
+        "none": "未启用"
+      },
+      "segment_mode": {
+        "REALTIME": "实时",
+        "UTTERANCE": "整句"
+      },
+      "provider_kind": {
+        "saas-realtime": "OpenLoaf 实时",
+        "saas-file": "OpenLoaf 文件",
+        "tencent-realtime": "腾讯实时",
+        "tencent-file": "腾讯文件",
+        "aliyun-realtime": "阿里实时",
+        "aliyun-file": "阿里文件"
+      },
+      "unknown": "—",
       "empty_text": "（无文本内容）"
     },
     "toast": {
@@ -243,6 +275,12 @@
         },
         "audio_placeholder": "▶  ━━━━━━━━━━━━━━━━━━━━  0:08 / 0:12"
       },
+      "run": "运行",
+      "run_hint": "配置好上方参数后点击运行",
+      "ready_to_run": "就绪 · 待运行",
+      "running": "运行中…",
+      "error_title": "运行失败",
+      "error": "失败 · {{message}}",
       "rerun": "重跑",
       "copy": "复制",
       "save_history": "保存",

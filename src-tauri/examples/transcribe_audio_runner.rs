@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use openloaf_saas::v4_tools::{
-    RealtimeAsrLlmLanguage, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmVadMode,
-    RealtimeAsrSession, RealtimeEvent,
+    RealtimeAsrLlmOlTlRt002Lang, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmOlTlRt002ServerVad,
+    RealtimeAsrLlmOlTlRt002Transcription, RealtimeAsrSession, RealtimeEvent,
 };
 use openloaf_saas::{SaaSClient, SaaSClientConfig, SaaSError, SaaSResult};
 use serde::Deserialize;
@@ -38,25 +38,25 @@ struct DevSession {
 
 struct Args {
     pcm16_file: PathBuf,
-    lang: RealtimeAsrLlmLanguage,
+    lang: RealtimeAsrLlmOlTlRt002Lang,
     chunk_ms: u64,
 }
 
-fn parse_lang(s: &str) -> RealtimeAsrLlmLanguage {
+fn parse_lang(s: &str) -> RealtimeAsrLlmOlTlRt002Lang {
     match s {
-        "zh" | "zh-CN" | "zh-cn" | "zh-TW" | "zh-tw" => RealtimeAsrLlmLanguage::Zh,
-        "en" => RealtimeAsrLlmLanguage::En,
-        "ja" => RealtimeAsrLlmLanguage::Ja,
-        "ko" => RealtimeAsrLlmLanguage::Ko,
-        "yue" => RealtimeAsrLlmLanguage::Yue,
-        _ => RealtimeAsrLlmLanguage::Auto,
+        "zh" | "zh-CN" | "zh-cn" | "zh-TW" | "zh-tw" => RealtimeAsrLlmOlTlRt002Lang::Zh,
+        "en" => RealtimeAsrLlmOlTlRt002Lang::En,
+        "ja" => RealtimeAsrLlmOlTlRt002Lang::Ja,
+        "ko" => RealtimeAsrLlmOlTlRt002Lang::Ko,
+        "yue" => RealtimeAsrLlmOlTlRt002Lang::Yue,
+        _ => RealtimeAsrLlmOlTlRt002Lang::Auto,
     }
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut iter = std::env::args().skip(1);
     let mut pcm16_file: Option<PathBuf> = None;
-    let mut lang = RealtimeAsrLlmLanguage::Auto;
+    let mut lang = RealtimeAsrLlmOlTlRt002Lang::Auto;
     let mut chunk_ms: u64 = 100;
     while let Some(flag) = iter.next() {
         match flag.as_str() {
@@ -205,8 +205,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.set_access_token(Some(sess_meta.access_token.clone()));
 
     let params = RealtimeAsrLlmOlTlRt002Params {
-        language: Some(args.lang),
-        vad_mode: Some(RealtimeAsrLlmVadMode::ServerVad),
+        input_audio_transcription: Some(RealtimeAsrLlmOlTlRt002Transcription {
+            language: Some(args.lang),
+            context: None,
+        }),
+        turn_detection: Some(RealtimeAsrLlmOlTlRt002ServerVad::default()),
         ..Default::default()
     };
 

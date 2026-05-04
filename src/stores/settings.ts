@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { Store } from "@tauri-apps/plugin-store";
 import { syncI18nFromSettings } from "@/lib/i18n-sync";
 import type { LanguagePref } from "@/i18n";
-import { deleteAiProviderKey } from "@/lib/secrets";
+import { deleteAiProviderKey, deleteDictationProviderKey } from "@/lib/secrets";
 import {
   DEFAULT_AI_SYSTEM_PROMPTS,
   type AiPromptLang as AiPromptLangFromDefaults,
@@ -16,10 +16,9 @@ export {
 // settings.json 落在 tauri-plugin-store 的 app data 路径下。只放非机密配置；
 // API Key 等机密走 keyring，见 src/lib/secrets.ts。
 const STORE_FILE = "settings.json";
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 12;
 
 export type CloseBehavior = "ASK" | "HIDE" | "QUIT";
-export type Sensitivity = "LOW" | "NORMAL" | "HIGH";
 // 听写源：SAAS = OpenLoaf 云端（扣积分 / Pro+ 无限）；BYO = 用户自己的 REST 端点。
 // 详见 docs/subscription.md。
 export type DictationSource = "SAAS" | "BYO";
@@ -30,8 +29,8 @@ export type DictationMode = "REALTIME" | "AI";
 // 听写模式：
 //   REALTIME   — 实时转换：服务端 VAD 按停顿切句，partial 实时回填
 //   UTTERANCE  — 整句听写：整段录音视为一句话，松开按键后才出转写
-//   AI_REFINE  — AI 优化（默认）：UTTERANCE 流程结束后再走 AI refine 整理书面化
-export type AsrSegmentMode = "REALTIME" | "UTTERANCE" | "AI_REFINE";
+// AI 优化降级为 UTTERANCE 下的开关 aiRefine.enabled，不再作为独立模式。
+export type AsrSegmentMode = "REALTIME" | "UTTERANCE";
 // 历史记录保留时长。off = 不写入数据库（仅当前会话内存可见）；其它按天数清理。
 // 真正的清理任务由后端启动期 sweeper 执行（见 docs/history.md，TODO 实现）。
 export type HistoryRetention = "forever" | "90d" | "30d" | "7d" | "off";
@@ -84,12 +83,6 @@ export interface GeneralSettings {
   historyRetention: HistoryRetention;
 }
 
-export interface PersonalizationSettings {
-  autoPolish: boolean;
-  contextStyle: boolean;
-  sensitivity: Sensitivity;
-}
-
 export type AiRefineMode = "saas" | "custom";
 export type AiPromptLang = AiPromptLangFromDefaults;
 
@@ -101,6 +94,8 @@ export interface AiCustomProvider {
 }
 
 export interface AiRefineSettings {
+  // UTTERANCE 模式下是否启用 AI 优化；REALTIME 下被 UI 强制禁用，运行时也短路。
+  enabled: boolean;
   mode: AiRefineMode;
   customProviders: AiCustomProvider[];
   activeCustomProviderId: string | null;
@@ -109,12 +104,42 @@ export interface AiRefineSettings {
   includeHistory: boolean;
 }
 
+// ─── Dictation provider（听写云通道选择）────────────────────────
+//
+// 跟 AI refine 同模式：默认走 OpenLoaf SaaS（mode=saas）；用户也可切到
+// custom 自带凭证直连。当前 vendor 只支持 tencent / aliyun。
+//
+// 凭证形态：
+//   - aliyun：DashScope ApiKey（单字段 Bearer）
+//   - tencent：AppID（非 secret）+ SecretId + SecretKey（双字段，组合后 JSON 入 keyring）
+//
+// settings.json 只存非密钥字段（id / name / vendor / 腾讯 AppID / 阿里 region 等）；
+// 密钥本体走 keyring service=`dictation_provider_<id>`。详见 docs/cloud-endpoints.md §3。
+export type DictationProviderMode = "saas" | "custom";
+export type DictationVendor = "tencent" | "aliyun";
+
+export interface DictationCustomProvider {
+  id: string;
+  /// 用户给这条 provider 起的别名，UI 展示用
+  name: string;
+  vendor: DictationVendor;
+  /// 腾讯云专用：AppID（非密钥，wss URL 路径必填）。aliyun provider 留空即可
+  tencentAppId?: string;
+  /// 腾讯录音文件接口要带 region（默认 ap-shanghai）。aliyun 留空。
+  tencentRegion?: string;
+}
+
+export interface DictationSettings {
+  mode: DictationProviderMode;
+  customProviders: DictationCustomProvider[];
+  activeCustomProviderId: string | null;
+}
 
 interface PersistShape {
   schemaVersion: number;
   general: GeneralSettings;
-  personalization: PersonalizationSettings;
   aiRefine: AiRefineSettings;
+  dictation: DictationSettings;
 }
 
 const DEFAULT_GENERAL: GeneralSettings = {
@@ -135,21 +160,16 @@ const DEFAULT_GENERAL: GeneralSettings = {
   skippedUpdateVersion: "",
   closeBehavior: "ASK",
   onboardingCompleted: false,
-  // 默认 AI_REFINE：UTTERANCE 流程拿到 final transcript 后再走 AI refine 整理。
+  // 默认 UTTERANCE + aiRefine.enabled = true：等价于旧 AI_REFINE 模式。
   // UTTERANCE（vadMode=none）作为基底：push-to-talk 听写文档推荐——更准、
   // 更便宜、不被 VAD 错切。REALTIME（server_vad）留给会议字幕 / 直播 / 同传
   // 等需要按句独立 transcript 的无人值守场景。
-  asrSegmentMode: "AI_REFINE",
+  asrSegmentMode: "UTTERANCE",
   historyRetention: "forever",
 };
 
-const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
-  autoPolish: true,
-  contextStyle: false,
-  sensitivity: "NORMAL",
-};
-
 const DEFAULT_AI_REFINE: AiRefineSettings = {
+  enabled: true,
   mode: "saas",
   customProviders: [],
   activeCustomProviderId: null,
@@ -157,27 +177,38 @@ const DEFAULT_AI_REFINE: AiRefineSettings = {
   includeHistory: true,
 };
 
+const DEFAULT_DICTATION: DictationSettings = {
+  mode: "saas",
+  customProviders: [],
+  activeCustomProviderId: null,
+};
+
 interface SettingsState {
   general: GeneralSettings;
-  personalization: PersonalizationSettings;
   aiRefine: AiRefineSettings;
+  dictation: DictationSettings;
   loaded: boolean;
   init: () => Promise<void>;
   setGeneral: <K extends keyof GeneralSettings>(
     key: K,
     value: GeneralSettings[K],
   ) => Promise<void>;
-  setPersonalization: <K extends keyof PersonalizationSettings>(
-    key: K,
-    value: PersonalizationSettings[K],
-  ) => Promise<void>;
   setAiRefineMode: (mode: AiRefineMode) => Promise<void>;
+  setAiRefineEnabled: (v: boolean) => Promise<void>;
   addAiProvider: (provider: AiCustomProvider) => Promise<void>;
   updateAiProvider: (id: string, patch: Partial<Omit<AiCustomProvider, "id">>) => Promise<void>;
   removeAiProvider: (id: string) => Promise<void>;
   setActiveAiProvider: (id: string | null) => Promise<void>;
   setAiSystemPrompt: (value: string | null) => Promise<void>;
   setAiIncludeHistory: (v: boolean) => Promise<void>;
+  setDictationMode: (mode: DictationProviderMode) => Promise<void>;
+  addDictationProvider: (provider: DictationCustomProvider) => Promise<void>;
+  updateDictationProvider: (
+    id: string,
+    patch: Partial<Omit<DictationCustomProvider, "id">>,
+  ) => Promise<void>;
+  removeDictationProvider: (id: string) => Promise<void>;
+  setActiveDictationProvider: (id: string | null) => Promise<void>;
 }
 
 let storePromise: Promise<Store> | null = null;
@@ -233,15 +264,15 @@ function migrateV3(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
 }
 
 // v4 → v5：AsrSegmentMode 重命名 + 加 AI_REFINE。AUTO→REALTIME, MANUAL→UTTERANCE；
-// 老用户的选择保持等价语义，不强行改成 AI_REFINE（避免突然开始扣额外积分）；
-// 想用 AI_REFINE 的用户自己去设置里切。
+// AI_REFINE 在 v11→v12 又被降级为 UTTERANCE + aiRefine.enabled；这里先保留字面量，
+// 由 migrateV11 统一迁出。
 function migrateV4(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
   const old = oldGeneral.asrSegmentMode;
-  let mode: AsrSegmentMode = "AI_REFINE";
+  let mode: string = "AI_REFINE";
   if (old === "AUTO" || old === "REALTIME") mode = "REALTIME";
   else if (old === "MANUAL" || old === "UTTERANCE") mode = "UTTERANCE";
   else if (old === "AI_REFINE") mode = "AI_REFINE";
-  return { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: mode };
+  return { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: mode as AsrSegmentMode };
 }
 
 // v5 → v6：把"历史记录保留时长"从 History 页本地 state 升级为持久化设置。
@@ -277,8 +308,11 @@ function migrateV7(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
 // v8 → v9：加 aiRefine slice，原字段不动；缺失字段补默认值。
 // v9 → v10：systemPrompts(三语 Record) 改为 customSystemPrompt(string|null)。
 // 旧三语跟默认完全一致 ⇒ null（继续走默认）；否则取一条非空非默认的作为自定义值。
-function mergeAiRefine(raw: unknown): AiRefineSettings {
-  if (!raw || typeof raw !== "object") return { ...DEFAULT_AI_REFINE };
+// v11 → v12：通过 forceEnabled 把旧 AI_REFINE 模式语义迁移到 enabled=true。
+function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
+  if (!raw || typeof raw !== "object") {
+    return { ...DEFAULT_AI_REFINE, enabled: forceEnabled ?? DEFAULT_AI_REFINE.enabled };
+  }
   const r = raw as Partial<AiRefineSettings> & { systemPrompts?: unknown };
   const providers = Array.isArray(r.customProviders)
     ? r.customProviders.filter(
@@ -312,12 +346,63 @@ function mergeAiRefine(raw: unknown): AiRefineSettings {
     customSystemPrompt = null;
   }
 
+  const enabled =
+    forceEnabled !== undefined
+      ? forceEnabled
+      : typeof r.enabled === "boolean"
+        ? r.enabled
+        : DEFAULT_AI_REFINE.enabled;
+
   return {
+    enabled,
     mode: r.mode === "custom" ? "custom" : "saas",
     customProviders: providers,
     activeCustomProviderId: active,
     customSystemPrompt,
     includeHistory: typeof r.includeHistory === "boolean" ? r.includeHistory : true,
+  };
+}
+
+// v11 → v12：3 档模式精简为 2 档。AI_REFINE → UTTERANCE + aiRefine.enabled = true；
+// 老 UTTERANCE / REALTIME 用户保持 enabled = false（避免突然开启 AI 优化扣额外积分）。
+function migrateV11(
+  oldGeneral: Record<string, unknown>,
+): { general: Partial<GeneralSettings>; aiRefineEnabled: boolean } {
+  const old = oldGeneral.asrSegmentMode;
+  if (old === "AI_REFINE") {
+    return {
+      general: { ...(oldGeneral as Partial<GeneralSettings>), asrSegmentMode: "UTTERANCE" },
+      aiRefineEnabled: true,
+    };
+  }
+  return {
+    general: oldGeneral as Partial<GeneralSettings>,
+    aiRefineEnabled: false,
+  };
+}
+
+// v10 → v11：加 dictation slice，原字段不动；老版本没有该字段时落默认（saas + 空 customProviders）。
+function mergeDictation(raw: unknown): DictationSettings {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_DICTATION };
+  const r = raw as Partial<DictationSettings>;
+  const providers = Array.isArray(r.customProviders)
+    ? r.customProviders.filter(
+        (p): p is DictationCustomProvider =>
+          !!p &&
+          typeof p === "object" &&
+          typeof p.id === "string" &&
+          (p.vendor === "tencent" || p.vendor === "aliyun"),
+      )
+    : [];
+  const active =
+    typeof r.activeCustomProviderId === "string" &&
+    providers.some((p) => p.id === r.activeCustomProviderId)
+      ? r.activeCustomProviderId
+      : providers[0]?.id ?? null;
+  return {
+    mode: r.mode === "custom" ? "custom" : "saas",
+    customProviders: providers,
+    activeCustomProviderId: active,
   };
 }
 
@@ -327,74 +412,42 @@ async function readPersisted(): Promise<PersistShape> {
   const defaults: PersistShape = {
     schemaVersion: SCHEMA_VERSION,
     general: { ...DEFAULT_GENERAL },
-    personalization: { ...DEFAULT_PERSONALIZATION },
     aiRefine: { ...DEFAULT_AI_REFINE },
+    dictation: { ...DEFAULT_DICTATION },
   };
   if (!raw || typeof raw !== "object") return defaults;
   const r = raw as Partial<PersistShape> & { schemaVersion?: number };
 
-  const finalize = (general: Partial<GeneralSettings>): PersistShape => ({
+  const finalize = (
+    general: Partial<GeneralSettings>,
+    forceEnabled?: boolean,
+  ): PersistShape => ({
     schemaVersion: SCHEMA_VERSION,
     general: { ...DEFAULT_GENERAL, ...general },
-    personalization: {
-      ...DEFAULT_PERSONALIZATION,
-      ...(r.personalization ?? {}),
-    },
-    aiRefine: mergeAiRefine((r as { aiRefine?: unknown }).aiRefine),
+    aiRefine: mergeAiRefine((r as { aiRefine?: unknown }).aiRefine, forceEnabled),
+    dictation: mergeDictation((r as { dictation?: unknown }).dictation),
   });
 
-  // 迁移：v1 → v2 → ... → v8 → v9 链式
-  if (r.schemaVersion === 1) {
-    const v2 = migrateV1((r.general ?? {}) as Record<string, unknown>);
-    const v3 = migrateV2(v2 as Record<string, unknown>);
-    const v4 = migrateV3(v3 as Record<string, unknown>);
-    const v5 = migrateV4(v4 as Record<string, unknown>);
-    const v6 = migrateV5(v5 as Record<string, unknown>);
-    const v7 = migrateV6(v6 as Record<string, unknown>);
-    const v8 = migrateV7(v7 as Record<string, unknown>);
-    return finalize(v8);
-  }
-  if (r.schemaVersion === 2) {
-    const v3 = migrateV2((r.general ?? {}) as Record<string, unknown>);
-    const v4 = migrateV3(v3 as Record<string, unknown>);
-    const v5 = migrateV4(v4 as Record<string, unknown>);
-    const v6 = migrateV5(v5 as Record<string, unknown>);
-    const v7 = migrateV6(v6 as Record<string, unknown>);
-    const v8 = migrateV7(v7 as Record<string, unknown>);
-    return finalize(v8);
-  }
-  if (r.schemaVersion === 3) {
-    const v4 = migrateV3((r.general ?? {}) as Record<string, unknown>);
-    const v5 = migrateV4(v4 as Record<string, unknown>);
-    const v6 = migrateV5(v5 as Record<string, unknown>);
-    const v7 = migrateV6(v6 as Record<string, unknown>);
-    const v8 = migrateV7(v7 as Record<string, unknown>);
-    return finalize(v8);
-  }
-  if (r.schemaVersion === 4) {
-    const v5 = migrateV4((r.general ?? {}) as Record<string, unknown>);
-    const v6 = migrateV5(v5 as Record<string, unknown>);
-    const v7 = migrateV6(v6 as Record<string, unknown>);
-    const v8 = migrateV7(v7 as Record<string, unknown>);
-    return finalize(v8);
-  }
-  if (r.schemaVersion === 5) {
-    const v6 = migrateV5((r.general ?? {}) as Record<string, unknown>);
-    const v7 = migrateV6(v6 as Record<string, unknown>);
-    const v8 = migrateV7(v7 as Record<string, unknown>);
-    return finalize(v8);
-  }
-  if (r.schemaVersion === 6) {
-    const v7 = migrateV6((r.general ?? {}) as Record<string, unknown>);
-    const v8 = migrateV7(v7 as Record<string, unknown>);
-    return finalize(v8);
-  }
-  if (r.schemaVersion === 7) {
-    const v8 = migrateV7((r.general ?? {}) as Record<string, unknown>);
-    return finalize(v8);
-  }
-  if (r.schemaVersion === 8 || r.schemaVersion === 9) {
-    return finalize((r.general ?? {}) as Partial<GeneralSettings>);
+  // 老 schema(<11) 都先按链迁到 v11 形态，再统一过 migrateV11 决定 aiRefine.enabled。
+  const runChainToV11 = (start: Record<string, unknown>, fromVersion: number): Record<string, unknown> => {
+    let g = start;
+    if (fromVersion <= 1) g = migrateV1(g) as Record<string, unknown>;
+    if (fromVersion <= 2) g = migrateV2(g) as Record<string, unknown>;
+    if (fromVersion <= 3) g = migrateV3(g) as Record<string, unknown>;
+    if (fromVersion <= 4) g = migrateV4(g) as Record<string, unknown>;
+    if (fromVersion <= 5) g = migrateV5(g) as Record<string, unknown>;
+    if (fromVersion <= 6) g = migrateV6(g) as Record<string, unknown>;
+    if (fromVersion <= 7) g = migrateV7(g) as Record<string, unknown>;
+    return g;
+  };
+
+  if (typeof r.schemaVersion === "number" && r.schemaVersion >= 1 && r.schemaVersion <= 11) {
+    const v11General = runChainToV11(
+      (r.general ?? {}) as Record<string, unknown>,
+      r.schemaVersion,
+    );
+    const { general: v12General, aiRefineEnabled } = migrateV11(v11General);
+    return finalize(v12General, aiRefineEnabled);
   }
 
   if (r.schemaVersion !== SCHEMA_VERSION) return defaults;
@@ -413,8 +466,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     const shape: PersistShape = {
       schemaVersion: SCHEMA_VERSION,
       general: get().general,
-      personalization: get().personalization,
       aiRefine: get().aiRefine,
+      dictation: get().dictation,
       ...patch,
     };
     await writePersisted(shape);
@@ -422,16 +475,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   return {
     general: { ...DEFAULT_GENERAL },
-    personalization: { ...DEFAULT_PERSONALIZATION },
     aiRefine: { ...DEFAULT_AI_REFINE },
+    dictation: { ...DEFAULT_DICTATION },
     loaded: false,
 
     init: async () => {
       const p = await readPersisted();
       set({
         general: p.general,
-        personalization: p.personalization,
         aiRefine: p.aiRefine,
+        dictation: p.dictation,
         loaded: true,
       });
       await writePersisted(p);
@@ -446,14 +499,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       }
     },
 
-    setPersonalization: async (key, value) => {
-      const next = { ...get().personalization, [key]: value };
-      set({ personalization: next });
-      await persist({ personalization: next });
-    },
-
     setAiRefineMode: async (mode) => {
       const next = { ...get().aiRefine, mode };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setAiRefineEnabled: async (v) => {
+      const next = { ...get().aiRefine, enabled: v };
       set({ aiRefine: next });
       await persist({ aiRefine: next });
     },
@@ -516,6 +569,58 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const next = { ...cur, includeHistory: v };
       set({ aiRefine: next });
       await persist({ aiRefine: next });
+    },
+
+    setDictationMode: async (mode) => {
+      const next = { ...get().dictation, mode };
+      set({ dictation: next });
+      await persist({ dictation: next });
+    },
+
+    addDictationProvider: async (provider) => {
+      const cur = get().dictation;
+      if (cur.customProviders.some((p) => p.id === provider.id)) return;
+      const customProviders = [...cur.customProviders, provider];
+      const activeCustomProviderId = cur.activeCustomProviderId ?? provider.id;
+      const next = { ...cur, customProviders, activeCustomProviderId };
+      set({ dictation: next });
+      await persist({ dictation: next });
+    },
+
+    updateDictationProvider: async (id, patch) => {
+      const cur = get().dictation;
+      const customProviders = cur.customProviders.map((p) =>
+        p.id === id ? { ...p, ...patch } : p,
+      );
+      const next = { ...cur, customProviders };
+      set({ dictation: next });
+      await persist({ dictation: next });
+    },
+
+    removeDictationProvider: async (id) => {
+      const cur = get().dictation;
+      const customProviders = cur.customProviders.filter((p) => p.id !== id);
+      const activeCustomProviderId =
+        cur.activeCustomProviderId === id
+          ? customProviders[0]?.id ?? null
+          : cur.activeCustomProviderId;
+      const next = { ...cur, customProviders, activeCustomProviderId };
+      set({ dictation: next });
+      await persist({ dictation: next });
+      try {
+        await deleteDictationProviderKey(id);
+      } catch (e) {
+        console.warn("[dictation] deleteDictationProviderKey failed:", e);
+      }
+    },
+
+    setActiveDictationProvider: async (id) => {
+      const cur = get().dictation;
+      const exists = id === null || cur.customProviders.some((p) => p.id === id);
+      if (!exists) return;
+      const next = { ...cur, activeCustomProviderId: id };
+      set({ dictation: next });
+      await persist({ dictation: next });
     },
   };
 });

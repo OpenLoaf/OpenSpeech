@@ -8,9 +8,9 @@
   },
   "tabs": {
     "general": "General",
+    "hotkeys": "Hotkeys",
     "dictation": "Dictation",
     "model": "Model",
-    "personalization": "Personalization",
     "ai": "AI",
     "about": "About"
   },
@@ -26,8 +26,6 @@
     "text_injection": "Text injection",
     "behavior": "Behavior",
     "model_rest": "Large model (REST)",
-    "ai_enhance": "AI enhancement",
-    "dictionary_learning": "Dictionary learning",
     "build": "Build"
   },
   "general": {
@@ -73,8 +71,11 @@
     "realtime_hint": "Server splits at pauses and streams partials in real time. Best for long meeting captions, live transcription and other unattended scenarios.",
     "utterance_label": "Whole utterance",
     "utterance_hint": "Treat the whole recording as a single utterance and return the transcript only after you release the key. The model gets full context — more accurate and won't be split by pauses.",
-    "ai_refine_label": "AI enhanced (recommended)",
-    "ai_refine_hint": "On top of \"whole utterance\", run an extra LLM pass to remove fillers, dedupe, recognise self-corrections, and list sequenced steps. Same language — no translation."
+    "ai_refine_toggle": {
+      "label": "Enable AI enhancement",
+      "hint": "On top of \"whole utterance\", run an LLM pass to remove fillers, dedupe, and recognise self-corrections. Same language — no translation.",
+      "disabled_in_realtime": "Not available in realtime mode"
+    }
   },
   "model": {
     "byo_unavailable_tag": "// BYO-MODEL · not yet available",
@@ -90,17 +91,6 @@
     "hide_key": "Hide API Key",
     "key_saved_toast": "API Key saved to system keychain",
     "key_save_failed_toast": "Failed to save API Key: {{error}}"
-  },
-  "personalization": {
-    "auto_polish": "AI auto-polish",
-    "auto_polish_hint": "Remove filler words and slips",
-    "context_style": "Context style",
-    "context_style_hint": "Pass the foreground app name to the model to adapt tone",
-    "sensitivity": "Learning sensitivity",
-    "sensitivity_hint": "How aggressively new vocabulary is auto-collected",
-    "low": "Low",
-    "normal": "Normal",
-    "high": "High"
   },
   "ai": {
     "section_mode": "Refine mode",
@@ -118,6 +108,12 @@
     "provider_active": "Active",
     "provider_set_active": "Set active",
     "provider_remove": "Remove",
+    "provider_test": "Test",
+    "provider_test_running": "Testing…",
+    "provider_test_pass": "Test passed",
+    "provider_test_fail": "Test failed: {{message}}",
+    "provider_test_missing_fields": "Base URL or model is empty",
+    "provider_test_empty_reply": "Model returned no content",
     "provider_add": "Add provider",
     "provider_default_name": "New provider",
     "provider_default_base_url": "https://api.openai.com/v1",
@@ -129,6 +125,47 @@
     "include_history": "Send the last 5 dictations as context",
     "include_history_hint": "Recent transcripts help the model carry over tone and terminology.",
     "minutes_ago": "minutes ago"
+  },
+  "dictation_provider": {
+    "section_mode": "Dictation channel",
+    "mode_saas_label": "OpenLoaf Cloud (default)",
+    "mode_saas_hint": "Use the speech recognition managed by your OpenLoaf account, billed via credits.",
+    "mode_custom_label": "Custom provider",
+    "mode_custom_hint": "Connect directly to Tencent Cloud / Aliyun with your own keys, bypassing the SaaS.",
+    "section_providers": "Custom providers",
+    "providers_empty": "No custom providers yet",
+    "add_tencent": "Add Tencent Cloud",
+    "add_aliyun": "Add Aliyun",
+    "vendor_tencent": "Tencent Cloud",
+    "vendor_aliyun": "Aliyun DashScope",
+    "active_label": "Active · {{vendor}}",
+    "set_active": "Set active",
+    "remove": "Remove",
+    "name_label": "Name",
+    "tencent_default_name": "Tencent Cloud ASR",
+    "tencent_app_id": "AppID",
+    "tencent_region": "Region",
+    "tencent_secret_id": "SecretId",
+    "tencent_secret_key": "SecretKey",
+    "tencent_credentials_hint": "Stored in the OS keychain; saved automatically on blur. Get them from the Tencent Cloud console → API Keys.",
+    "aliyun_default_name": "Aliyun DashScope",
+    "aliyun_api_key": "ApiKey",
+    "aliyun_api_key_hint": "Stored in the OS keychain; saved automatically on blur. Get it from the DashScope console.",
+    "test": "Test",
+    "test_running": "Testing…",
+    "test_pass": "Test passed: credentials are valid",
+    "test_fail": "Test failed: {{message}}",
+    "test_missing_fields": "Required fields are missing",
+    "test_code": {
+      "ok": "Test passed",
+      "unauthenticated": "Authentication failed: check your Secret/ApiKey",
+      "service_not_enabled": "Credentials valid, but the speech service is not yet enabled on this account",
+      "missing_fields": "Required fields are missing",
+      "network": "Network unreachable; check connectivity and firewalls",
+      "timeout": "Request timed out, please retry",
+      "rate_limited": "Rate limit hit",
+      "unknown": "Unknown error"
+    }
   },
   "about": {
     "version": "Version",

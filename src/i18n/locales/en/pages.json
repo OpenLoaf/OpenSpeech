@@ -1,4 +1,7 @@
 {
+  "transcribe": {
+    "too_long_for_utterance": "Recording exceeds 5 minutes — UTTERANCE mode is not supported, switch to REALTIME"
+  },
   "home": {
     "hero": {
       "title_line1": "Just speak.",
@@ -10,6 +13,10 @@
     "hotkey_hint": "Press the hotkey to start recording, press again to stop and inject the text into the focused field. Press <esc>Esc</esc> to cancel; an editable field must be focused.",
     "stats": {
       "section_title": "Today / This session",
+      "section_title_today": "Today's session stats",
+      "section_title_all": "All-time session stats",
+      "tab_today": "Today",
+      "tab_all": "All time",
       "live_metrics": "// LIVE METRICS",
       "duration_label": "Spoken time",
       "duration_unit": "HH:MM",
@@ -86,8 +93,33 @@
       "meta": {
         "duration": "Duration",
         "target": "Target app",
-        "error": "Error"
+        "error": "Error",
+        "asr": "Speech-to-text",
+        "ai": "AI refine",
+        "segment_mode": "Mode",
+        "provider_kind": "Channel"
       },
+      "asr": {
+        "saas-realtime": "OpenLoaf SaaS · realtime",
+        "saas-rest": "OpenLoaf SaaS · REST",
+        "byo": "Custom STT endpoint"
+      },
+      "ai": {
+        "none": "Off"
+      },
+      "segment_mode": {
+        "REALTIME": "Realtime",
+        "UTTERANCE": "Utterance"
+      },
+      "provider_kind": {
+        "saas-realtime": "OpenLoaf · realtime",
+        "saas-file": "OpenLoaf · file",
+        "tencent-realtime": "Tencent · realtime",
+        "tencent-file": "Tencent · file",
+        "aliyun-realtime": "Aliyun · realtime",
+        "aliyun-file": "Aliyun · file"
+      },
+      "unknown": "—",
       "empty_text": "(no text content)"
     },
     "toast": {
@@ -243,6 +275,12 @@
         },
         "audio_placeholder": "▶  ━━━━━━━━━━━━━━━━━━━━  0:08 / 0:12"
       },
+      "run": "Run",
+      "run_hint": "Configure the params above, then run.",
+      "ready_to_run": "Ready · click Run",
+      "running": "Running…",
+      "error_title": "Run failed",
+      "error": "Failed · {{message}}",
       "rerun": "Rerun",
       "copy": "Copy",
       "save_history": "Save",

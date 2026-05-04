@@ -16,6 +16,7 @@ import { useHistoryStore } from "@/stores/history";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
+import { useStatsStore } from "@/stores/stats";
 import { useUIStore } from "@/stores/ui";
 import { syncAutostart } from "@/lib/autostart";
 import { resolveLang } from "@/i18n";
@@ -23,6 +24,7 @@ import "./i18n";
 import {
   applyLang,
   listenLangChanged,
+  pushTrayLabels,
   syncI18nFromSettings,
 } from "@/lib/i18n-sync";
 import "./App.css";
@@ -100,6 +102,8 @@ const bootPromise = (async () => {
       useHistoryStore.getState().init(),
       useDictionaryStore.getState().init(),
     ]);
+    // stats 必须在 history 之后：首次启用时回扫现存 history.items 作为基线。
+    await useStatsStore.getState().init();
     console.log("[boot] stores ready; bindings =", useHotkeysStore.getState().bindings);
 
     // 用户偏好语言一旦从 settings 读出来就同步给 i18n + 托盘菜单；之后 settings store
@@ -144,6 +148,8 @@ const bootPromise = (async () => {
       if (s.bindings !== prev.bindings) {
         console.log("[boot] bindings changed → re-sync to Rust", s.bindings);
         void useRecordingStore.getState().syncBindings(s.bindings);
+        // show_main_window 的 accelerator 显示在托盘菜单里，binding 变了要重建。
+        void pushTrayLabels();
       }
     });
     console.log("[boot] all systems go");
