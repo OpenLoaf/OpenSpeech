@@ -279,11 +279,11 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
         return;
     }
 
-    // OpenToolbox：show 主窗 + 复用托盘 toolbox 路由事件，前端 Layout 订阅后 navigate。
+    // OpenToolbox 是 toggle：是否 hide 取决于「当前路由 + 主窗聚焦」，后端拿不到路由——
+    // 只把事件抛给前端，由 Layout 监听后决定 show+navigate 还是 hide_to_tray。
     if matches!(id, BindingId::OpenToolbox) {
         if phase == "pressed" {
-            crate::show_main_window(app);
-            let _ = app.emit("openspeech://tray-open-toolbox", ());
+            let _ = app.emit("openspeech://hotkey-open-toolbox", ());
         }
         return;
     }

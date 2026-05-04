@@ -21,3 +21,6 @@ pub mod byok;
 pub mod realtime_backend;
 pub mod tencent;
 pub mod test_provider;
+
+#[cfg(test)]
+mod byok_e2e;

@@ -26,7 +26,7 @@ use crate::asr::byok::{
 };
 use crate::asr::aliyun::file::{
     DashScopeClient, FileTransError, ReqwestDashScopeClient, TokioSleeper as AliyunSleeper,
-    merge_transcriptions, poll_task_until_terminal,
+    merge_transcripts_payload, poll_task_until_terminal,
 };
 use crate::asr::aliyun::oss_upload::{
     BailianOssClient, OssUploadError, ReqwestBailianOssClient,
@@ -335,7 +335,25 @@ async fn transcribe_aliyun_file_with(
     )
     .await
     .map_err(AliyunFileError::Trans)?;
-    Ok(merge_transcriptions(&out.results))
+
+    // paraformer-v2 真正的转写文本不在 results[*].transcription（永远是空），
+    // 而在 results[*].transcription_url 指向的 OSS 临时签名 URL 里。逐个 fetch 再
+    // 拼起来，是 BYOK 这条线唯一能拿到正文的路径。
+    let mut payloads = Vec::with_capacity(out.results.len());
+    for r in &out.results {
+        let Some(url) = r.transcription_url.as_deref() else {
+            continue;
+        };
+        if url.is_empty() {
+            continue;
+        }
+        let payload = scope
+            .fetch_transcription(url)
+            .await
+            .map_err(AliyunFileError::Trans)?;
+        payloads.push(payload);
+    }
+    Ok(merge_transcripts_payload(&payloads))
 }
 
 async fn upload_with_retry(
@@ -512,6 +530,7 @@ mod aliyun_tests {
     use super::*;
     use crate::asr::aliyun::file::{
         DashScopeClient, FileTransError, Sleeper as AliyunPollSleeper, TaskOutput, TaskResult,
+        TranscriptEntry, TranscriptionPayload,
     };
     use crate::asr::aliyun::oss_upload::{
         BailianOssClient, OssUploadError, UploadPolicy, UploadPolicyEnvelope,
@@ -577,6 +596,7 @@ mod aliyun_tests {
     enum ScopeOp {
         Submit(Result<String, FileTransError>),
         Query(Result<TaskOutput, FileTransError>),
+        FetchTranscription(Result<TranscriptionPayload, FileTransError>),
     }
     struct MockScope {
         ops: Mutex<Vec<ScopeOp>>,
@@ -602,7 +622,7 @@ mod aliyun_tests {
             self.captured.lock().unwrap().push(format!("submit:{}", oss_urls.join(",")));
             match self.pop() {
                 ScopeOp::Submit(r) => r,
-                ScopeOp::Query(_) => panic!("expected Submit op"),
+                _ => panic!("expected Submit op"),
             }
         }
         async fn query_task(
@@ -613,7 +633,17 @@ mod aliyun_tests {
             self.captured.lock().unwrap().push(format!("query:{task_id}"));
             match self.pop() {
                 ScopeOp::Query(r) => r,
-                ScopeOp::Submit(_) => panic!("expected Query op"),
+                _ => panic!("expected Query op"),
+            }
+        }
+        async fn fetch_transcription(
+            &self,
+            url: &str,
+        ) -> Result<TranscriptionPayload, FileTransError> {
+            self.captured.lock().unwrap().push(format!("fetch:{url}"));
+            match self.pop() {
+                ScopeOp::FetchTranscription(r) => r,
+                _ => panic!("expected FetchTranscription op"),
             }
         }
     }
@@ -625,18 +655,26 @@ mod aliyun_tests {
     }
 
     fn task_done(text: &str) -> TaskOutput {
+        let _ = text; // 文字交给 fetch_transcription mock，task_done 只代表 SUCCEEDED 信号
         TaskOutput {
             task_id: "t-1".into(),
             task_status: "SUCCEEDED".into(),
             results: vec![TaskResult {
                 file_url: None,
                 subtask_status: Some("SUCCEEDED".into()),
-                transcription: Some(text.into()),
+                transcription: None,
+                transcription_url: Some("https://oss/result.json".into()),
                 code: None,
                 message: None,
             }],
             code: None,
             message: None,
+        }
+    }
+
+    fn transcript_payload(text: &str) -> TranscriptionPayload {
+        TranscriptionPayload {
+            transcripts: vec![TranscriptEntry { text: text.into() }],
         }
     }
 
@@ -649,6 +687,7 @@ mod aliyun_tests {
         let scope = MockScope::new(vec![
             ScopeOp::Submit(Ok("t-1".into())),
             ScopeOp::Query(Ok(task_done("你好世界"))),
+            ScopeOp::FetchTranscription(Ok(transcript_payload("你好世界"))),
         ]);
         let text = transcribe_aliyun_file_with(
             &oss,
@@ -674,6 +713,7 @@ mod aliyun_tests {
         let scope = MockScope::new(vec![
             ScopeOp::Submit(Ok("t-1".into())),
             ScopeOp::Query(Ok(task_done("ok"))),
+            ScopeOp::FetchTranscription(Ok(transcript_payload("ok"))),
         ]);
         let text = transcribe_aliyun_file_with(
             &oss,

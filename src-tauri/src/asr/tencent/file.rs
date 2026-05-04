@@ -208,8 +208,23 @@ pub struct TaskStatusData {
     pub result: String,
     #[serde(rename = "ErrorMsg", default)]
     pub error_msg: String,
-    #[serde(rename = "ResultDetail", default)]
+    /// Tencent 在 Waiting/Doing 时返回 `"ResultDetail": null`，serde 默认会把 null
+    /// 当成失败（不会触发 default）。custom deserializer 把 null 也归一成空 Vec，
+    /// 保持轮询循环稳定（这条路径以前会被包成 tencent_network_error 误导用户）。
+    #[serde(
+        rename = "ResultDetail",
+        default,
+        deserialize_with = "deserialize_null_to_default"
+    )]
     pub result_detail: Vec<ResultDetail>,
+}
+
+fn deserialize_null_to_default<'de, T, D>(d: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Deserialize)]

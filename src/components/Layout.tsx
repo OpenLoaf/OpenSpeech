@@ -15,6 +15,7 @@ import {
 import type { ComponentType, SVGProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   info as logInfo,
   error as logError,
@@ -288,6 +289,20 @@ export default function Layout() {
       });
       await addSub<unknown>("openspeech://tray-open-toolbox", () => {
         navigate("/toolbox");
+      });
+      // 全局快捷键 Ctrl+Alt+T toggle：已在 /toolbox 且窗口聚焦 → 隐藏到托盘；否则
+      // 弹出 + 跳到 /toolbox。后端拿不到当前路由，所以把决定权放到这里。
+      await addSub<unknown>("openspeech://hotkey-open-toolbox", async () => {
+        const w = getCurrentWebviewWindow();
+        const visible = await w.isVisible().catch(() => false);
+        const focused = await w.isFocused().catch(() => false);
+        const onToolbox = window.location.pathname === "/toolbox";
+        if (visible && focused && onToolbox) {
+          await invoke("hide_to_tray");
+          return;
+        }
+        await invoke("show_main_window_cmd");
+        if (!onToolbox) navigate("/toolbox");
       });
       await addSub<unknown>("openspeech://tray-open-history", () => {
         navigate("/history");
