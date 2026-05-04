@@ -267,6 +267,8 @@ fn parse_binding_id(s: &str) -> Option<BindingId> {
         "dictate_toggle" => Some(BindingId::DictateToggle),
         "ask_ai" => Some(BindingId::AskAi),
         "translate" => Some(BindingId::Translate),
+        "show_main_window" => Some(BindingId::ShowMainWindow),
+        "open_toolbox" => Some(BindingId::OpenToolbox),
         _ => None,
     }
 }

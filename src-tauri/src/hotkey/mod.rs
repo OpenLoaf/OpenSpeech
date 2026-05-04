@@ -30,6 +30,8 @@ pub enum BindingId {
     DictateToggle,
     AskAi,
     Translate,
+    ShowMainWindow,
+    OpenToolbox,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +80,8 @@ fn parse_binding_id(s: &str) -> Option<BindingId> {
         "dictate_toggle" => Some(BindingId::DictateToggle),
         "ask_ai" => Some(BindingId::AskAi),
         "translate" => Some(BindingId::Translate),
+        "show_main_window" => Some(BindingId::ShowMainWindow),
+        "open_toolbox" => Some(BindingId::OpenToolbox),
         _ => None,
     }
 }
@@ -265,6 +269,24 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
     };
 
     log::warn!("[hotkey] handler: {shortcut:?} id={id:?} phase={phase}");
+
+    // ShowMainWindow 是 toggle：当前已可见且聚焦 → 隐藏；否则 show + focus。
+    // 不进 overlay show、也不 emit 给前端 recording listener，避免 activeId 串扰。
+    if matches!(id, BindingId::ShowMainWindow) {
+        if phase == "pressed" {
+            crate::toggle_main_window(app);
+        }
+        return;
+    }
+
+    // OpenToolbox：show 主窗 + 复用托盘 toolbox 路由事件，前端 Layout 订阅后 navigate。
+    if matches!(id, BindingId::OpenToolbox) {
+        if phase == "pressed" {
+            crate::show_main_window(app);
+            let _ = app.emit("openspeech://tray-open-toolbox", ());
+        }
+        return;
+    }
 
     // 按下立即 show overlay（不等前端事件往返，消除 50-100ms 感知延迟）；
     // hide 交给 overlay 窗口自己——进入 idle 状态时 invoke overlay_hide。

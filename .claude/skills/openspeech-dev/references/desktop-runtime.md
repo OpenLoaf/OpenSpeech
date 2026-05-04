@@ -84,8 +84,31 @@
 
 ## 机密存储
 
-- API Key 等机密 **不走 `tauri-plugin-store`**，只走 `keyring` crate（系统密钥链）。
-- 前端封装在 `src/lib/secrets.ts`。
+- API Key 等机密 **不走 `tauri-plugin-store`**。
+- 前端封装在 `src/lib/secrets.ts`，对应后端 `secrets/mod.rs` 的 `secret_set / secret_get / secret_delete`。
+- 后端按 `cfg(debug_assertions)` 拆双实现：
+  - **release**：`keyring` crate（macOS Keychain / Win Credential Manager / Linux Secret Service），service `com.openspeech.app`。
+  - **debug**：写 `~/.openspeech/dev-secrets.json`（`BTreeMap<String,String>` JSON，0600，进程级 `Mutex` 串行），**不进 Keychain**。
+  - Why：debug 二进制每次 cargo build cdhash 都变，macOS Keychain ACL 绑 cdhash —— 即便点过"始终允许"，下次重 build 仍当作新进程弹密码框，开发者每天会被打断几十次。dev 数据非生产凭据，落本地文件足够；prod 行为不变。
+  - 同款 dev/release 拆法见 `openloaf/storage.rs`（OpenLoaf SaaS token 存储）。
+- `#[tauri::command]` 三件套签名不变，前端与 `ai_refine/mod.rs` 等调用方不感知。
+
+### 听写自定义供应商（Dictation custom providers）的两半存储
+
+一份 provider 配置在磁盘上**横跨两个文件**，dev / release 路径不同但结构一致。新增字段或排查"凭证读不到"时记得两边都看。
+
+| 部分 | 字段 | dev 路径 | release 路径 |
+|---|---|---|---|
+| 非机密 | `dictation.customProviders[]` 的 `id / name / vendor / tencentAppId / tencentRegion`、`dictation.activeCustomProviderId` | `~/Library/Application Support/com.openspeech.app/settings.json`（tauri-plugin-store，dev/release 同路径，identifier 都是 `com.openspeech.app`，无 `.dev` 后缀） | 同 dev |
+| 机密 | aliyun `apiKey` / 腾讯 `secretId + secretKey`，**整段 camelCase JSON** 存在 keyring entry 名 `dictation_provider_<provider-id>` 下 | `~/.openspeech/dev-secrets.json` 里的同名 key（值是 JSON 字符串，再被外层 BTreeMap 包一层） | macOS Keychain / Win Credential Manager / Linux Secret Service |
+
+代码：前端 `src/lib/secrets.ts:43-95`（`saveDictationProviderCredentials` / `loadDictationProviderCredentials`），后端 `src-tauri/src/secrets/mod.rs:138-165`（`load_dictation_provider_credentials_for_rust`）；DTO 透传见 `src/lib/dictation-provider-ref.ts` + `src-tauri/src/asr/byok.rs` —— **AppID / region 走 IPC 透传，secretId / secretKey 永远不通过 IPC**。
+
+**dev 调试 tips：**
+- 想直接看 / 改本机 dev 凭证：`cat ~/.openspeech/dev-secrets.json`，找 `dictation_provider_<id>`，value 是字符串化的 `{"vendor":"tencent","secretId":"...","secretKey":"..."}` 或 `{"vendor":"aliyun","apiKey":"..."}`。
+- 想看公开字段：读 `settings.json` 的 `dictation.customProviders[]`，按 `id` 跟 dev-secrets.json 对得上。
+- 重 build / 清数据后丢失测试 provider：dev-secrets.json 不会因为重 cargo build 失效（与 release 的 Keychain cdhash 行为不同），所以正常情况只会丢公开字段（settings.json 是 `~/Library/Application Support/...` 不会被 cargo clean 清）。如果两边都丢了，要么手填 UI 一遍，要么自己写一个 dev-only seed 脚本（仓库里目前**没有**统一的 dev fixture loader，加之前先在 PR 描述里说清意图）。
+- ❌ 别把 secretId/secretKey/apiKey 写进 settings.json 或 localStorage —— `src/lib/secrets.ts:4` 的注释里有"不要"二字。
 
 ---
 

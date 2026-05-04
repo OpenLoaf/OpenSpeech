@@ -385,6 +385,14 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         }
     }
 
+    log::info!(
+        "[ai_refine] done mode={} chars={} task_id={:?} text={:?}",
+        input.mode,
+        full.chars().count(),
+        task_id,
+        full,
+    );
+
     let _ = app.emit(
         EVENT_DONE,
         DonePayload {

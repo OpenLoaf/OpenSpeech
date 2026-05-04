@@ -82,5 +82,23 @@ ALTER TABLE history ADD COLUMN refined_text TEXT;
 "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "history_add_asr_and_ai_model",
+            sql: r#"
+ALTER TABLE history ADD COLUMN asr_source TEXT;
+ALTER TABLE history ADD COLUMN ai_model TEXT;
+"#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "history_add_segment_mode_and_provider_kind",
+            sql: r#"
+ALTER TABLE history ADD COLUMN segment_mode TEXT;
+ALTER TABLE history ADD COLUMN provider_kind TEXT;
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -3929,9 +3929,9 @@ dependencies = [
 
 [[package]]
 name = "openloaf-saas"
-version = "0.3.11"
+version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "070f87b71428bb9d18bea1f5704e66a9e2d90d5449c6cd329d93d38a8ef99dff"
+checksum = "91b3a592168a736580b948521d5db86bd2ec517c4068ffd70d039a5abcdc701d"
 dependencies = [
  "serde",
  "serde_json",
@@ -3946,10 +3946,13 @@ name = "openspeech"
 version = "0.2.29"
 dependencies = [
  "async-openai",
+ "async-trait",
  "base64 0.22.1",
  "cpal",
  "enigo",
  "futures-util",
+ "hex",
+ "hmac",
  "hound",
  "keyring",
  "log",
@@ -3960,6 +3963,8 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha1",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -3975,6 +3980,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tiny_http",
  "tokio",
+ "tungstenite 0.24.0",
  "url",
  "uuid",
  "vorbis_rs",

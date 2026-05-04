@@ -54,16 +54,27 @@ use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use openloaf_saas::{SaaSError, SaaSResult};
 use openloaf_saas::v4_tools::{
-    RealtimeAsrLlmLanguage, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmVadMode,
-    RealtimeAsrSession, RealtimeEvent,
+    RealtimeAsrLlmOlTlRt002Lang, RealtimeAsrLlmOlTlRt002Params,
+    RealtimeAsrLlmOlTlRt002ServerVad, RealtimeAsrLlmOlTlRt002Transcription,
 };
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::asr::aliyun::realtime_session::{
+    AliyunRealtimeSession, ConnectParams as AliyunConnectParams,
+};
+use crate::asr::backends::aliyun::AliyunRealtimeBackend;
+use crate::asr::backends::saas::SaasRealtimeBackend;
+use crate::asr::backends::tencent::TencentRealtimeBackend;
+use crate::asr::byok::{
+    DictationBackend, DictationModality, ERR_BYOK_NOT_IMPLEMENTED, ProviderRef, dispatch,
+    provider_kind_str,
+};
+use crate::asr::realtime_backend::{RealtimeAsrBackend, RealtimeBackendEvent};
+use crate::asr::tencent::realtime_session::{ConnectParams, TencentRealtimeSession};
 use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
 
 /// 业务路径稳定错误码：前端按这个串路由（弹登录框 / cancel 录音），不要改文案。
@@ -82,6 +93,9 @@ const EVENT_CREDITS: &str = "openspeech://asr-credits";
 // 服务端 WS 握手成功后会发 Ready，携带本次会话的 sessionId。前端把它当作
 // 后续 refine 调用 task_id 透传，关联 ASR/Realtime 与口语优化两侧日志。
 const EVENT_READY: &str = "openspeech://stt-ready";
+// dispatch 完成后立即广播本次会话最终落到了哪条通道。前端写 history 时直接
+// 拿 providerKind，不再凭 dictation 设置反推。
+const EVENT_PROVIDER_RESOLVED: &str = "openspeech://stt-provider-resolved";
 
 /// send_finish 后等 Final 的最长时间。服务端典型 < 500ms，3s 能兜住抖动；
 /// 超时走空串，前端自行决定是否把 history 标 failed。
@@ -148,25 +162,29 @@ pub fn close_if_active() {
     }
 }
 
-fn parse_language(lang: Option<&str>) -> RealtimeAsrLlmLanguage {
+fn parse_language(lang: Option<&str>) -> RealtimeAsrLlmOlTlRt002Lang {
     match lang.map(|s| s.trim().to_ascii_lowercase()) {
-        Some(ref s) if s == "auto" || s.is_empty() => RealtimeAsrLlmLanguage::Auto,
-        Some(ref s) if s == "zh" || s == "zh-cn" || s == "zh-tw" => RealtimeAsrLlmLanguage::Zh,
-        Some(ref s) if s == "en" || s.starts_with("en-") => RealtimeAsrLlmLanguage::En,
-        Some(ref s) if s == "ja" => RealtimeAsrLlmLanguage::Ja,
-        Some(ref s) if s == "ko" => RealtimeAsrLlmLanguage::Ko,
-        Some(ref s) if s == "yue" => RealtimeAsrLlmLanguage::Yue,
-        _ => RealtimeAsrLlmLanguage::Auto,
+        Some(ref s) if s == "auto" || s.is_empty() => RealtimeAsrLlmOlTlRt002Lang::Auto,
+        Some(ref s) if s == "zh" || s == "zh-cn" || s == "zh-tw" => {
+            RealtimeAsrLlmOlTlRt002Lang::Zh
+        }
+        Some(ref s) if s == "en" || s.starts_with("en-") => RealtimeAsrLlmOlTlRt002Lang::En,
+        Some(ref s) if s == "ja" => RealtimeAsrLlmOlTlRt002Lang::Ja,
+        Some(ref s) if s == "ko" => RealtimeAsrLlmOlTlRt002Lang::Ko,
+        Some(ref s) if s == "yue" => RealtimeAsrLlmOlTlRt002Lang::Yue,
+        _ => RealtimeAsrLlmOlTlRt002Lang::Auto,
     }
 }
 
-fn parse_mode(mode: Option<&str>) -> RealtimeAsrLlmVadMode {
-    // 默认 None（manual）：与前端 settings 默认值一致 + 符合文档对 push-to-talk
-    // 听写的推荐。前端如果没传 mode 也走 manual 兜底。
-    match mode.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("auto") | Some("server_vad") | Some("server-vad") => RealtimeAsrLlmVadMode::ServerVad,
-        _ => RealtimeAsrLlmVadMode::None,
-    }
+// 0.3.13 起 RT-002 改成 OpenAI Realtime 嵌套结构：language 走
+// `input_audio_transcription`，VAD 走 `turn_detection`。manual 模式不再有
+// 独立的 `VadMode::None` 枚举值；本端通过 `turn_detection: None` + 主动发
+// finish 帧来达到"按下到松开 = 一句话"的效果。
+fn parse_use_server_vad(mode: Option<&str>) -> bool {
+    matches!(
+        mode.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("auto") | Some("server_vad") | Some("server-vad")
+    )
 }
 
 /// async + spawn_blocking：stt_start 内部 `close_if_active()` 会 join 上一轮
@@ -177,16 +195,50 @@ pub async fn stt_start<R: Runtime>(
     app: AppHandle<R>,
     lang: Option<String>,
     mode: Option<String>,
+    provider: Option<ProviderRef>,
 ) -> Result<(), String> {
     log::info!(
-        "[stt] stt_start request lang={:?} mode={:?}",
+        "[stt] stt_start request lang={:?} mode={:?} provider_mode={:?}",
         lang,
-        mode
+        mode,
+        provider.as_ref().map(|p| format!("{:?}", p.mode))
     );
-    // realtime 不走 call_authed，握手 401 服务端就会直接断。这里先按 JWT exp
+
+    // BYOK 路由：custom 模式先在前置 dispatch，避开 SaaS 鉴权流程
+    // （PR-4 / PR-6 实现 Custom 路径前直接返回 not_implemented）。
+    let provider_ref = provider.unwrap_or(ProviderRef {
+        mode: crate::asr::byok::ProviderMode::Saas,
+        active_custom_provider_id: None,
+        custom_provider_vendor: None,
+        tencent_app_id: None,
+        tencent_region: None,
+        custom_provider_name: None,
+    });
+    let backend = dispatch(&provider_ref, DictationModality::Realtime).map_err(|e| {
+        log::warn!("[stt] backend dispatch failed: {e}");
+        e.code().to_string()
+    })?;
+    let _ = app.emit(EVENT_PROVIDER_RESOLVED, provider_kind_str(&backend));
+
+    // SaaS realtime 走 OpenLoaf JWT 续期路径；BYOK realtime 自带凭证，没有 401 概念。
+    let needs_saas_token = matches!(&backend, DictationBackend::SaasRealtime);
+
+    match &backend {
+        DictationBackend::SaasRealtime
+        | DictationBackend::TencentRealtime { .. }
+        | DictationBackend::AliyunRealtime { .. } => {}
+        // dispatch(Realtime) 不会返回 *File，但保险起见兜一手。
+        other => {
+            log::error!("[stt] dispatch returned unexpected backend for realtime: {other:?}");
+            return Err(ERR_BYOK_NOT_IMPLEMENTED.to_string());
+        }
+    }
+
+    // SaaS realtime 不走 call_authed，握手 401 服务端就会直接断。这里先按 JWT exp
     // 做新鲜度检查，临近过期（≤30s）就立刻用 refresh_token 续期；续期失败等价
     // REST 链路里 refresh-fail 的清场（handle_session_expired），让前端弹登录框。
-    {
+    // BYOK 路径自带 SecretId/SecretKey，跳过这步。
+    if needs_saas_token {
         let ol = app.state::<SharedOpenLoaf>();
         if !ol.ensure_access_token_fresh().await {
             log::warn!(
@@ -197,7 +249,7 @@ pub async fn stt_start<R: Runtime>(
         }
     }
 
-    tauri::async_runtime::spawn_blocking(move || stt_start_impl(app, lang, mode))
+    tauri::async_runtime::spawn_blocking(move || stt_start_impl(app, lang, mode, backend))
         .await
         .map_err(|e| format!("stt_start join: {e}"))?
         .map_err(|e| {
@@ -210,20 +262,13 @@ fn stt_start_impl<R: Runtime>(
     app: AppHandle<R>,
     lang: Option<String>,
     mode: Option<String>,
+    backend: DictationBackend,
 ) -> Result<(), String> {
-    let ol = app.state::<SharedOpenLoaf>();
-    let client = ol.authenticated_client().ok_or_else(|| {
-        log::warn!("[stt] stt_start aborted: authenticated_client() = None (not logged in)");
-        // 没 access_token 就是未登录态——通知前端，不要走录音路径浪费用户力气。
-        handle_session_expired(&app, &ol);
-        ERR_NOT_AUTHENTICATED.to_string()
-    })?;
-
     // 兜底校验"stream 是否在跑"。新版 audio_level_start 已同步等到 stream_info
     // 写入才返回，理论上这里第一次读就有值；保留短自旋是为了覆盖：
     //   - 老版本前端绕过 await 直接调 stt_start
     //   - 切换设备瞬间（旧 stream 已 drop，新 stream 还差几 ms 写入）
-    // 总等待上限 200ms，对用户无感知。服务端 OL-TL-RT-002 固定 16kHz mono pcm16 解码。
+    // 总等待上限 200ms，对用户无感知。SaaS / 腾讯实时 ASR 都按 16kHz mono pcm16 接。
     let stream_ready = (0..10).any(|i| {
         if i > 0 {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -239,30 +284,119 @@ fn stt_start_impl<R: Runtime>(
     close_if_active();
 
     let language = parse_language(lang.as_deref());
-    let vad_mode = parse_mode(mode.as_deref());
+    let use_server_vad = parse_use_server_vad(mode.as_deref());
 
-    let params = RealtimeAsrLlmOlTlRt002Params {
-        language: Some(language),
-        vad_mode: Some(vad_mode),
-        ..Default::default()
-    };
-
-    let sess = client
-        .tools_v4()
-        .realtime_asr_llm_ol_tl_rt_002(&params)
-        .map_err(|e| {
-            let raw = e.to_string();
-            // realtime 不走 call_authed，401 由 WebSocket 握手返回，需要这里兜
-            // 一次清场 + 广播，等价于 REST 的自动 refresh-fail 路径。
-            if is_unauthorized(&raw) {
-                log::warn!("[stt] realtime connect 401, treating as session expired: {raw}");
+    let backend_box: Box<dyn RealtimeAsrBackend> = match backend {
+        DictationBackend::SaasRealtime => {
+            let ol = app.state::<SharedOpenLoaf>();
+            let client = ol.authenticated_client().ok_or_else(|| {
+                log::warn!("[stt] stt_start aborted: authenticated_client() = None (not logged in)");
                 handle_session_expired(&app, &ol);
-                ERR_UNAUTHORIZED.to_string()
-            } else {
-                log::error!("[stt] realtime connect failed: {raw}");
-                format!("realtime connect: {e}")
-            }
-        })?;
+                ERR_NOT_AUTHENTICATED.to_string()
+            })?;
+
+            let params = RealtimeAsrLlmOlTlRt002Params {
+                input_audio_transcription: Some(RealtimeAsrLlmOlTlRt002Transcription {
+                    language: Some(language),
+                    context: None,
+                }),
+                turn_detection: if use_server_vad {
+                    Some(RealtimeAsrLlmOlTlRt002ServerVad::default())
+                } else {
+                    None
+                },
+                ..Default::default()
+            };
+
+            let sess = client
+                .tools_v4()
+                .realtime_asr_llm_ol_tl_rt_002(&params)
+                .map_err(|e| {
+                    let raw = e.to_string();
+                    // realtime 不走 call_authed，401 由 WebSocket 握手返回，需要这里兜
+                    // 一次清场 + 广播，等价于 REST 的自动 refresh-fail 路径。
+                    if is_unauthorized(&raw) {
+                        log::warn!(
+                            "[stt] realtime connect 401, treating as session expired: {raw}"
+                        );
+                        handle_session_expired(&app, &ol);
+                        ERR_UNAUTHORIZED.to_string()
+                    } else {
+                        log::error!("[stt] realtime connect failed: {raw}");
+                        format!("realtime connect: {e}")
+                    }
+                })?;
+            log::info!(
+                "[stt] session started (variant=OL-TL-RT-002 lang={:?} server_vad={})",
+                language,
+                use_server_vad
+            );
+            Box::new(SaasRealtimeBackend::new(sess))
+        }
+        DictationBackend::TencentRealtime {
+            app_id,
+            region,
+            secret_id,
+            secret_key,
+            name,
+        } => {
+            // 腾讯实时引擎按"language hint"挑：用户选的语言优先走对应模型；auto 路径
+            // 暂用 `16k_zh_en`（中英粤+方言大模型）兜底——日语/韩语等非中英用户应该
+            // 在前端选具体 language。
+            let engine_model_type = engine_for_tencent(language);
+            let sess =
+                TencentRealtimeSession::connect(ConnectParams {
+                    app_id: &app_id,
+                    secret_id: &secret_id,
+                    secret_key: &secret_key,
+                    _region: &region,
+                    sample_rate: 16000,
+                    engine_model_type,
+                })
+                .map_err(|e| {
+                    log::error!("[stt] tencent realtime connect failed: {e}");
+                    format!("realtime connect: {e}")
+                })?;
+            log::info!(
+                "[stt] session started (vendor=tencent name={} engine={} app_id={})",
+                name,
+                engine_model_type,
+                app_id
+            );
+            Box::new(TencentRealtimeBackend::new(sess))
+        }
+        DictationBackend::AliyunRealtime { api_key, name } => {
+            let lang_str = aliyun_lang_code(language);
+            let sess = AliyunRealtimeSession::connect(AliyunConnectParams {
+                api_key: &api_key,
+                language: lang_str,
+                sample_rate: 16000,
+                use_server_vad,
+            })
+            .map_err(|e| {
+                let raw = e.to_string();
+                if is_unauthorized(&raw) {
+                    log::warn!("[stt] aliyun realtime 401: {raw}");
+                    "unauthenticated_byok".to_string()
+                } else {
+                    log::error!("[stt] aliyun realtime connect failed: {raw}");
+                    format!("realtime connect: {e}")
+                }
+            })?;
+            log::info!(
+                "[stt] session started (vendor=aliyun name={} lang={} server_vad={})",
+                name,
+                lang_str,
+                use_server_vad
+            );
+            Box::new(AliyunRealtimeBackend::new(sess))
+        }
+        // dispatch 已经把 *File 拒掉，但保留分支保 trait 兜底。
+        other => {
+            log::error!("[stt] unexpected backend in start_impl: {other:?}");
+            return Err(ERR_BYOK_NOT_IMPLEMENTED.to_string());
+        }
+    };
 
     let (ctrl_tx, ctrl_rx) = mpsc::channel::<Control>();
     let stop_signal = Arc::new(AtomicBool::new(false));
@@ -279,7 +413,7 @@ fn stt_start_impl<R: Runtime>(
         .spawn(move || {
             run_worker(
                 app_worker,
-                sess,
+                backend_box,
                 ctrl_rx,
                 stop_worker,
                 final_worker,
@@ -295,41 +429,38 @@ fn stt_start_impl<R: Runtime>(
         final_count,
         stop_signal,
     });
-    log::info!(
-        "[stt] session started (variant=OL-TL-RT-002 lang={:?} vad={:?})",
-        language,
-        vad_mode
-    );
     Ok(())
 }
 
-/// next_event_timeout 结果分类（纯函数，副作用全部上提到 run_worker，便于单测）。
-#[derive(Debug)]
-enum LoopAction {
-    /// 拿到一个事件，交给 handle_event 处理。
-    Process(RealtimeEvent),
-    /// 超时 / 通道断开，下一轮继续。
-    Idle,
-    /// 单条消息解码失败：emit asr-error 但不退出 —— SDK 已消费该坏消息，
-    /// 下次能读到下一条；连续失败由 run_worker 的计数器把关。
-    DecodeRecoverable(String),
-    /// 网络层退出：与 SDK Drop 路径一致，安静退出。
-    ExitNetwork(String),
+/// 把 SDK lang 枚举映射到 DashScope `language` 字段（auto / zh / en / ja / ko / yue）。
+fn aliyun_lang_code(lang: RealtimeAsrLlmOlTlRt002Lang) -> &'static str {
+    match lang {
+        RealtimeAsrLlmOlTlRt002Lang::Zh => "zh",
+        RealtimeAsrLlmOlTlRt002Lang::En => "en",
+        RealtimeAsrLlmOlTlRt002Lang::Ja => "ja",
+        RealtimeAsrLlmOlTlRt002Lang::Ko => "ko",
+        RealtimeAsrLlmOlTlRt002Lang::Yue => "yue",
+        _ => "auto",
+    }
 }
 
-fn classify_event_result(r: SaaSResult<Option<RealtimeEvent>>) -> LoopAction {
-    match r {
-        Ok(Some(ev)) => LoopAction::Process(ev),
-        Ok(None) => LoopAction::Idle,
-        Err(SaaSError::Network(msg)) => LoopAction::ExitNetwork(msg),
-        Err(SaaSError::Decode(msg)) => LoopAction::DecodeRecoverable(msg),
-        Err(e) => LoopAction::DecodeRecoverable(e.to_string()),
+/// 把 SDK lang 枚举映射到腾讯 `engine_model_type`。BYOK 不走 SaaS 大模型，
+/// 用腾讯文档列出的标准引擎名；中文走 `16k_zh`，多语言走 `16k_multi_lang`。
+fn engine_for_tencent(lang: RealtimeAsrLlmOlTlRt002Lang) -> &'static str {
+    match lang {
+        RealtimeAsrLlmOlTlRt002Lang::Zh => "16k_zh",
+        RealtimeAsrLlmOlTlRt002Lang::En => "16k_en",
+        RealtimeAsrLlmOlTlRt002Lang::Ja => "16k_ja",
+        RealtimeAsrLlmOlTlRt002Lang::Ko => "16k_ko",
+        RealtimeAsrLlmOlTlRt002Lang::Yue => "16k_yue",
+        // Auto + 兜底：用中英粤+方言大模型引擎，覆盖最广。
+        _ => "16k_zh_en",
     }
 }
 
 fn run_worker<R: Runtime>(
     app: AppHandle<R>,
-    sess: RealtimeAsrSession,
+    mut sess: Box<dyn RealtimeAsrBackend>,
     ctrl_rx: mpsc::Receiver<Control>,
     stop: Arc<AtomicBool>,
     final_segments: Arc<Mutex<BTreeMap<i64, String>>>,
@@ -378,31 +509,27 @@ fn run_worker<R: Runtime>(
         }
 
         // 2) 拉服务端事件（短超时让控制通道 / stop_signal 及时响应）。
-        let action = classify_event_result(
-            sess.next_event_timeout(Duration::from_millis(EVENT_POLL_MS)),
-        );
-        match action {
-            LoopAction::Process(ev) => {
-                consecutive_decode_errs = 0;
-                if handle_event(&app, ev, &final_segments, &final_count) {
-                    break 'outer ExitReason::ServerEnd;
-                }
-            }
-            LoopAction::Idle => {}
-            LoopAction::DecodeRecoverable(msg) => {
+        let ev = sess.next_event_timeout(Duration::from_millis(EVENT_POLL_MS));
+        match ev {
+            RealtimeBackendEvent::Idle => {}
+            RealtimeBackendEvent::DecodeRecoverable(msg) => {
                 consecutive_decode_errs += 1;
                 log::warn!(
                     "[stt] decode error (skipping, {consecutive_decode_errs}/{MAX_CONSECUTIVE_DECODE_ERRORS}): {msg}"
                 );
-                // 单条坏消息不打扰用户：只在预算耗尽真正放弃会话时，由 worker_dead
-                // 分支兜底发 EVENT_CLOSED；中间的可恢复错误只记日志，不 emit。
                 if consecutive_decode_errs >= MAX_CONSECUTIVE_DECODE_ERRORS {
                     break 'outer ExitReason::WorkerDead("decode_errors");
                 }
             }
-            LoopAction::ExitNetwork(msg) => {
+            RealtimeBackendEvent::NetworkExit(msg) => {
                 log::info!("[stt] worker exit on network: {msg}");
                 break 'outer ExitReason::WorkerDead("network");
+            }
+            other => {
+                consecutive_decode_errs = 0;
+                if handle_event(&app, other, &final_segments, &final_count) {
+                    break 'outer ExitReason::ServerEnd;
+                }
             }
         }
     };
@@ -434,18 +561,21 @@ fn merge_segments(map: &BTreeMap<i64, String>) -> String {
 
 fn handle_event<R: Runtime>(
     app: &AppHandle<R>,
-    ev: RealtimeEvent,
+    ev: RealtimeBackendEvent,
     final_segments: &Arc<Mutex<BTreeMap<i64, String>>>,
     final_count: &Arc<AtomicI64>,
 ) -> bool {
     match ev {
-        RealtimeEvent::Ready { session_id, .. } => {
+        RealtimeBackendEvent::Ready { session_id } => {
             log::info!(
-                "[stt] realtime Ready (WS handshake complete, server ready to ingest audio) session_id={session_id}"
+                "[stt] realtime Ready (WS handshake complete, server ready to ingest audio) session_id={session_id:?}"
             );
-            let _ = app.emit(EVENT_READY, json!({ "sessionId": session_id }));
+            let _ = app.emit(
+                EVENT_READY,
+                json!({ "sessionId": session_id.unwrap_or_default() }),
+            );
         }
-        RealtimeEvent::Partial { sentence_id, text } => {
+        RealtimeBackendEvent::Partial { sentence_id, text } => {
             // partial 只反映「当前 sentence_id 这一句」从开口到现在的累积，前面已 Final
             // 的句子不会再回放。给 UI 一个连贯的 liveTranscript：把所有 Final 段（按
             // sentenceId 顺序）+ 当前 partial 拼起来；当前 partial 必须排除已经 Final
@@ -467,9 +597,7 @@ fn handle_event<R: Runtime>(
             };
             let _ = app.emit(EVENT_PARTIAL, combined);
         }
-        RealtimeEvent::Final {
-            sentence_id, text, ..
-        } => {
+        RealtimeBackendEvent::Final { sentence_id, text } => {
             // 累积，不覆盖：按 sentenceId 索引存，避免同 id 的重复 Final 把内容写两次，
             // 同时保证乱序到达也能按 id 顺序拼接。
             let combined = if let Ok(mut g) = final_segments.lock() {
@@ -484,18 +612,23 @@ fn handle_event<R: Runtime>(
             };
             let _ = app.emit(EVENT_FINAL, combined);
         }
-        RealtimeEvent::Credits {
-            remaining_credits, ..
-        } => {
+        RealtimeBackendEvent::EndOfStream => {
+            log::info!("[stt] server signaled end-of-stream (final=1)");
+            let _ = app.emit(
+                EVENT_CLOSED,
+                json!({ "reason": "normal", "totalCredits": serde_json::Value::Null }),
+            );
+            return true;
+        }
+        RealtimeBackendEvent::Credits { remaining_credits } => {
             // None = 服务端把 Infinity 序列化成 null（典型 internal/无限账号）。
             // 前端 EVENT_CREDITS 收到 null 视为"未知/无限"，不参与余额展示与告警。
             log::info!("[stt] credits update: remaining={remaining_credits:?}");
             let _ = app.emit(EVENT_CREDITS, remaining_credits);
         }
-        RealtimeEvent::Closed {
+        RealtimeBackendEvent::Closed {
             reason,
             total_credits,
-            ..
         } => {
             log::warn!(
                 "[stt] server closed session: reason={reason:?} total_credits={total_credits:?}"
@@ -506,11 +639,16 @@ fn handle_event<R: Runtime>(
             );
             return true;
         }
-        RealtimeEvent::Error { code, message } => {
+        RealtimeBackendEvent::Error { code, message } => {
             log::error!("[stt] server error: code={code} message={message}");
             let _ = app.emit(EVENT_ERROR, ErrorPayload { code, message });
             return true;
         }
+        // Idle / DecodeRecoverable / NetworkExit 已经在 run_worker 主循环里被截
+        // 掉，handle_event 不会拿到它们；但 trait 的 enum 可能扩展，留 fallback。
+        RealtimeBackendEvent::Idle
+        | RealtimeBackendEvent::DecodeRecoverable(_)
+        | RealtimeBackendEvent::NetworkExit(_) => {}
     }
     false
 }
@@ -610,59 +748,24 @@ pub async fn stt_cancel() {
 
 #[cfg(test)]
 mod tests {
-    //! 回归点：长录音 60s 后 worker 突然死亡 + 录音继续白录到松手才发现 segs=0。
+    //! 回归点 1：长录音 60s 后 worker 突然死亡 + 录音继续白录到松手才发现 segs=0。
     //! 根因：服务端心跳期发的某帧（典型为 credits）某 f64 字段为 null，SDK
     //! `serde_json::from_str::<RealtimeEvent>` 解码失败 → `SaaSError::Decode`。
     //! 旧 worker 把 `Err(_)` 一概当致命错误 `break 'outer`，整个 STT 会话当场死。
     //! 但 SDK 那条坏消息已被 `ws.read` 消费，下次循环可读到下一条 → decode 错误
     //! 应作为单条可恢复错误，仅在连续多次失败时才视为协议崩坏退出。
+    //!
+    //! 回归点 2：PR-4 抽 trait 后，run_worker 主循环改吃 RealtimeBackendEvent。
+    //! 测试沿着 trait 路径覆盖：DecodeRecoverable 不退出 / NetworkExit 即时退出 /
+    //! good event 重置 streak / Idle 不影响 streak。
 
     use super::*;
-    use openloaf_saas::SaaSError;
     use openloaf_saas::v4_tools::RealtimeEvent;
-
-    fn assert_recoverable(action: LoopAction) {
-        match action {
-            LoopAction::DecodeRecoverable(_) => {}
-            other => panic!(
-                "expected DecodeRecoverable (worker should NOT exit on a single bad frame), got {other:?}"
-            ),
-        }
-    }
-
-    #[test]
-    fn classify_processes_event() {
-        let ev = RealtimeEvent::Partial {
-            sentence_id: 1,
-            text: "hello".into(),
-        };
-        assert!(matches!(
-            classify_event_result(Ok(Some(ev))),
-            LoopAction::Process(_)
-        ));
-    }
-
-    #[test]
-    fn classify_idle_on_none() {
-        assert!(matches!(
-            classify_event_result(Ok(None)),
-            LoopAction::Idle
-        ));
-    }
-
-    #[test]
-    fn classify_network_exits() {
-        let r: SaaSResult<Option<RealtimeEvent>> =
-            Err(SaaSError::Network("connection reset".into()));
-        match classify_event_result(r) {
-            LoopAction::ExitNetwork(msg) => assert_eq!(msg, "connection reset"),
-            other => panic!("expected ExitNetwork, got {other:?}"),
-        }
-    }
 
     /// SDK 0.3.7 修复：服务端 internal 账号每分钟计费心跳里 `remainingCredits=Infinity`
     /// 被 JS `JSON.stringify` 写成 null。0.3.7 把 Credits 三个 f64 改成 Option<f64>，
-    /// 该 payload 现在解码为 `Credits { ..None.. }`，不再 decode error。
+    /// 该 payload 现在解码为 `Credits { ..None.. }`，不再 decode error。SDK 回退会
+    /// 让此测失败，等同于把"60s 后 worker 暴毙"的 bug 重新引回来。
     #[test]
     fn credits_with_null_f64_field_is_decoded_to_none() {
         let payload = r#"{"type":"credits","consumedSeconds":null,"consumedCredits":0.0,"remainingCredits":1.5}"#;
@@ -684,43 +787,6 @@ mod tests {
         }
     }
 
-    /// Bug 1 修复点：SaaSError::Decode 必须不让 worker 退出。
-    #[test]
-    fn classify_saas_decode_error_is_recoverable() {
-        let r: SaaSResult<Option<RealtimeEvent>> = Err(SaaSError::Decode(
-            "invalid type: null, expected f64 at line 1 column 42".into(),
-        ));
-        assert_recoverable(classify_event_result(r));
-    }
-
-    /// 端到端：日志里那条会让旧 SDK 崩的 payload，在 0.3.7 上直接走 Process 分支。
-    /// 这是上游修复的回归用例 —— 一旦失败说明计费心跳的 null 字段又能炸 worker。
-    #[test]
-    fn null_f64_credits_payload_flows_through_as_process() {
-        let payload = r#"{"type":"credits","consumedSeconds":null,"consumedCredits":0.0,"remainingCredits":1.5}"#;
-        let ev = serde_json::from_str::<RealtimeEvent>(payload).expect("0.3.7 应能解码");
-        let r: SaaSResult<Option<RealtimeEvent>> = Ok(Some(ev));
-        assert!(matches!(
-            classify_event_result(r),
-            LoopAction::Process(RealtimeEvent::Credits { .. })
-        ));
-    }
-
-    /// 防御性：HTTP / Input 类错误如果在 next_event_timeout 路径上意外冒出，
-    /// 也按可恢复处理（不该比 Network 更激进地杀会话）。
-    #[test]
-    fn classify_http_and_input_errors_are_recoverable() {
-        let http: SaaSResult<Option<RealtimeEvent>> = Err(SaaSError::Http {
-            status: 500,
-            message: "internal".into(),
-            body: None,
-        });
-        assert_recoverable(classify_event_result(http));
-
-        let input: SaaSResult<Option<RealtimeEvent>> = Err(SaaSError::Input("bad".into()));
-        assert_recoverable(classify_event_result(input));
-    }
-
     /// 容错预算：连续 MAX_CONSECUTIVE_DECODE_ERRORS 次坏消息时退出，
     /// 期间任何一条好消息都应把计数清零。这里手动跑 run_worker 的同款决策步进逻辑。
     #[test]
@@ -739,33 +805,94 @@ mod tests {
         );
     }
 
-    /// 错→好→错→错 的真实序列：good event 必须把累计 streak 归零，
-    /// 否则单次偶发 null 长期叠加会被误判成"协议崩坏"提前杀会话。
-    #[test]
-    fn good_event_resets_decode_error_streak() {
-        let make_decode = || -> SaaSResult<Option<RealtimeEvent>> {
-            Err(SaaSError::Decode("null f64".into()))
-        };
-        let make_good = || -> SaaSResult<Option<RealtimeEvent>> {
-            Ok(Some(RealtimeEvent::Partial {
-                sentence_id: 1,
-                text: "ok".into(),
-            }))
-        };
-
-        // 模拟 run_worker 内累计语义。
-        let mut streak: u32 = 0;
-        for r in [make_decode(), make_decode(), make_good(), make_decode()] {
-            match classify_event_result(r) {
-                LoopAction::Process(_) => streak = 0,
-                LoopAction::DecodeRecoverable(_) => streak += 1,
-                other => panic!("unexpected branch: {other:?}"),
+    /// 模拟 run_worker 主循环对 RealtimeBackendEvent 的决策语义。
+    fn step_streak(streak: &mut u32, ev: &RealtimeBackendEvent) -> Option<&'static str> {
+        match ev {
+            RealtimeBackendEvent::DecodeRecoverable(_) => {
+                *streak += 1;
+                if *streak >= MAX_CONSECUTIVE_DECODE_ERRORS {
+                    Some("decode_errors")
+                } else {
+                    None
+                }
+            }
+            RealtimeBackendEvent::NetworkExit(_) => Some("network"),
+            // Idle 不参与 streak（既不重置也不增长）；good event 才重置。
+            RealtimeBackendEvent::Idle => None,
+            _ => {
+                *streak = 0;
+                None
             }
         }
-        assert_eq!(
-            streak, 1,
-            "good event 之后只剩 1 次错误，不应触达预算上限"
+    }
+
+    #[test]
+    fn decode_recoverable_does_not_exit_immediately() {
+        let mut s = 0;
+        let r = step_streak(
+            &mut s,
+            &RealtimeBackendEvent::DecodeRecoverable("null f64".into()),
         );
-        assert!(streak < MAX_CONSECUTIVE_DECODE_ERRORS);
+        assert!(r.is_none(), "single decode error must not kill worker");
+        assert_eq!(s, 1);
+    }
+
+    #[test]
+    fn network_exit_kills_immediately() {
+        let mut s = 0;
+        let r = step_streak(
+            &mut s,
+            &RealtimeBackendEvent::NetworkExit("connection reset".into()),
+        );
+        assert_eq!(r, Some("network"));
+    }
+
+    #[test]
+    fn good_event_resets_decode_error_streak() {
+        let seq = [
+            RealtimeBackendEvent::DecodeRecoverable("a".into()),
+            RealtimeBackendEvent::DecodeRecoverable("b".into()),
+            RealtimeBackendEvent::Partial {
+                sentence_id: 1,
+                text: "ok".into(),
+            },
+            RealtimeBackendEvent::DecodeRecoverable("c".into()),
+        ];
+        let mut s = 0;
+        let mut killed = None;
+        for ev in &seq {
+            if let Some(k) = step_streak(&mut s, ev) {
+                killed = Some(k);
+                break;
+            }
+        }
+        assert!(killed.is_none(), "good event must reset streak");
+        assert_eq!(s, 1, "after reset, only the trailing decode error counted");
+    }
+
+    #[test]
+    fn idle_does_not_affect_streak() {
+        let mut s = 2;
+        for _ in 0..10 {
+            let r = step_streak(&mut s, &RealtimeBackendEvent::Idle);
+            assert!(r.is_none());
+        }
+        assert_eq!(s, 2);
+    }
+
+    #[test]
+    fn n_consecutive_decode_errors_exits() {
+        let mut s = 0;
+        let mut killed = None;
+        for _ in 0..MAX_CONSECUTIVE_DECODE_ERRORS {
+            if let Some(k) = step_streak(
+                &mut s,
+                &RealtimeBackendEvent::DecodeRecoverable("x".into()),
+            ) {
+                killed = Some(k);
+                break;
+            }
+        }
+        assert_eq!(killed, Some("decode_errors"));
     }
 }
