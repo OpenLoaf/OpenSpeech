@@ -154,11 +154,24 @@ pub fn build_ordered_multipart(
 }
 
 /// 上传成功后，把 policy + key 拼成 filetrans 协议要求的 oss URL。
+///
+/// **逻辑桶 vs 物理桶**：DashScope 现网 upload_host 是 `dashscope-file-mgr.oss-cn-...`
+/// （物理桶），但 filetrans 任务接受的 oss URL 必须用 `upload_dir` 第一段（如
+/// `dashscope-instant`）作为 bucket。两者用物理桶名拼出来的 URL 会被任务终态拒成
+/// `InvalidParameter.MalformedURL`。byok_e2e.rs 已 verified。
 pub fn oss_url_for(policy: &UploadPolicy, key: &str) -> Result<String, OssUploadError> {
-    let bucket = policy
-        .bucket_from_upload_host()
-        .ok_or_else(|| OssUploadError::Decode(format!("bad upload_host: {}", policy.upload_host)))?;
-    Ok(format!("oss://{bucket}/{key}"))
+    // key 形如 "dashscope-instant/<rest>/<file>"，第一段就是 logical bucket。
+    let logical_bucket = key
+        .split('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| OssUploadError::Decode(format!("bad upload key: {key}")))?;
+    let rest = key
+        .strip_prefix(logical_bucket)
+        .unwrap_or(key)
+        .trim_start_matches('/');
+    let _ = policy; // 保留参数让调用方接口不变；逻辑桶完全从 key 派生。
+    Ok(format!("oss://{logical_bucket}/{rest}"))
 }
 
 #[async_trait::async_trait]
@@ -372,17 +385,20 @@ mod tests {
     #[test]
     fn oss_url_format_matches_filetrans_protocol() {
         let env: UploadPolicyEnvelope = serde_json::from_str(sample_policy_json()).unwrap();
-        let url = oss_url_for(&env.data, "tmp/abc/audio.wav").unwrap();
-        assert_eq!(url, "oss://dashscope-instant/tmp/abc/audio.wav");
+        // 现网 key 形如 "dashscope-instant/<rest>/<file>"——逻辑桶取自 key 第一段，
+        // 不再走 upload_host。byok_e2e.rs 有真实数据回归。
+        let url =
+            oss_url_for(&env.data, "dashscope-instant/uid/2026-05-04/uuid/audio.wav").unwrap();
+        assert_eq!(
+            url,
+            "oss://dashscope-instant/uid/2026-05-04/uuid/audio.wav"
+        );
     }
 
     #[test]
-    fn oss_url_rejects_invalid_upload_host() {
-        let mut p: UploadPolicy = serde_json::from_str::<UploadPolicyEnvelope>(sample_policy_json())
-            .unwrap()
-            .data;
-        p.upload_host = String::new();
-        let err = oss_url_for(&p, "tmp/abc/x").unwrap_err();
+    fn oss_url_rejects_empty_key() {
+        let env: UploadPolicyEnvelope = serde_json::from_str(sample_policy_json()).unwrap();
+        let err = oss_url_for(&env.data, "").unwrap_err();
         assert!(matches!(err, OssUploadError::Decode(_)));
     }
 

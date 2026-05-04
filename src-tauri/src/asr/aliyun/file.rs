@@ -1,25 +1,32 @@
-// 阿里 DashScope filetrans（Qwen3-ASR-Flash-Filetrans）异步任务调用层。
+// 阿里 DashScope filetrans（paraformer-v2）异步任务调用层。
 //
-// 协议见 docs/cloud-endpoints.md「阿里 DashScope BYOK」章节。
+// 协议见 docs/cloud-endpoints.md「阿里 DashScope BYOK」章节。E2E 已验证（byok_e2e.rs）。
 //
 // - 提交：POST /api/v1/services/audio/asr/transcription
 //   Header: Authorization: Bearer <ApiKey>
+//           Content-Type: application/json
 //           X-DashScope-OssResourceResolve: enable    （oss:// URL 必须带）
-//   Body:   { "model": "qwen3-asr-flash-filetrans",
-//             "input": { "file_urls": ["oss://..."] } }
+//           X-DashScope-Async: enable                 （filetrans 只支持异步）
+//   Body:   { "model": "paraformer-v2",
+//             "input": { "file_urls": ["oss://dashscope-instant/<rest>/<file>"] } }
 //   返回:   { "output": { "task_id": "...", "task_status": "PENDING" }, ... }
 //
 // - 轮询：GET /api/v1/tasks/{task_id}
 //   Header: Authorization: Bearer <ApiKey>
 //   返回:   task_status ∈ { PENDING | RUNNING | SUCCEEDED | FAILED | UNKNOWN }
-//           SUCCEEDED 时：output.results[*].transcription 是文本（多 url 合并）。
+//           SUCCEEDED 时：output.results[*].transcription_url 是个 OSS 临时签名 URL，
+//           GET 一下拿真正的 transcription JSON：transcripts[*].text 拼起来即文本。
+//           （早期一些 DashScope 模型把 transcription 直接平铺在 results[]，paraformer-v2
+//           没有，所以 merge_transcriptions 兜不住，必须二级 fetch。）
 
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
 const SUBMIT_URL: &str = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription";
 const TASKS_URL: &str = "https://dashscope.aliyuncs.com/api/v1/tasks/";
-pub const FILETRANS_MODEL: &str = "qwen3-asr-flash-filetrans";
+/// DashScope 公网 BYOK 直连用的模型 id。SaaS 内部用的是 `qwen3-asr-flash-filetrans`
+/// 这种别名，公网直连不识别（会得到 InvalidParameter.MalformedURL，迷惑性很强）。
+pub const FILETRANS_MODEL: &str = "paraformer-v2";
 
 #[derive(Debug, Clone)]
 pub enum FileTransError {
@@ -134,20 +141,47 @@ pub struct TaskResult {
     pub file_url: Option<String>,
     #[serde(default)]
     pub subtask_status: Option<String>,
+    /// 早期模型的内联 transcription 字段。paraformer-v2 始终为空，必须走 transcription_url。
     #[serde(default)]
     pub transcription: Option<String>,
-    /// 部分历史返回里 transcription 嵌在 sentence 列表里；目前主路径直接拿 transcription。
+    /// paraformer-v2 真正的输出口：OSS 临时签名 URL，GET 后内容是
+    /// `{ "transcripts": [{"text": "...", "sentences": [...]}] }`。
+    #[serde(default)]
+    pub transcription_url: Option<String>,
     #[serde(default)]
     pub code: Option<String>,
     #[serde(default)]
     pub message: Option<String>,
 }
 
-/// 把 results[*].transcription 顺序拼成纯文本。subtask 失败时跳过那一段。
+/// transcription_url 指向的 JSON 结构（DashScope paraformer-v2 输出格式）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct TranscriptionPayload {
+    #[serde(default)]
+    pub transcripts: Vec<TranscriptEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TranscriptEntry {
+    #[serde(default)]
+    pub text: String,
+}
+
+/// 把 results[*].transcription 顺序拼成纯文本（仅对内联版本有效；paraformer-v2 永远是空）。
 pub fn merge_transcriptions(results: &[TaskResult]) -> String {
     results
         .iter()
         .filter_map(|r| r.transcription.as_deref().filter(|s| !s.is_empty()))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// paraformer-v2 兼容版：把 transcription_url 对应的 JSON 里 transcripts[*].text 拼起来。
+pub fn merge_transcripts_payload(payloads: &[TranscriptionPayload]) -> String {
+    payloads
+        .iter()
+        .flat_map(|p| p.transcripts.iter())
+        .map(|t| t.text.as_str())
         .collect::<Vec<_>>()
         .join("")
 }
@@ -165,6 +199,13 @@ pub trait DashScopeClient: Send + Sync {
         api_key: &str,
         task_id: &str,
     ) -> Result<TaskOutput, FileTransError>;
+
+    /// 拉 transcription_url 指向的 OSS JSON。这是 paraformer-v2 唯一能拿到正文
+    /// 的路径——/api/v1/tasks/{id} 的 results[*].transcription 永远是空。
+    async fn fetch_transcription(
+        &self,
+        url: &str,
+    ) -> Result<TranscriptionPayload, FileTransError>;
 }
 
 pub struct ReqwestDashScopeClient {
@@ -209,6 +250,10 @@ impl DashScopeClient for ReqwestDashScopeClient {
             .header("Content-Type", "application/json")
             // 关键 header：oss:// URL 必须显式 enable，否则服务端拒收。
             .header("X-DashScope-OssResourceResolve", "enable")
+            // filetrans endpoint 只支持异步提交（返回 task_id 走轮询），不带这个
+            // header 服务端按同步处理，会报 AccessDenied "current user api does not
+            // support synchronous calls"。
+            .header("X-DashScope-Async", "enable")
             .body(body)
             .send()
             .await
@@ -264,6 +309,31 @@ impl DashScopeClient for ReqwestDashScopeClient {
         let resp: TaskResponse = serde_json::from_str(&raw)
             .map_err(|e| FileTransError::Decode(format!("query_task: {e}; body={raw}")))?;
         Ok(resp.output)
+    }
+
+    async fn fetch_transcription(
+        &self,
+        url: &str,
+    ) -> Result<TranscriptionPayload, FileTransError> {
+        // OSS 临时签名 URL，自带认证；不要带 Bearer，否则签名校验冲突。
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| FileTransError::Network(e.to_string()))?;
+        let status = resp.status();
+        let raw = resp
+            .text()
+            .await
+            .map_err(|e| FileTransError::Network(e.to_string()))?;
+        if !status.is_success() {
+            return Err(FileTransError::Network(format!(
+                "transcription_url HTTP {status}: {raw}"
+            )));
+        }
+        serde_json::from_str(&raw)
+            .map_err(|e| FileTransError::Decode(format!("transcription payload: {e}; body={raw}")))
     }
 }
 
@@ -407,6 +477,7 @@ mod tests {
                 file_url: None,
                 subtask_status: Some("SUCCEEDED".into()),
                 transcription: Some("你好".into()),
+                transcription_url: None,
                 code: None,
                 message: None,
             },
@@ -414,6 +485,7 @@ mod tests {
                 file_url: None,
                 subtask_status: Some("FAILED".into()),
                 transcription: None,
+                transcription_url: None,
                 code: Some("TaskFailed".into()),
                 message: Some("oops".into()),
             },
@@ -421,6 +493,7 @@ mod tests {
                 file_url: None,
                 subtask_status: Some("SUCCEEDED".into()),
                 transcription: Some("世界".into()),
+                transcription_url: None,
                 code: None,
                 message: None,
             },
@@ -506,6 +579,14 @@ mod tests {
                 Op::Submit(_) => panic!("expected Query op"),
             }
         }
+
+        async fn fetch_transcription(
+            &self,
+            _url: &str,
+        ) -> Result<TranscriptionPayload, FileTransError> {
+            // 测试默认不走 transcription_url 二级 fetch；需要时改用富 mock。
+            unimplemented!("MockClient.fetch_transcription not stubbed for this test")
+        }
     }
 
     struct ZeroSleeper;
@@ -524,6 +605,7 @@ mod tests {
                         file_url: None,
                         subtask_status: Some(status.into()),
                         transcription: Some(t.into()),
+                        transcription_url: None,
                         code: None,
                         message: None,
                     }]
