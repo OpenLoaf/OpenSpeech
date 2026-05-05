@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "node scripts/tauri.mjs",
-    "tauri:dev": "node scripts/tauri.mjs dev",
-    "tauri:dev:staging": "node scripts/tauri.mjs dev --features staging",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "tauri:dev:staging": "tauri dev --config src-tauri/tauri.dev.conf.json --features staging",
     "reset:permissions": "bash scripts/reset-permissions.sh",
     "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml",
     "dmg:build": "node scripts/build-dmg.mjs"
