@@ -1338,6 +1338,20 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             (cur.state === "recording" || cur.state === "preparing")
           ) {
             const duration = now - cur.lastPressAt;
+            // 只对 translate 这一条做"OS / Webview 注入二连发"兜底：Windows Webview2
+            // 在窗口聚焦时对默认翻译热键 Alt+Shift 会引发 rdev 看到一次 press → release
+            // → press 循环，第二次 press 在原有 toggle 分支里被当成用户 toggle off →
+            // too-short discard 回 idle，用户感知"按下立马退出"。<100ms 的二连发不可能
+            // 是真人双击（双击下限 ~150ms），就地忽略；其它 binding（dictate_ptt 等）
+            // 不受影响。
+            const OS_INJECTED_DUPLICATE_MS = 100;
+            if (id === "translate" && duration < OS_INJECTED_DUPLICATE_MS) {
+              console.log(
+                "[recording] toggle (translate): ignored (likely OS/webview-injected duplicate press)",
+                { duration, threshold: OS_INJECTED_DUPLICATE_MS },
+              );
+              return;
+            }
             if (duration < TOO_SHORT_TOTAL_MS) {
               console.log(
                 "[recording] toggle: too short → discard (no save / no transcribe)",
