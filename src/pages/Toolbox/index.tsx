@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import {
@@ -11,7 +11,6 @@ import {
   Download,
   History as HistoryIcon,
   Languages,
-  Play,
   RotateCcw,
   Sparkles,
   Trash2,
@@ -59,6 +58,8 @@ const TRANSLATE_LANG_NAMES: Record<TranslateTargetLang, string> = {
 };
 const TTS_VOICES = ["natural_f", "natural_m", "calm_f"] as const;
 const TTS_SPEEDS = [0.8, 1.0, 1.25, 1.5] as const;
+
+const AUTO_RUN_DEBOUNCE_MS = 800;
 
 type ToolStatus =
   | { kind: "idle" }
@@ -171,9 +172,11 @@ function ChipDropdown<T extends string | number>({
 function HistoryPopover({
   onPick,
   onClose,
+  align = "left",
 }: {
   onPick: (text: string) => void;
   onClose: () => void;
+  align?: "left" | "right";
 }) {
   const { t } = useTranslation();
   const items = useHistoryStore((s) => s.items);
@@ -181,7 +184,12 @@ function HistoryPopover({
     .filter((it) => it.status === "success" && it.text.trim().length > 0)
     .slice(0, 30);
   return (
-    <div className="absolute top-full left-0 z-30 mt-1 max-h-72 w-80 overflow-y-auto border border-te-gray/60 bg-te-bg shadow-lg">
+    <div
+      className={cn(
+        "absolute top-full z-30 mt-1 max-h-72 w-80 overflow-y-auto border border-te-gray/60 bg-te-bg shadow-lg",
+        align === "right" ? "right-0" : "left-0",
+      )}
+    >
       {usable.length === 0 ? (
         <div className="px-3 py-6 text-center font-mono text-[11px] uppercase tracking-[0.18em] text-te-light-gray">
           {t("pages:toolbox.input.history_empty")}
@@ -221,111 +229,29 @@ function HistoryPopover({
   );
 }
 
-type ActionRowProps = {
-  tool: ToolKey;
-  icon: typeof Play;
-  label: string;
-  enabled: boolean;
-  active: boolean;
-  running: boolean;
-  onRun: () => void;
-  param?: React.ReactNode;
-};
-
-function ActionRow({
-  icon: Icon,
-  label,
-  enabled,
-  active,
-  running,
-  onRun,
-  param,
-}: ActionRowProps) {
-  return (
-    <div
-      className={cn(
-        "flex h-10 items-center justify-between gap-2 border-t border-te-gray/30 px-3 transition-colors",
-        active ? "bg-te-accent/[0.06]" : null,
-      )}
-    >
-      <button
-        type="button"
-        onClick={onRun}
-        disabled={!enabled || running}
-        className={cn(
-          "group inline-flex h-7 items-center gap-2 px-2 font-mono text-[11px] font-semibold uppercase tracking-[0.22em] transition-colors",
-          enabled
-            ? active
-              ? "text-te-accent"
-              : "text-te-fg hover:text-te-accent"
-            : "text-te-light-gray/40",
-          "disabled:cursor-not-allowed",
-        )}
-      >
-        <Icon
-          className={cn(
-            "size-3.5",
-            enabled
-              ? active
-                ? "text-te-accent"
-                : "text-te-fg group-hover:text-te-accent"
-              : "text-te-light-gray/40",
-          )}
-        />
-        <span>{label}</span>
-      </button>
-      <div className="flex items-center gap-1.5">{param}</div>
-    </div>
-  );
-}
-
 type InputCardProps = {
   text: string;
-  setText: (s: string) => void;
-  charCount: number;
-  doPaste: () => Promise<void>;
+  onTextInput: (s: string) => void;
+  onTextFill: (s: string, options: { autoRun: boolean }) => void;
+  hasText: boolean;
   onClear: () => void;
   revertSnapshot: string | null;
   onRevert: () => void;
-  hasText: boolean;
-  running: boolean;
-  activeTool: ToolKey | null;
-  runTool: (tool: ToolKey) => void;
-  targetLang: TranslateTargetLang;
-  setTargetLang: (l: TranslateTargetLang) => void;
-  polishScenarios: PolishScenario[];
-  polishScenarioId: string | null;
-  setPolishScenarioId: (id: string) => void;
-  voice: (typeof TTS_VOICES)[number];
-  setVoice: (v: (typeof TTS_VOICES)[number]) => void;
-  speed: (typeof TTS_SPEEDS)[number];
-  setSpeed: (s: (typeof TTS_SPEEDS)[number]) => void;
+  doPaste: () => Promise<void>;
   clipboardPreview: string | null;
-  onAcceptClipboard: (action: ToolKey | null) => void;
+  onAcceptClipboard: (autoRun: boolean) => void;
   onDismissClipboard: () => void;
 };
 
 function InputCard({
   text,
-  setText,
-  charCount,
-  doPaste,
+  onTextInput,
+  onTextFill,
+  hasText,
   onClear,
   revertSnapshot,
   onRevert,
-  hasText,
-  running,
-  activeTool,
-  runTool,
-  targetLang,
-  setTargetLang,
-  polishScenarios,
-  polishScenarioId,
-  setPolishScenarioId,
-  voice,
-  setVoice,
-  speed,
-  setSpeed,
+  doPaste,
   clipboardPreview,
   onAcceptClipboard,
   onDismissClipboard,
@@ -346,18 +272,27 @@ function InputCard({
   return (
     <div className="flex min-h-0 min-w-0 flex-col bg-te-bg">
       <div className="flex h-9 shrink-0 items-center justify-between border-b border-te-gray/30 px-2">
+        <button
+          type="button"
+          onClick={handlePaste}
+          className={cn(ICON_BTN, pasted && "text-te-accent")}
+        >
+          {pasted ? (
+            <ClipboardCheck className="size-3.5" />
+          ) : (
+            <Clipboard className="size-3.5" />
+          )}
+          <span>{t("pages:toolbox.input.paste")}</span>
+        </button>
         <div className="flex items-center gap-0.5">
           <button
             type="button"
-            onClick={handlePaste}
-            className={cn(ICON_BTN, pasted && "text-te-accent")}
+            onClick={onClear}
+            disabled={!hasText}
+            className={ICON_BTN}
           >
-            {pasted ? (
-              <ClipboardCheck className="size-3.5" />
-            ) : (
-              <Clipboard className="size-3.5" />
-            )}
-            <span>{t("pages:toolbox.input.paste")}</span>
+            <Trash2 className="size-3.5" />
+            <span>{t("pages:toolbox.input.clear")}</span>
           </button>
           <div className="relative" ref={historyRef}>
             <button
@@ -378,26 +313,15 @@ function InputCard({
                   transition={{ duration: 0.12 }}
                 >
                   <HistoryPopover
-                    onPick={(value) => setText(value)}
+                    onPick={(value) => onTextFill(value, { autoRun: true })}
                     onClose={() => setHistoryOpen(false)}
+                    align="right"
                   />
                 </motion.div>
               ) : null}
             </AnimatePresence>
           </div>
-          <button
-            type="button"
-            onClick={onClear}
-            disabled={!hasText}
-            className={ICON_BTN}
-          >
-            <Trash2 className="size-3.5" />
-            <span>{t("pages:toolbox.input.clear")}</span>
-          </button>
         </div>
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-te-light-gray tabular-nums">
-          {t("pages:toolbox.input.char_count", { count: charCount })}
-        </span>
       </div>
 
       {revertSnapshot !== null ? (
@@ -438,7 +362,7 @@ function InputCard({
                 <div className="mt-2 flex flex-wrap items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => onAcceptClipboard("translate")}
+                    onClick={() => onAcceptClipboard(true)}
                     className="inline-flex h-6 items-center gap-1 bg-te-accent px-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-te-bg transition-opacity hover:opacity-90"
                   >
                     <Languages className="size-3" />
@@ -446,7 +370,7 @@ function InputCard({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onAcceptClipboard(null)}
+                    onClick={() => onAcceptClipboard(false)}
                     className="inline-flex h-6 items-center border border-te-gray/50 bg-te-bg px-2 font-mono text-[10px] uppercase tracking-[0.18em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
                   >
                     {t("pages:toolbox.input.clipboard_fill_only")}
@@ -468,102 +392,68 @@ function InputCard({
 
       <textarea
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => onTextInput(e.target.value)}
         placeholder={t("pages:toolbox.input.text_placeholder")}
-        className="min-h-0 w-full flex-1 resize-none bg-te-bg px-3 py-3 font-mono text-sm leading-relaxed text-te-fg/90 outline-none transition-colors placeholder:text-te-light-gray/40 focus:bg-te-surface/40 focus:text-te-fg"
+        className="min-h-0 w-full flex-1 resize-none bg-te-bg px-4 py-3 font-mono text-base leading-relaxed text-te-fg/90 outline-none transition-colors placeholder:text-te-light-gray/40 focus:bg-te-surface/40 focus:text-te-fg"
       />
+    </div>
+  );
+}
 
-      <div className="shrink-0 border-t border-te-gray/40">
-        <ActionRow
-          tool="translate"
-          icon={Languages}
-          label={t("pages:toolbox.tools.tabs.translate")}
-          enabled={hasText}
-          active={activeTool === "translate"}
-          running={running}
-          onRun={() => runTool("translate")}
-          param={
-            <ChipDropdown<TranslateTargetLang>
-              value={targetLang}
-              onChange={setTargetLang}
-              align="right"
-              options={TRANSLATE_LANGS.map((l) => ({
-                value: l,
-                label: t(`pages:toolbox.tools.translate.languages.${l}`),
-              }))}
-            />
-          }
-        />
-        <ActionRow
-          tool="polish"
-          icon={Wand2}
-          label={t("pages:toolbox.tools.tabs.polish")}
-          enabled={hasText && polishScenarios.length > 0}
-          active={activeTool === "polish"}
-          running={running}
-          onRun={() => runTool("polish")}
-          param={
-            polishScenarios.length === 0 ? (
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-te-light-gray/60">
-                {t("pages:toolbox.tools.polish.scenarios_empty")}
-              </span>
-            ) : (
-              <ChipDropdown<string>
-                value={polishScenarioId ?? polishScenarios[0]!.id}
-                onChange={setPolishScenarioId}
-                align="right"
-                options={polishScenarios.map((s) => ({
-                  value: s.id,
-                  label: s.name,
-                }))}
-              />
-            )
-          }
-        />
-        <ActionRow
-          tool="tts"
-          icon={Volume2}
-          label={t("pages:toolbox.tools.tabs.tts")}
-          enabled={hasText}
-          active={activeTool === "tts"}
-          running={running}
-          onRun={() => runTool("tts")}
-          param={
-            <div className="flex items-center gap-1">
-              <ChipDropdown<(typeof TTS_VOICES)[number]>
-                value={voice}
-                onChange={setVoice}
-                align="right"
-                options={TTS_VOICES.map((v) => ({
-                  value: v,
-                  label: t(`pages:toolbox.tools.tts.voices.${v}`),
-                }))}
-              />
-              <ChipDropdown<(typeof TTS_SPEEDS)[number]>
-                value={speed}
-                onChange={setSpeed}
-                align="right"
-                options={TTS_SPEEDS.map((s) => ({
-                  value: s,
-                  label: `${s.toFixed(2)}×`,
-                }))}
-              />
-            </div>
-          }
-        />
-      </div>
+type ToolTabsProps = {
+  tool: ToolKey;
+  onChange: (tool: ToolKey) => void;
+};
+
+function ToolTabs({ tool, onChange }: ToolTabsProps) {
+  const { t } = useTranslation();
+  const items: { key: ToolKey; icon: typeof Languages }[] = [
+    { key: "translate", icon: Languages },
+    { key: "polish", icon: Wand2 },
+    { key: "tts", icon: Volume2 },
+  ];
+  return (
+    <div className="flex h-9 shrink-0 items-stretch border-b border-te-gray/30">
+      {items.map(({ key, icon: Icon }) => {
+        const active = tool === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onChange(key)}
+            className={cn(
+              "relative flex flex-1 items-center justify-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.22em] transition-colors",
+              active
+                ? "text-te-accent"
+                : "text-te-light-gray hover:bg-te-surface-hover hover:text-te-fg",
+            )}
+          >
+            <Icon className="size-3.5" />
+            <span>{t(`pages:toolbox.tools.tabs.${key}`)}</span>
+            {active ? (
+              <span className="absolute inset-x-0 -bottom-px h-0.5 bg-te-accent" />
+            ) : null}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 type OutputCardProps = {
   status: ToolStatus;
-  activeTool: ToolKey | null;
+  activeTool: ToolKey;
+  onToolChange: (tool: ToolKey) => void;
+  hasText: boolean;
   targetLang: TranslateTargetLang;
+  setTargetLang: (l: TranslateTargetLang) => void;
   polishScenarios: PolishScenario[];
   polishScenarioId: string | null;
+  setPolishScenarioId: (id: string) => void;
   voice: (typeof TTS_VOICES)[number];
+  setVoice: (v: (typeof TTS_VOICES)[number]) => void;
   speed: (typeof TTS_SPEEDS)[number];
+  setSpeed: (s: (typeof TTS_SPEEDS)[number]) => void;
   runMeta: RunMeta | null;
   onRerun: () => void;
   onUseAsInput: () => void;
@@ -572,11 +462,17 @@ type OutputCardProps = {
 function OutputCard({
   status,
   activeTool,
+  onToolChange,
+  hasText,
   targetLang,
+  setTargetLang,
   polishScenarios,
   polishScenarioId,
+  setPolishScenarioId,
   voice,
+  setVoice,
   speed,
+  setSpeed,
   runMeta,
   onRerun,
   onUseAsInput,
@@ -602,46 +498,69 @@ function OutputCard({
     }
   };
 
-  const toolLabel = activeTool
-    ? t(`pages:toolbox.tools.tabs.${activeTool}`)
-    : null;
-  const paramLabel = (() => {
-    if (activeTool === "translate") {
-      return t(`pages:toolbox.tools.translate.languages.${targetLang}`);
-    }
-    if (activeTool === "polish") {
-      const sc = polishScenarios.find((s) => s.id === polishScenarioId);
-      return sc?.name ?? null;
-    }
-    if (activeTool === "tts") {
-      return `${t(`pages:toolbox.tools.tts.voices.${voice}`)} · ${speed.toFixed(2)}×`;
-    }
-    return null;
-  })();
-
   const running = status.kind === "running";
   const isTtsDone = activeTool === "tts" && status.kind === "done";
 
+  const paramRow = (() => {
+    if (activeTool === "translate") {
+      return (
+        <ChipDropdown<TranslateTargetLang>
+          value={targetLang}
+          onChange={setTargetLang}
+          options={TRANSLATE_LANGS.map((l) => ({
+            value: l,
+            label: t(`pages:toolbox.tools.translate.languages.${l}`),
+          }))}
+        />
+      );
+    }
+    if (activeTool === "polish") {
+      if (polishScenarios.length === 0) {
+        return (
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-te-light-gray/60">
+            {t("pages:toolbox.tools.polish.scenarios_empty")}
+          </span>
+        );
+      }
+      return (
+        <ChipDropdown<string>
+          value={polishScenarioId ?? polishScenarios[0]!.id}
+          onChange={setPolishScenarioId}
+          options={polishScenarios.map((s) => ({
+            value: s.id,
+            label: s.name,
+          }))}
+        />
+      );
+    }
+    return (
+      <div className="flex items-center gap-1">
+        <ChipDropdown<(typeof TTS_VOICES)[number]>
+          value={voice}
+          onChange={setVoice}
+          options={TTS_VOICES.map((v) => ({
+            value: v,
+            label: t(`pages:toolbox.tools.tts.voices.${v}`),
+          }))}
+        />
+        <ChipDropdown<(typeof TTS_SPEEDS)[number]>
+          value={speed}
+          onChange={setSpeed}
+          options={TTS_SPEEDS.map((s) => ({
+            value: s,
+            label: `${s.toFixed(2)}×`,
+          }))}
+        />
+      </div>
+    );
+  })();
+
   return (
     <div className="flex min-h-0 min-w-0 flex-col bg-te-surface">
-      <div className="flex h-9 shrink-0 items-center justify-between border-b border-te-gray/30 px-3">
-        <div className="flex min-w-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em]">
-          {toolLabel ? (
-            <>
-              <span className="text-te-accent">{toolLabel}</span>
-              {paramLabel ? (
-                <>
-                  <span className="text-te-gray/60">·</span>
-                  <span className="truncate text-te-fg">{paramLabel}</span>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <span className="text-te-light-gray/60">
-              {t("pages:toolbox.output.idle_label")}
-            </span>
-          )}
-        </div>
+      <ToolTabs tool={activeTool} onChange={onToolChange} />
+
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-te-gray/30 bg-te-bg/40 px-3">
+        <div className="flex items-center gap-2">{paramRow}</div>
         <div className="flex items-center gap-0.5">
           <button
             type="button"
@@ -659,7 +578,7 @@ function OutputCard({
           <button
             type="button"
             onClick={onRerun}
-            disabled={!activeTool || running}
+            disabled={!hasText || running}
             className={ICON_BTN}
           >
             <RotateCcw className="size-3.5" />
@@ -678,14 +597,14 @@ function OutputCard({
       </div>
 
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {status.kind === "idle" ? (
+        {!hasText ? (
           <div className="flex flex-1 items-center justify-center px-6">
             <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-te-light-gray/50">
               {t("pages:toolbox.output.ready")}
             </p>
           </div>
         ) : status.kind === "error" ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 border-t border-red-500/40 bg-red-500/[0.04] px-4 py-6">
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-red-500/[0.04] px-4 py-6">
             <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-red-400">
               {t("pages:toolbox.tools.error_title")}
             </p>
@@ -715,19 +634,16 @@ function OutputCard({
             </button>
           </div>
         ) : (
-          <div className="relative min-h-0 flex-1">
-            <span className="pointer-events-none absolute top-0 left-0 h-full w-0.5 bg-te-accent" />
-            <p className="h-full overflow-y-auto whitespace-pre-wrap bg-te-bg px-4 py-3 font-mono text-sm leading-relaxed text-te-fg">
-              {outputText}
-              {running ? (
-                <motion.span
-                  className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-te-accent align-baseline"
-                  animate={{ opacity: [1, 0.2, 1] }}
-                  transition={{ repeat: Infinity, duration: 1, ease: "easeInOut" }}
-                />
-              ) : null}
-            </p>
-          </div>
+          <p className="h-full overflow-y-auto whitespace-pre-wrap bg-te-bg px-4 py-3 font-mono text-base leading-relaxed text-te-fg">
+            {outputText}
+            {running ? (
+              <motion.span
+                className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-te-accent align-baseline"
+                animate={{ opacity: [1, 0.2, 1] }}
+                transition={{ repeat: Infinity, duration: 1, ease: "easeInOut" }}
+              />
+            ) : null}
+          </p>
         )}
 
         {runMeta && status.kind === "done" ? (
@@ -784,68 +700,40 @@ export default function ToolboxPage() {
   const [voice, setVoice] = useState<(typeof TTS_VOICES)[number]>("natural_f");
   const [speed, setSpeed] = useState<(typeof TTS_SPEEDS)[number]>(1.0);
 
-  const [activeTool, setActiveTool] = useState<ToolKey | null>(null);
+  const [activeTool, setActiveTool] = useState<ToolKey>("translate");
   const [status, setStatus] = useState<ToolStatus>({ kind: "idle" });
   const [runMeta, setRunMeta] = useState<RunMeta | null>(null);
 
-  const setText = (next: string) => {
-    setTextRaw(next);
-    if (revertSnapshot !== null) setRevertSnapshot(null);
-    if (clipboardPreview !== null) setClipboardPreview(null);
-  };
-
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const txt = (await readClipboardText())?.trim() ?? "";
-        if (!alive) return;
-        if (txt && txt.length <= 4000) setClipboardPreview(txt);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const debounceRef = useRef<number | null>(null);
+  const cancelDebounce = useCallback(() => {
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
   }, []);
+  useEffect(() => () => cancelDebounce(), [cancelDebounce]);
 
-  const recState = useRecordingStore((s) => s.state);
-  const liveTranscript = useRecordingStore((s) => s.liveTranscript);
-  const lastTranscriptRef = useRef("");
-  const prevStateRef = useRef<RecordingState>("idle");
-  const textRef = useRef(text);
-  textRef.current = text;
-
-  useEffect(() => {
-    if (liveTranscript) lastTranscriptRef.current = liveTranscript;
-  }, [liveTranscript]);
-
-  useEffect(() => {
-    const prev = prevStateRef.current;
-    prevStateRef.current = recState;
-    if (prev === "idle" && recState !== "idle") {
-      lastTranscriptRef.current = "";
-      return;
-    }
-    if (prev !== "idle" && recState === "idle") {
-      const captured = lastTranscriptRef.current.trim();
-      if (captured && textRef.current.trim().length === 0) {
-        setText(lastTranscriptRef.current);
-      }
-      lastTranscriptRef.current = "";
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recState]);
-
-  const doPaste = async () => {
-    try {
-      const txt = await readClipboardText();
-      if (txt) setText(txt);
-    } catch (e) {
-      console.warn("[toolbox] paste failed:", e);
-    }
+  const stateRef = useRef({
+    text,
+    activeTool,
+    targetLang,
+    polishScenarioId,
+    voice,
+    speed,
+    polishScenarios,
+    aiRefine,
+    promptLang,
+  });
+  stateRef.current = {
+    text,
+    activeTool,
+    targetLang,
+    polishScenarioId,
+    voice,
+    speed,
+    polishScenarios,
+    aiRefine,
+    promptLang,
   };
 
   const runChat = async (systemPrompt: string, userText: string) => {
@@ -877,9 +765,14 @@ export default function ToolboxPage() {
     return r.refinedText || acc;
   };
 
-  const runTool = async (tool: ToolKey) => {
-    if (!text.trim()) return;
-    if (status.kind === "running") return;
+  const runTool = useCallback(async (tool: ToolKey) => {
+    const snap = stateRef.current;
+    const value = snap.text;
+    if (!value.trim()) {
+      setStatus({ kind: "idle" });
+      setRunMeta(null);
+      return;
+    }
     setActiveTool(tool);
     setStatus({ kind: "running", partial: "" });
     setRunMeta(null);
@@ -891,26 +784,28 @@ export default function ToolboxPage() {
         setRunMeta({
           tool,
           durationMs: performance.now() - start,
-          chars: text.length,
+          chars: value.length,
         });
         return;
       }
       let sysPrompt: string;
       if (tool === "translate") {
         const base = getEffectiveAiTranslationSystemPrompt(
-          aiRefine.customTranslationSystemPrompt,
-          promptLang,
+          snap.aiRefine.customTranslationSystemPrompt,
+          snap.promptLang,
         );
-        sysPrompt = `${base}\n\nTarget language: ${TRANSLATE_LANG_NAMES[targetLang]}`;
+        sysPrompt = `${base}\n\nTarget language: ${TRANSLATE_LANG_NAMES[snap.targetLang]}`;
       } else {
         const base = getEffectiveAiPolishSystemPrompt(
-          aiRefine.customPolishSystemPrompt,
-          promptLang,
+          snap.aiRefine.customPolishSystemPrompt,
+          snap.promptLang,
         );
-        const scenario = polishScenarios.find((s) => s.id === polishScenarioId);
+        const scenario = snap.polishScenarios.find(
+          (s) => s.id === snap.polishScenarioId,
+        );
         sysPrompt = scenario ? `${base}\n\n${scenario.instruction}` : base;
       }
-      const result = await runChat(sysPrompt, text);
+      const result = await runChat(sysPrompt, value);
       setStatus({ kind: "done", result });
       setRunMeta({
         tool,
@@ -922,10 +817,116 @@ export default function ToolboxPage() {
       const msg = e instanceof Error ? e.message : String(e);
       setStatus({ kind: "error", message: msg });
     }
+  }, []);
+
+  const runImmediate = useCallback(
+    (tool?: ToolKey) => {
+      cancelDebounce();
+      void runTool(tool ?? stateRef.current.activeTool);
+    },
+    [cancelDebounce, runTool],
+  );
+
+  const runDebounced = useCallback(
+    (tool?: ToolKey) => {
+      cancelDebounce();
+      debounceRef.current = window.setTimeout(() => {
+        debounceRef.current = null;
+        void runTool(tool ?? stateRef.current.activeTool);
+      }, AUTO_RUN_DEBOUNCE_MS);
+    },
+    [cancelDebounce, runTool],
+  );
+
+  const setTextValue = (next: string, options: { autoRun: boolean }) => {
+    setTextRaw(next);
+    if (revertSnapshot !== null) setRevertSnapshot(null);
+    if (clipboardPreview !== null) setClipboardPreview(null);
+    if (next.trim().length === 0) {
+      cancelDebounce();
+      setStatus({ kind: "idle" });
+      setRunMeta(null);
+      return;
+    }
+    if (options.autoRun) runImmediate();
+    else cancelDebounce();
+  };
+
+  const handleTextInput = (next: string) => {
+    setTextRaw(next);
+    if (revertSnapshot !== null) setRevertSnapshot(null);
+    if (clipboardPreview !== null) setClipboardPreview(null);
+    if (next.trim().length === 0) {
+      cancelDebounce();
+      setStatus({ kind: "idle" });
+      setRunMeta(null);
+      return;
+    }
+    runDebounced();
+  };
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const txt = (await readClipboardText())?.trim() ?? "";
+        if (!alive) return;
+        if (txt && txt.length <= 4000) setClipboardPreview(txt);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const recState = useRecordingStore((s) => s.state);
+  const liveTranscript = useRecordingStore((s) => s.liveTranscript);
+  const lastTranscriptRef = useRef("");
+  const prevStateRef = useRef<RecordingState>("idle");
+  const textForRecRef = useRef(text);
+  textForRecRef.current = text;
+
+  useEffect(() => {
+    if (liveTranscript) lastTranscriptRef.current = liveTranscript;
+  }, [liveTranscript]);
+
+  useEffect(() => {
+    const prev = prevStateRef.current;
+    prevStateRef.current = recState;
+    if (prev === "idle" && recState !== "idle") {
+      lastTranscriptRef.current = "";
+      return;
+    }
+    if (prev !== "idle" && recState === "idle") {
+      const captured = lastTranscriptRef.current.trim();
+      if (captured && textForRecRef.current.trim().length === 0) {
+        setTextValue(lastTranscriptRef.current, { autoRun: true });
+      }
+      lastTranscriptRef.current = "";
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recState]);
+
+  const doPaste = async () => {
+    try {
+      const txt = await readClipboardText();
+      if (txt) setTextValue(txt, { autoRun: true });
+    } catch (e) {
+      console.warn("[toolbox] paste failed:", e);
+    }
+  };
+
+  const handleClear = () => {
+    cancelDebounce();
+    setTextRaw("");
+    setStatus({ kind: "idle" });
+    setRunMeta(null);
   };
 
   const rerun = () => {
-    if (activeTool) void runTool(activeTool);
+    if (text.trim().length > 0) runImmediate();
   };
 
   const useResultAsInput = () => {
@@ -934,32 +935,62 @@ export default function ToolboxPage() {
     setTextRaw(status.result);
     setStatus({ kind: "idle" });
     setRunMeta(null);
-    setActiveTool(null);
   };
 
   const revertText = () => {
     if (revertSnapshot === null) return;
+    cancelDebounce();
     setTextRaw(revertSnapshot);
     setRevertSnapshot(null);
+    setStatus({ kind: "idle" });
+    setRunMeta(null);
   };
 
-  const handleAcceptClipboard = (action: ToolKey | null) => {
+  const handleAcceptClipboard = (autoRun: boolean) => {
     if (!clipboardPreview) return;
-    setTextRaw(clipboardPreview);
+    const txt = clipboardPreview;
     setClipboardPreview(null);
-    if (action) {
-      window.setTimeout(() => void runTool(action), 0);
-    }
+    setTextValue(txt, { autoRun });
   };
 
   const handleSetTargetLang = (l: TranslateTargetLang) => {
     setTargetLang(l);
     void setGeneral("translateTargetLang", l);
+    if (text.trim().length > 0 && stateRef.current.activeTool === "translate") {
+      runImmediate("translate");
+    }
+  };
+  const handleSetPolishScenarioId = (id: string) => {
+    setPolishScenarioId(id);
+    if (text.trim().length > 0 && stateRef.current.activeTool === "polish") {
+      runImmediate("polish");
+    }
+  };
+  const handleSetVoice = (v: (typeof TTS_VOICES)[number]) => {
+    setVoice(v);
+    if (text.trim().length > 0 && stateRef.current.activeTool === "tts") {
+      runImmediate("tts");
+    }
+  };
+  const handleSetSpeed = (s: (typeof TTS_SPEEDS)[number]) => {
+    setSpeed(s);
+    if (text.trim().length > 0 && stateRef.current.activeTool === "tts") {
+      runImmediate("tts");
+    }
+  };
+
+  const handleToolChange = (tool: ToolKey) => {
+    if (tool === activeTool) return;
+    setActiveTool(tool);
+    if (text.trim().length > 0) runImmediate(tool);
+    else {
+      cancelDebounce();
+      setStatus({ kind: "idle" });
+      setRunMeta(null);
+    }
   };
 
   const hasText = text.trim().length > 0;
-  const charCount = text.length;
-  const running = status.kind === "running";
 
   return (
     <section className="flex h-full flex-col overflow-hidden bg-te-bg">
@@ -1000,25 +1031,13 @@ export default function ToolboxPage() {
         >
           <InputCard
             text={text}
-            setText={setText}
-            charCount={charCount}
-            doPaste={doPaste}
-            onClear={() => setText("")}
+            onTextInput={handleTextInput}
+            onTextFill={(v, o) => setTextValue(v, o)}
+            hasText={hasText}
+            onClear={handleClear}
             revertSnapshot={revertSnapshot}
             onRevert={revertText}
-            hasText={hasText}
-            running={running}
-            activeTool={activeTool}
-            runTool={(tool) => void runTool(tool)}
-            targetLang={targetLang}
-            setTargetLang={handleSetTargetLang}
-            polishScenarios={polishScenarios}
-            polishScenarioId={polishScenarioId}
-            setPolishScenarioId={setPolishScenarioId}
-            voice={voice}
-            setVoice={setVoice}
-            speed={speed}
-            setSpeed={setSpeed}
+            doPaste={doPaste}
             clipboardPreview={clipboardPreview}
             onAcceptClipboard={handleAcceptClipboard}
             onDismissClipboard={() => setClipboardPreview(null)}
@@ -1026,11 +1045,17 @@ export default function ToolboxPage() {
           <OutputCard
             status={status}
             activeTool={activeTool}
+            onToolChange={handleToolChange}
+            hasText={hasText}
             targetLang={targetLang}
+            setTargetLang={handleSetTargetLang}
             polishScenarios={polishScenarios}
             polishScenarioId={polishScenarioId}
+            setPolishScenarioId={handleSetPolishScenarioId}
             voice={voice}
+            setVoice={handleSetVoice}
             speed={speed}
+            setSpeed={handleSetSpeed}
             runMeta={runMeta}
             onRerun={rerun}
             onUseAsInput={useResultAsInput}

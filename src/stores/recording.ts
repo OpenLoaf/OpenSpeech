@@ -838,9 +838,23 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           });
         }
         if (bilingual) {
-          streamedSoFar += "\n\n";
-          injectIncremental(streamedSoFar);
+          // 原文 / 译文之间用单个换行分隔；phase 1 末尾 LLM 自带 \n 时不再叠加
+          const trailing = /\n*$/.exec(streamedSoFar)?.[0].length ?? 0;
+          const need = Math.max(0, 1 - trailing);
+          if (need > 0) {
+            streamedSoFar += "\n".repeat(need);
+            injectIncremental(streamedSoFar);
+          }
         }
+        let phase2FirstChunkPending = bilingual;
+        const phase2OnChunk = (chunk: string) => {
+          if (phase2FirstChunkPending) {
+            chunk = chunk.replace(/^\s+/, "");
+            if (!chunk) return;
+            phase2FirstChunkPending = false;
+          }
+          onChunk(chunk);
+        };
         const r2 = await refineTextViaChatStream(
           {
             mode: aiSettings.mode,
@@ -851,11 +865,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
             ...customParams,
             taskId: currentSttSessionId ?? undefined,
           },
-          onChunk,
+          phase2OnChunk,
         );
-        refinedText = bilingual
-          ? `${refinedSrc}\n\n${r2.refinedText}`
-          : r2.refinedText;
+        refinedText = bilingual ? streamedSoFar : r2.refinedText;
       } else {
         refinedText = refinedSrc;
       }
