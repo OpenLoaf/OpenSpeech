@@ -10,8 +10,20 @@
 //   不会抛错，前端 catch→paste fallback 触发不到。诊断这种"看起来成功但用户
 //   屏幕上没字"的场景必须靠这里的 INFO 日志反推：会话开始/结束都打点，事后
 //   对照用户截图就能确认 Rust 端是否真的发了 SendInput。
+//
+// 关于 Windows 上"前 N 个字到了，后面全丢"：
+//   一次性把 ~50 个 KEYEVENTF_UNICODE 事件灌进 SendInput，系统消息队列容量
+//   上限 / 目标应用 message pump 跟不上 / IME 输入区节流，**会静默丢弃后续
+//   事件**。enigo 0.6.x 没有内置分块。这里 Windows 平台按 WIN_TYPE_CHUNK_CHARS
+//   把段拆成小块、块之间 sleep WIN_TYPE_CHUNK_SLEEP_MS，让 pump 有时间消化。
+//   实测中文 + 微信/浏览器/Office 输入框不再截断。其它平台无此问题，原速直发。
 
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+use enigo::{Direction, Enigo, InputError, Key, Keyboard, Settings};
+
+#[cfg(target_os = "windows")]
+const WIN_TYPE_CHUNK_CHARS: usize = 4;
+#[cfg(target_os = "windows")]
+const WIN_TYPE_CHUNK_SLEEP_MS: u64 = 8;
 
 /// 截取前 N 个 Unicode 标量，给日志做摘要——避免把整段转录原文打到日志里
 /// 泄露隐私，又能在排错时确认"Rust 真的拿到了文本"。
@@ -21,6 +33,25 @@ fn log_excerpt(s: &str, n: usize) -> String {
         format!("{preview}…")
     } else {
         preview
+    }
+}
+
+/// 把一段 segment 喂给 enigo.text()。Windows 上分块 + 块间 sleep 防止
+/// SendInput 灌爆系统消息队列；其它平台直接一次性发出。
+fn type_segment(enigo: &mut Enigo, segment: &str) -> Result<(), InputError> {
+    #[cfg(target_os = "windows")]
+    {
+        let chars: Vec<char> = segment.chars().collect();
+        for chunk in chars.chunks(WIN_TYPE_CHUNK_CHARS) {
+            let s: String = chunk.iter().collect();
+            enigo.text(&s)?;
+            std::thread::sleep(std::time::Duration::from_millis(WIN_TYPE_CHUNK_SLEEP_MS));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        enigo.text(segment)
     }
 }
 
@@ -99,7 +130,7 @@ pub fn inject_type(text: String) -> Result<(), String> {
             })?;
         }
         if !segment.is_empty() {
-            enigo.text(segment).map_err(|e| {
+            type_segment(&mut enigo, segment).map_err(|e| {
                 log::error!(
                     "[inject] type text() failed at seg {idx}/{}: chars={} err={e}",
                     segments.len(),
