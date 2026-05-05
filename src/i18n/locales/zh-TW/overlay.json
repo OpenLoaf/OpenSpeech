@@ -10,7 +10,8 @@
   "status": {
     "error_fallback": "錯誤",
     "transcribing": "正在思考中…",
-    "injecting": "正在輸出中…"
+    "injecting": "正在輸出中…",
+    "translating": "正在翻譯中…"
   },
   "panel": {
     "tag": {
@@ -110,6 +111,9 @@
     "aborted_saved": {
       "title": "已取消，未轉寫",
       "description": "錄音已儲存到歷史"
+    },
+    "silent_recording": {
+      "title": "未偵測到語音"
     },
     "realtime_degraded": {
       "title": "即時辨識異常",

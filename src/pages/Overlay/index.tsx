@@ -164,6 +164,7 @@ export default function OverlayPage() {
   const isPreparing = state.main === "preparing";
   const isTranscribing = state.main === "transcribing";
   const isInjecting = state.main === "injecting";
+  const isTranslating = state.main === "translating";
   const isError = state.main === "error";
   const isTranslate = state.activeId === "translate";
   const translateTargetLang = useSettingsStore(
@@ -195,14 +196,18 @@ export default function OverlayPage() {
       : "border-te-accent text-te-accent";
 
   // 中央 AnimatePresence 用 centerKey 切换：同 key 只视作 prop 变化，不会触发动画。
-  // transcribing / injecting 共用 "progress" 容器（进度条不重启），内部的文字标签
-  // 走另一层 AnimatePresence 单独 crossfade。
-  const centerKey = isTranscribing || isInjecting
+  // transcribing / injecting / translating 共用 "progress" 容器（进度条不重启），
+  // 内部的文字标签走另一层 AnimatePresence 单独 crossfade。
+  const centerKey = isTranscribing || isInjecting || isTranslating
     ? "progress"
     : isError
       ? "error"
       : "wave";
-  const progressLabelKey = isInjecting ? "injecting" : "transcribing";
+  const progressLabelKey = isTranslating
+    ? "translating"
+    : isInjecting
+      ? "injecting"
+      : "transcribing";
 
   return (
     <AnimatePresence>
@@ -345,9 +350,11 @@ export default function OverlayPage() {
                       className="absolute inset-0 flex items-center justify-center truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg"
                     >
                       {t(
-                        progressLabelKey === "injecting"
-                          ? "overlay:status.injecting"
-                          : "overlay:status.transcribing",
+                        progressLabelKey === "translating"
+                          ? "overlay:status.translating"
+                          : progressLabelKey === "injecting"
+                            ? "overlay:status.injecting"
+                            : "overlay:status.transcribing",
                       )}
                     </span>
                   </div>

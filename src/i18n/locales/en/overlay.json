@@ -10,7 +10,8 @@
   "status": {
     "error_fallback": "Error",
     "transcribing": "Thinking…",
-    "injecting": "Inserting…"
+    "injecting": "Inserting…",
+    "translating": "Translating…"
   },
   "panel": {
     "tag": {
@@ -110,6 +111,9 @@
     "aborted_saved": {
       "title": "Cancelled, not transcribed",
       "description": "Recording saved to history"
+    },
+    "silent_recording": {
+      "title": "No speech detected"
     },
     "realtime_degraded": {
       "title": "Realtime ASR glitch",

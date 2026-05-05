@@ -80,11 +80,16 @@ export interface GeneralSettings {
   // 翻译听写的目标语言。无论系统语言是什么，默认 "en"——zh 用户翻译需求多为译成英文，
   // 非中文用户主流也是英文输出；用户可在「通用」设置里改。
   translateTargetLang: TranslateTargetLang;
+  // 翻译输出形态。target_only = 只输出译文（单次调用，最快）；bilingual = 原文 + 空行 + 译文
+  // （两次模型调用：先 refine 拿原文清洗版，再用同一个 refine prompt + <translate-to> 包裹译出）。
+  translateOutputMode: TranslateOutputMode;
 }
 
 // 翻译目标语言：稳定 ISO code，与 dictation_lang 同字面值集，但不含 follow_interface
 // （翻译要求一个明确的目标语言，"跟随界面"会让中文用户的中文转写还是中文）。
 export type TranslateTargetLang = "en" | "zh" | "zh-TW" | "ja" | "ko" | "fr" | "de" | "es";
+
+export type TranslateOutputMode = "target_only" | "bilingual";
 
 export type AiRefineMode = "saas" | "custom";
 export type AiPromptLang = AiPromptLangFromDefaults;
@@ -193,6 +198,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   asrSegmentMode: "UTTERANCE",
   historyRetention: "forever",
   translateTargetLang: "en",
+  translateOutputMode: "target_only",
 };
 
 const DEFAULT_AI_REFINE: AiRefineSettings = {

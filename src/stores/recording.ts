@@ -22,6 +22,7 @@ import {
   startRecordingToFile,
   stopRecordingAndSave,
   cancelRecording,
+  deleteRecordingFile,
   type RecordingResult,
 } from "@/lib/audio";
 import {
@@ -44,6 +45,7 @@ export type RecordingState =
   | "recording"
   | "transcribing"
   | "injecting"
+  | "translating"
   | "error";
 
 interface HotkeyEvent {
@@ -163,6 +165,8 @@ const startMic = async (): Promise<boolean> => {
 };
 const stopMic = () => {
   if (!IS_MAIN_WINDOW) return;
+  const stack = new Error().stack?.split("\n").slice(2, 6).join(" | ");
+  console.info(`[recording] stopMic called, caller=${stack}`);
   void stopAudioLevel();
 };
 
@@ -436,20 +440,38 @@ const humanizeSttError = (raw: unknown): string => {
 // 下面几个带副作用的 recording helper 仅主窗口执行——overlay 也会跑状态机来
 // 驱动自身 UI，但 Rust 侧 recording_slot / stt session 都是进程全局单例，只允许
 // 一方写入。
-// Rust stt_start / 文件转写 401 后返回的稳定错误码。识别它就直接走"会话过期"
-// 路径——cancel 当前录音 + 弹登录框，不再用兜底 toast 静默 fallback 到本地录音。
-const isAuthError = (msg: string) =>
+//
+// auth 错误判定收敛到 Rust 侧返回的稳定串：transcribe / stt 用 `unauthorized`、
+// `not authenticated`，ai_refine SaaS 路径用 `saas_unauthorized:`。custom 模式
+// 由调用方按 `aiSettings.mode === "custom"` 路由，不进 auth-lost 流程——子串
+// grep "401" 会把 BYOK 自己的 provider 401 误判成 OpenLoaf 登录过期，把用户的
+// 录音 + history 一起丢掉。
+const ERR_PREFIX_SAAS_AUTH = "saas_unauthorized";
+
+const isSaasAuthError = (msg: string) =>
   msg === "unauthorized" ||
   msg === "not authenticated" ||
-  msg.includes("not authenticated") ||
-  msg.includes("unauthorized") ||
-  msg.includes("401");
+  msg.startsWith(`${ERR_PREFIX_SAAS_AUTH}:`) ||
+  msg.startsWith(`${ERR_PREFIX_SAAS_AUTH} `) ||
+  msg.startsWith("unauthorized:") ||
+  msg.startsWith("not authenticated:");
 
-// 401 / 未登录时的统一兜底：丢弃本次录音、回到 idle，并把用户直接推到登录入口。
-// 不留"仅本地录音"的兜底——用户没登录就不该让录音继续偷偷消耗麦克风。
-const handleAuthLost = () => {
+// SaaS 登录已过期：弹登录框，但**不丢录音、不切 idle**。让 finalize 主流程自己
+// 把已经拿到的 raw text / rec 文件写进 history（status=failed 也行），用户至少
+// 能从历史里复制 / 重试。
+// 仅适用于 finalize 阶段（录音已结束、转写或 refine 才发现 401）；录音还没起来
+// 的场景见 `discardAndOpenLogin`。
+const openLoginAfterSaasAuthLost = () => {
   if (!IS_MAIN_WINDOW) return;
-  console.warn("[stt] auth lost (401) → cancelling recording + opening login");
+  console.warn("[stt] saas auth lost (401) → opening login (recording/history preserved)");
+  useUIStore.getState().openLogin();
+};
+
+// 录音都没起来就 401（stt_start 阶段）：内存 PCM 还没攒、history 也没东西可写，
+// 直接清场 + 弹登录。
+const discardAndOpenLogin = () => {
+  if (!IS_MAIN_WINDOW) return;
+  console.warn("[stt] auth lost (401) before recording → discarding session + opening login");
   discardRecording();
   stopMic();
   useRecordingStore.setState({
@@ -459,7 +481,6 @@ const handleAuthLost = () => {
     recordingId: null,
     liveTranscript: "",
   });
-  // openLogin 会拉回主窗口 + 弹 LoginDialog；不在这里再叠 toast 干扰。
   useUIStore.getState().openLogin();
 };
 
@@ -495,8 +516,8 @@ const startRecordingSession = (id: string) => {
         lang: currentDictationLang(),
       }).catch((e) => {
         const raw = String(e ?? "");
-        if (isAuthError(raw)) {
-          handleAuthLost();
+        if (isSaasAuthError(raw)) {
+          discardAndOpenLogin();
           return;
         }
         console.warn("[stt] start failed → aborting recording:", e);
@@ -524,6 +545,8 @@ const transcriptPlaceholder = () => i18n.t("overlay:transcript.placeholder");
 type FinalizeOutcome = {
   rec: RecordingResult | null;
   text: string; // 最终转写文字，空串表示失败 / 超时
+  /** 用户激活了录音但全程没说话（落盘前 VAD 判定）。调用方据此走 idle 而非 error，并不写历史。 */
+  silent?: boolean;
 };
 
 /**
@@ -535,7 +558,23 @@ type FinalizeOutcome = {
 const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   if (!IS_MAIN_WINDOW) return { rec: null, text: "" };
   const segmentModeAtStop = getEffectiveSegmentMode();
+  console.info(`[recording] finalizeAndWriteHistory entering, mode=${segmentModeAtStop}`);
   const recSettled = await Promise.allSettled([stopRecordingAndSave()]).then((r) => r[0]);
+
+  // 离线 VAD 判定整段无人声：录音文件未落盘（audio_path 空串）、跳过 ASR / 历史 / 注入，
+  // 走 silent 分支让调用方直接回 idle 并 toast 提示。避免"激活后没说话仍上传半小时静音"。
+  if (recSettled.status === "fulfilled" && recSettled.value.voiced === false) {
+    const recv = recSettled.value;
+    console.info(
+      `[recording] silent recording (no voice) raw=${recv.raw_duration_ms}ms → skip stt + history`,
+    );
+    void cancelSttSession();
+    resetIncrementalInject();
+    notifyOverlay("warning", i18n.t("overlay:toast.silent_recording.title"), {
+      durationMs: 3000,
+    });
+    return { rec: null, text: "", silent: true };
+  }
 
   // UTTERANCE：主路径直接走文件转写——录音过程压根没开 WS，没有 finalize 可调。
   // 与原"WS 握手没到 → degrade"分支语义合并；保留 realtimeDegradedToFile 仅给
@@ -602,15 +641,18 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           );
         } catch (e) {
           const raw = String(e ?? "");
-          if (isAuthError(raw)) {
-            handleAuthLost();
-            return { rec, text: "" };
+          if (isSaasAuthError(raw)) {
+            // SaaS 转写过期：弹登录但保留录音 + 让 finalize 把 history 标 failed
+            // 写下去，用户能在历史里看到这次失败 + 录音文件。不再切 idle。
+            openLoginAfterSaasAuthLost();
+            text = "";
+          } else {
+            console.warn("[stt] file transcribe failed:", e);
+            notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
+              description: humanizeSttError(e),
+            });
+            text = "";
           }
-          console.warn("[stt] file transcribe failed:", e);
-          notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
-            description: humanizeSttError(e),
-          });
-          text = "";
         }
       }
     } else {
@@ -687,12 +729,20 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     const lang = resolveLang(generalSettings.interfaceLang);
     const targetLang = generalSettings.translateTargetLang;
     const targetLangName = TRANSLATE_LANG_NAMES[targetLang] ?? targetLang;
-    const systemPrompt = translateMode
+    // 翻译走 pipeline：phase 1 用 refine prompt 清洗（处理"嗯/啊/呃"和撤回信号），
+    // phase 2 用独立 translation prompt 翻译 phase 1 输出。两个 prompt 各自缓存。
+    const refineSystemPrompt = getEffectiveAiSystemPrompt(
+      aiSettings.customSystemPrompt,
+      lang,
+    );
+    const translationSystemPrompt = translateMode
       ? `${getEffectiveAiTranslationSystemPrompt(
           aiSettings.customTranslationSystemPrompt,
           lang,
         )}\n\nTarget language: ${targetLangName}`
-      : getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
+      : null;
+    const bilingual =
+      translateMode && generalSettings.translateOutputMode === "bilingual";
     const HISTORY_TURNS = 5;
     const requestTimeMs = Date.now();
     const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
@@ -739,33 +789,76 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       if (aiSettings.mode === "custom" && !activeProvider) {
         throw new Error("no_active_custom_provider");
       }
+      const customParams = {
+        customBaseUrl: activeProvider?.baseUrl,
+        customModel: activeProvider?.model,
+        customKeyringId: activeProvider
+          ? `ai_provider_${activeProvider.id}`
+          : undefined,
+      };
+      const onChunk = (chunk: string) => {
+        streamedSoFar += chunk;
+        if (
+          IS_MAIN_WINDOW &&
+          useRecordingStore.getState().state === "transcribing"
+        ) {
+          useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
+        }
+        injectIncremental(streamedSoFar);
+      };
+      // phase 1 = refine：处理填充词、撤回信号、长段分段。
+      // - non-translate / bilingual：流式注入（用户实时看到清洗后的原文）
+      // - target_only：静默累计 token（pill 留在"思考中"），等 phase 2 才注入译文
+      const noopChunk = (_chunk: string) => {};
+      const phase1OnChunk =
+        translateMode && !bilingual ? noopChunk : onChunk;
       const r = await refineTextViaChatStream(
         {
           mode: aiSettings.mode,
-          systemPrompt,
+          systemPrompt: refineSystemPrompt,
           userText: text,
           hotwords: hotwords.length > 0 ? hotwords : undefined,
           historyEntries,
           requestTime,
-          customBaseUrl: activeProvider?.baseUrl,
-          customModel: activeProvider?.model,
-          customKeyringId: activeProvider
-            ? `ai_provider_${activeProvider.id}`
-            : undefined,
+          ...customParams,
           taskId: currentSttSessionId ?? undefined,
         },
-        (chunk) => {
-          streamedSoFar += chunk;
-          if (
-            IS_MAIN_WINDOW &&
-            useRecordingStore.getState().state === "transcribing"
-          ) {
-            useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
-          }
-          injectIncremental(streamedSoFar);
-        },
+        phase1OnChunk,
       );
-      refinedText = r.refinedText;
+      const refinedSrc = r.refinedText;
+      // phase 2 = translate：用独立 translation prompt 翻译 phase 1 的清洗版。
+      // bilingual 在原文与译文之间注入空行；target_only 跳过分隔（streamedSoFar 仍是 ""）。
+      if (translateMode) {
+        // phase 2 期间 pill 显示"翻译中"。onChunk 仅在 state==="transcribing" 时切到
+        // injecting，所以这里手动切到 translating 后整个 phase 2 都保持 translating。
+        if (IS_MAIN_WINDOW) {
+          useRecordingStore.setState({
+            state: "translating",
+            pillEarlyHide: false,
+          });
+        }
+        if (bilingual) {
+          streamedSoFar += "\n\n";
+          injectIncremental(streamedSoFar);
+        }
+        const r2 = await refineTextViaChatStream(
+          {
+            mode: aiSettings.mode,
+            systemPrompt: translationSystemPrompt!,
+            userText: refinedSrc,
+            hotwords: hotwords.length > 0 ? hotwords : undefined,
+            requestTime,
+            ...customParams,
+            taskId: currentSttSessionId ?? undefined,
+          },
+          onChunk,
+        );
+        refinedText = bilingual
+          ? `${refinedSrc}\n\n${r2.refinedText}`
+          : r2.refinedText;
+      } else {
+        refinedText = refinedSrc;
+      }
       console.info(
         `[ai-refine] stream done refinedLen=${refinedText.length} elapsedMs=${Math.round(performance.now() - refineStart)}`,
       );
@@ -789,15 +882,11 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       }
     } catch (e) {
       const raw = String(e ?? "");
-      if (isAuthError(raw)) {
+      // 优先按 mode 路由：custom 401 是用户自己的 provider key 错，绝不能弹
+      // OpenLoaf 登录框；saas 401 才是真过期。
+      if (aiSettings.mode === "custom") {
         console.warn(
-          `[refine] auth lost after ${Math.round(performance.now() - refineStart)}ms: ${raw}`,
-        );
-        handleAuthLost();
-      } else {
-        console.warn(
-          `[refine] stream failed after ${Math.round(performance.now() - refineStart)}ms, falling back to raw transcript:`,
-          e,
+          `[refine] custom failed after ${Math.round(performance.now() - refineStart)}ms: ${raw}`,
         );
         const handled = await handleAiRefineCustomFailure(e);
         if (!handled) {
@@ -807,11 +896,32 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
             { description: humanizeSttError(e) },
           );
         }
+      } else if (isSaasAuthError(raw)) {
+        console.warn(
+          `[refine] saas auth lost after ${Math.round(performance.now() - refineStart)}ms: ${raw}`,
+        );
+        // 弹登录，但**不丢录音、不切 idle**：raw text 已拿到，外面会继续走
+        // 末尾兜底 paste + history.add（status=success / refined_text=null）。
+        openLoginAfterSaasAuthLost();
+      } else {
+        console.warn(
+          `[refine] stream failed after ${Math.round(performance.now() - refineStart)}ms, falling back to raw transcript:`,
+          e,
+        );
+        notifyOverlay(
+          "warning",
+          i18n.t("overlay:toast.transcribe_failed.title"),
+          { description: humanizeSttError(e) },
+        );
       }
     }
-    // refine 一个 chunk 都没到就抛错（network / auth / 0 token） →
-    // 仍停留在 transcribing。让"输出中"在末尾兜底 paste 时显示，与正常路径一致。
-    if (IS_MAIN_WINDOW && useRecordingStore.getState().state === "transcribing") {
+    // refine / translate 一个 chunk 都没到就抛错（network / auth / 0 token） →
+    // 仍停留在 transcribing 或 translating。切到 injecting 让"输出中"在末尾兜底 paste 时显示。
+    if (
+      IS_MAIN_WINDOW &&
+      (useRecordingStore.getState().state === "transcribing" ||
+        useRecordingStore.getState().state === "translating")
+    ) {
       useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
     }
     void streamedSoFar;
@@ -845,6 +955,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       ai_model: aiModelLabel,
       segment_mode: segmentMode,
       provider_kind: providerKind,
+      target_lang: translateMode
+        ? useSettingsStore.getState().general.translateTargetLang
+        : null,
     });
   }
 
@@ -943,7 +1056,7 @@ let injectChain: Promise<void> = Promise.resolve();
 // 用户光标 / 写用户剪贴板 / 写历史"的副作用都按这条门控就地短路。
 const isInjectFlowActive = () => {
   const s = useRecordingStore.getState().state;
-  return s === "transcribing" || s === "injecting";
+  return s === "transcribing" || s === "injecting" || s === "translating";
 };
 
 const flushPendingInject = () => {
@@ -983,6 +1096,8 @@ const injectIncremental = (fullText: string) => {
 
 const discardRecording = () => {
   if (!IS_MAIN_WINDOW) return;
+  const stack = new Error().stack?.split("\n").slice(2, 6).join(" | ");
+  console.info(`[recording] discardRecording called, caller=${stack}`);
   void cancelRecording();
   void cancelSttSession();
   resetIncrementalInject();
@@ -1020,6 +1135,8 @@ const preflightMic = async (): Promise<PreflightResult> => {
 // 异步：包含一次 stopRecordingAndSave + history.add，平均 50~100ms，不阻塞 FSM 切回 idle。
 const abortAndSaveHistory = async (): Promise<void> => {
   if (!IS_MAIN_WINDOW) return;
+  const stack = new Error().stack?.split("\n").slice(2, 6).join(" | ");
+  console.info(`[recording] abortAndSaveHistory called, caller=${stack}`);
   console.log("[recording] abort: saving audio without transcription");
   // 在 cancel/stopMic 把 activeId 清成 null 之前先抓快照
   const wasTranslate = useRecordingStore.getState().activeId === "translate";
@@ -1032,6 +1149,20 @@ const abortAndSaveHistory = async (): Promise<void> => {
   } catch (e) {
     // 没有活跃 session（例：用户连按导致重复 abort）→ 静默；其他错误也只 log 不打扰
     console.warn("[recording] abort: stopRecordingAndSave failed:", e);
+  }
+  // 整段无人声 → Rust 已跳过落盘，前端再丢弃一切。
+  if (rec && !rec.voiced) {
+    return;
+  }
+  // < 1s 的取消视作误触：不写历史，并把录音文件清掉，避免列表里堆一堆短噪声条目。
+  const ABORT_MIN_KEEP_MS = 1000;
+  if (rec && rec.duration_ms < ABORT_MIN_KEEP_MS) {
+    if (rec.audio_path) {
+      void deleteRecordingFile(rec.audio_path).catch((e: unknown) =>
+        console.warn("[recording] abort: discard short clip file failed:", e),
+      );
+    }
+    return;
   }
   if (rec) {
     const segmentMode = getEffectiveSegmentMode();
@@ -1377,6 +1508,16 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             stopMic();
             set({ state: "transcribing", audioLevels: emptyLevels() });
             void finalizeAndWriteHistory().then((outcome) => {
+              // silent：用户没说话——直接回 idle，已在 finalize 内 toast 提示，不进 error。
+              if (outcome.silent) {
+                set({
+                  state: "idle",
+                  activeId: null,
+                  recordingId: null,
+                  liveTranscript: "",
+                });
+                return;
+              }
               // 转写没拿到任何文字（0 段 Final / 超时 / 异常）：进入 error 态，
               // ERROR_AUTO_DISMISS_MS 后自动回 idle；用户也可以主动按激活快捷键 /
               // ESC 立刻关掉提示开始下一次录音。
@@ -2173,10 +2314,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           }
         } catch (e) {
           const raw = String(e ?? "");
-          if (isAuthError(raw)) {
-            handleAuthLost();
-          } else {
-            console.warn("[debug] refine failed:", e);
+          if (aiSettings.mode === "custom") {
+            console.warn("[debug] refine custom failed:", e);
             const handled = await handleAiRefineCustomFailure(e);
             if (!handled) {
               notifyOverlay(
@@ -2185,6 +2324,15 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                 { description: humanizeSttError(e) },
               );
             }
+          } else if (isSaasAuthError(raw)) {
+            openLoginAfterSaasAuthLost();
+          } else {
+            console.warn("[debug] refine failed:", e);
+            notifyOverlay(
+              "warning",
+              i18n.t("overlay:toast.transcribe_failed.title"),
+              { description: humanizeSttError(e) },
+            );
           }
         }
         // refine 0 chunk 抛错路径兜底：留在 transcribing 时补切 injecting，
@@ -2316,6 +2464,15 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       stopMic();
       set({ state: "transcribing", audioLevels: emptyLevels() });
       void finalizeAndWriteHistory().then((outcome) => {
+        if (outcome.silent) {
+          set({
+            state: "idle",
+            activeId: null,
+            recordingId: null,
+            liveTranscript: "",
+          });
+          return;
+        }
         if (!outcome.text) {
           set({
             state: "error",
