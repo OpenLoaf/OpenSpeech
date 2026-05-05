@@ -4,6 +4,9 @@
     "confirm": "Confirm",
     "close_result": "Close result"
   },
+  "translate": {
+    "target": "Translate target: {{lang}}"
+  },
   "status": {
     "error_fallback": "Error",
     "transcribing": "Thinking…",

@@ -277,23 +277,22 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         body["variant"] = Value::String(vid.clone());
     }
 
-    #[cfg(debug_assertions)]
-    {
+    log::info!(
+        "[ai_refine] dispatch mode={} url={} model={}{} task_id={:?}",
+        input.mode,
+        resolved.full_url,
+        resolved.model,
+        resolved
+            .variant_id
+            .as_ref()
+            .map(|v| format!(" variant={v}"))
+            .unwrap_or_default(),
+        task_id,
+    );
+    if log::log_enabled!(log::Level::Debug) {
         let pretty = serde_json::to_string_pretty(&body)
             .unwrap_or_else(|_| body.to_string());
-        log::info!(
-            "[ai_refine] dispatch mode={} url={} model={}{} task_id={:?}\n[ai_refine] request body:\n{}",
-            input.mode,
-            resolved.full_url,
-            resolved.model,
-            resolved
-                .variant_id
-                .as_ref()
-                .map(|v| format!(" variant={v}"))
-                .unwrap_or_default(),
-            task_id,
-            pretty,
-        );
+        log::debug!("[ai_refine] request body:\n{}", pretty);
     }
 
     let http = match reqwest::Client::builder().build() {

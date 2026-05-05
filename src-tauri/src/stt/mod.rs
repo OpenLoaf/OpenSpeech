@@ -311,6 +311,9 @@ fn stt_start_impl<R: Runtime>(
                 ..Default::default()
             };
 
+            log::debug!(
+                "[stt] saas realtime params variant=OL-TL-RT-002 lang={language:?} server_vad={use_server_vad}"
+            );
             let sess = client
                 .tools_v4()
                 .realtime_asr_llm_ol_tl_rt_002(&params)
@@ -347,6 +350,9 @@ fn stt_start_impl<R: Runtime>(
             // 落 `16k_zh`（腾讯文档枚举里最保守的合法值）——日语/韩语等非中英用户应
             // 在前端选具体 language。
             let engine_model_type = engine_for_tencent(language);
+            log::debug!(
+                "[stt] tencent realtime params name={name} app_id={app_id} region={region} engine={engine_model_type} sample_rate=16000 lang={language:?}"
+            );
             let sess =
                 TencentRealtimeSession::connect(ConnectParams {
                     app_id: &app_id,
@@ -370,6 +376,9 @@ fn stt_start_impl<R: Runtime>(
         }
         DictationBackend::AliyunRealtime { api_key, name } => {
             let lang_str = aliyun_lang_code(language);
+            log::debug!(
+                "[stt] aliyun realtime params name={name} language={lang_str} sample_rate=16000 server_vad={use_server_vad}"
+            );
             let sess = AliyunRealtimeSession::connect(AliyunConnectParams {
                 api_key: &api_key,
                 language: lang_str,

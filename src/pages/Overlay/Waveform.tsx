@@ -62,11 +62,16 @@ export function resetWaveform() {
 
 // 始终按 ring buffer 当前值绘制——idle 时 buffer 已被 resetWaveform 清零，柱子
 // 自动塌到最低高度。transform 走 GPU 合成层，避免 layout/paint。
-export const Waveform = memo(function Waveform() {
+// barCount 受调用方控制：翻译态下 pill 多塞了一个 LANG 徽章占走宽度，少画几根
+// 柱子才能让 justify-between 的间距与原来一致；最大不超过 buffer 容量 BAR_COUNT。
+export const Waveform = memo(function Waveform({
+  barCount = BAR_COUNT,
+}: { barCount?: number }) {
   const levels = useSyncExternalStore(waveStore.subscribe, waveStore.getSnapshot);
+  const n = Math.max(1, Math.min(BAR_COUNT, barCount));
   return (
     <div className="flex h-full w-full items-center justify-between">
-      {Array.from({ length: BAR_COUNT }, (_, i) => {
+      {Array.from({ length: n }, (_, i) => {
         const lvl = Math.max(0, levels[i] ?? 0);
         const boosted = lvl > 0 ? Math.min(1, Math.pow(lvl, CURVE_GAMMA)) : 0;
         const ratio =

@@ -30,6 +30,8 @@
   },
   "general": {
     "interface_lang": "介面語言",
+    "translate_target_lang": "翻譯目標語言",
+    "translate_target_lang_hint": "翻譯聽寫快速鍵命中後，轉寫文字會被翻譯成此語言再注入到目前焦點。",
     "input_device": "輸入裝置",
     "input_level": "輸入音量",
     "input_level_hint_listening": "即時音量 · 正在監聽：{{name}}",
@@ -134,6 +136,16 @@
     "include_history": "把最近 5 條歷史一同送出",
     "include_history_hint": "把最近的 transcript 作為參考上下文，協助模型沿用一致的語氣與術語。",
     "minutes_ago": "分鐘前"
+  },
+  "translate_target_lang": {
+    "en": "English",
+    "zh": "简体中文",
+    "zh-TW": "繁體中文",
+    "ja": "日本語",
+    "ko": "한국어",
+    "fr": "Français",
+    "de": "Deutsch",
+    "es": "Español"
   },
   "dictation_lang": {
     "label": "聽寫語言",

@@ -9,7 +9,9 @@ import type { BindingId, HotkeyBinding } from "@/lib/hotkey";
 import {
   useSettingsStore,
   getEffectiveAiSystemPrompt,
+  getEffectiveAiTranslationSystemPrompt,
   type AsrSegmentMode,
+  type TranslateTargetLang,
 } from "@/stores/settings";
 import { useHistoryStore, type AsrSource } from "@/stores/history";
 import { useAuthStore } from "@/stores/auth";
@@ -114,6 +116,17 @@ const currentDictationLang = (): string => {
 const getEffectiveSegmentMode = (): AsrSegmentMode =>
   useRecordingStore.getState().segmentModeOverride ??
   useSettingsStore.getState().general.asrSegmentMode;
+
+const TRANSLATE_LANG_NAMES: Record<TranslateTargetLang, string> = {
+  en: "English",
+  zh: "Simplified Chinese (简体中文)",
+  "zh-TW": "Traditional Chinese (繁體中文)",
+  ja: "Japanese (日本語)",
+  ko: "Korean (한국어)",
+  fr: "French (Français)",
+  de: "German (Deutsch)",
+  es: "Spanish (Español)",
+};
 
 // REALTIME 下 aiRefine 强制短路；UTTERANCE 下看用户开关。
 const isAiRefineActive = (): boolean => {
@@ -628,7 +641,10 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   //   （"思考中"）。等 onDelta 拿到第一个 chunk 再切；catch 路径在 try 块
   //   出来时兜底切，保证非正常路径也能进入"输出中"。
   const segmentMode = getEffectiveSegmentMode();
-  const refineActive = isAiRefineActive();
+  // 翻译听写：activeId === "translate" 时强制走 chat stream 走翻译 prompt，
+  // 把 transcript 译成目标语言后再注入；忽略 aiRefine.enabled。
+  const translateMode = useRecordingStore.getState().activeId === "translate";
+  const refineActive = translateMode || isAiRefineActive();
   if (
     text &&
     IS_MAIN_WINDOW &&
@@ -666,8 +682,16 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     let streamedSoFar = "";
     const refineStart = performance.now();
     const aiSettings = useSettingsStore.getState().aiRefine;
-    const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
-    const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
+    const generalSettings = useSettingsStore.getState().general;
+    const lang = resolveLang(generalSettings.interfaceLang);
+    const targetLang = generalSettings.translateTargetLang;
+    const targetLangName = TRANSLATE_LANG_NAMES[targetLang] ?? targetLang;
+    const systemPrompt = translateMode
+      ? `${getEffectiveAiTranslationSystemPrompt(
+          aiSettings.customTranslationSystemPrompt,
+          lang,
+        )}\n\nTarget language: ${targetLangName}`
+      : getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
     const HISTORY_TURNS = 5;
     const requestTimeMs = Date.now();
     const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
@@ -806,7 +830,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       resolvedProviderKindForCurrentSession ??
       (segmentMode === "REALTIME" ? "saas-realtime" : "saas-file");
     await useHistoryStore.getState().add({
-      type: "dictation",
+      type: translateMode ? "translate" : "dictation",
       text: text || transcriptPlaceholder(),
       refined_text: refinedText,
       status: text ? "success" : "failed",
@@ -965,6 +989,8 @@ const preflightMic = async (): Promise<PreflightResult> => {
 const abortAndSaveHistory = async (): Promise<void> => {
   if (!IS_MAIN_WINDOW) return;
   console.log("[recording] abort: saving audio without transcription");
+  // 在 cancel/stopMic 把 activeId 清成 null 之前先抓快照
+  const wasTranslate = useRecordingStore.getState().activeId === "translate";
   // stt 直接 cancel，不等结果
   void cancelSttSession();
   resetIncrementalInject();
@@ -982,7 +1008,7 @@ const abortAndSaveHistory = async (): Promise<void> => {
       (segmentMode === "REALTIME" ? "saas-realtime" : "saas-file");
     try {
       await useHistoryStore.getState().add({
-        type: "dictation",
+        type: wasTranslate ? "translate" : "dictation",
         text: i18n.t("overlay:transcript.aborted_placeholder"),
         status: "cancelled",
         duration_ms: rec.duration_ms,
@@ -1607,7 +1633,11 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         // 实现"边说边出字"。MANUAL 只会出一段 Final 且与 finalize 几乎同时到达，
         // 走原 finalize 的整段粘贴更省事，这里跳过。
         const mode = getEffectiveSegmentMode();
-        if (mode === "REALTIME") {
+        // 翻译模式：不能边录边敲原文——否则等翻译 stream 来了再敲译文，焦点上
+        // 会出现"中文 + 英文"拼接。等 finalize 拿到 transcript 走翻译 prompt
+        // 后再把译文整段流到光标。
+        const translateMode = get().activeId === "translate";
+        if (mode === "REALTIME" && !translateMode) {
           injectIncremental(text);
         }
       });

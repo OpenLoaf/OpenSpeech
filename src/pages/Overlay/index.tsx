@@ -48,6 +48,7 @@ export default function OverlayPage() {
     onFsm: (p) =>
       applyFsm(
         p.state,
+        p.activeId,
         p.errorMessage,
         p.liveTranscript,
         p.pillEarlyHide ?? false,
@@ -164,6 +165,27 @@ export default function OverlayPage() {
   const isTranscribing = state.main === "transcribing";
   const isInjecting = state.main === "injecting";
   const isError = state.main === "error";
+  const isTranslate = state.activeId === "translate";
+  const translateTargetLang = useSettingsStore(
+    (s) => s.general.translateTargetLang,
+  );
+  const translateLangShort: Record<string, string> = {
+    en: "EN",
+    zh: "中",
+    "zh-TW": "繁",
+    ja: "日",
+    ko: "한",
+    fr: "FR",
+    de: "DE",
+    es: "ES",
+  };
+  // 徽章仅在"录音中/准备中"挂着——进入 transcribing/injecting/error 后中心
+  // 是进度文案 / 错误提示，徽章会挤占宽度让 truncate 截掉首字（"正在思考中…"
+  // 变成 "E在思考中…"）。隐藏后中心区拿回完整宽度，翻译已经隐含于流程。
+  const showTranslateBadge = isTranslate && (isRecording || isPreparing);
+  const translateBadge = showTranslateBadge
+    ? translateLangShort[translateTargetLang] ?? translateTargetLang.toUpperCase()
+    : null;
   const canFinalize = isRecording || isPreparing;
   const canCancel = isRecording || isPreparing || isError;
 
@@ -295,6 +317,16 @@ export default function OverlayPage() {
           <X className="size-3" />
         </button>
 
+        {translateBadge ? (
+          <span
+            className="ml-1 inline-flex h-5 shrink-0 items-center gap-1 border border-te-accent bg-te-accent/10 px-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent"
+            aria-label={t("overlay:translate.target", { lang: translateBadge })}
+          >
+            <span className="text-[8px]">→</span>
+            {translateBadge}
+          </span>
+        ) : null}
+
         <div className="flex min-w-0 flex-1 items-center justify-center">
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
@@ -329,7 +361,9 @@ export default function OverlayPage() {
                   {state.errorMessage ?? "ERROR"}
                 </span>
               )}
-              {centerKey === "wave" && <Waveform />}
+              {centerKey === "wave" && (
+                <Waveform barCount={isTranslate ? 16 : 20} />
+              )}
             </motion.div>
           </AnimatePresence>
         </div>

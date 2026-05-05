@@ -1,6 +1,7 @@
 {
   "binding": {
     "dictate_ptt": "听写",
+    "translate": "翻译听写",
     "show_main_window": "打开主窗口",
     "open_toolbox": "打开 AI 工具"
   },

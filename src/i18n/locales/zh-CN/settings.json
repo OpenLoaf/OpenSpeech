@@ -30,6 +30,8 @@
   },
   "general": {
     "interface_lang": "界面语言",
+    "translate_target_lang": "翻译目标语言",
+    "translate_target_lang_hint": "翻译听写快捷键命中后，转写文本会被译成此语言再注入到当前焦点。",
     "input_device": "输入设备",
     "input_level": "输入声音",
     "input_level_hint_listening": "实时电平 · 正在监听：{{name}}",
@@ -134,6 +136,16 @@
     "include_history": "把最近 5 条历史一起发送",
     "include_history_hint": "把最近的 transcript 作为参考上下文，帮助模型沿用一致的语气与术语。",
     "minutes_ago": "分钟前"
+  },
+  "translate_target_lang": {
+    "en": "English",
+    "zh": "简体中文",
+    "zh-TW": "繁體中文",
+    "ja": "日本語",
+    "ko": "한국어",
+    "fr": "Français",
+    "de": "Deutsch",
+    "es": "Español"
   },
   "dictation_lang": {
     "label": "听写语种",

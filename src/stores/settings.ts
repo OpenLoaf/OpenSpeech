@@ -77,7 +77,14 @@ export interface GeneralSettings {
   asrSegmentMode: AsrSegmentMode;
   // 历史记录保留时长。'off' 不写入 DB；其它按天清理。
   historyRetention: HistoryRetention;
+  // 翻译听写的目标语言。无论系统语言是什么，默认 "en"——zh 用户翻译需求多为译成英文，
+  // 非中文用户主流也是英文输出；用户可在「通用」设置里改。
+  translateTargetLang: TranslateTargetLang;
 }
+
+// 翻译目标语言：稳定 ISO code，与 dictation_lang 同字面值集，但不含 follow_interface
+// （翻译要求一个明确的目标语言，"跟随界面"会让中文用户的中文转写还是中文）。
+export type TranslateTargetLang = "en" | "zh" | "zh-TW" | "ja" | "ko" | "fr" | "de" | "es";
 
 export type AiRefineMode = "saas" | "custom";
 export type AiPromptLang = AiPromptLangFromDefaults;
@@ -179,6 +186,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   // 等需要按句独立 transcript 的无人值守场景。
   asrSegmentMode: "UTTERANCE",
   historyRetention: "forever",
+  translateTargetLang: "en",
 };
 
 const DEFAULT_AI_REFINE: AiRefineSettings = {

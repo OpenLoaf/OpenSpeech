@@ -386,6 +386,30 @@ function GeneralTab() {
           ]}
         />
       </Row>
+      <Row
+        label={t("general.translate_target_lang")}
+        hint={t("general.translate_target_lang_hint")}
+      >
+        <Select
+          value={general.translateTargetLang}
+          onChange={(v) =>
+            void setGeneral(
+              "translateTargetLang",
+              v as typeof general.translateTargetLang,
+            )
+          }
+          options={[
+            { value: "en", label: t("translate_target_lang.en") },
+            { value: "zh", label: t("translate_target_lang.zh") },
+            { value: "zh-TW", label: t("translate_target_lang.zh-TW") },
+            { value: "ja", label: t("translate_target_lang.ja") },
+            { value: "ko", label: t("translate_target_lang.ko") },
+            { value: "fr", label: t("translate_target_lang.fr") },
+            { value: "de", label: t("translate_target_lang.de") },
+            { value: "es", label: t("translate_target_lang.es") },
+          ]}
+        />
+      </Row>
       {/* Behavior */}
       <SectionTitle>{t("section.behavior")}</SectionTitle>
       <Row label={t("general.launch_startup")}>
@@ -657,14 +681,14 @@ function DictationTab() {
           onChange={(v) => void setGeneral("asrSegmentMode", v)}
           options={[
             {
-              value: "REALTIME",
-              label: t("asr_segment.realtime_label"),
-              hint: t("asr_segment.realtime_hint"),
-            },
-            {
               value: "UTTERANCE",
               label: t("asr_segment.utterance_label"),
               hint: t("asr_segment.utterance_hint"),
+            },
+            {
+              value: "REALTIME",
+              label: t("asr_segment.realtime_label"),
+              hint: t("asr_segment.realtime_hint"),
             },
           ]}
         />

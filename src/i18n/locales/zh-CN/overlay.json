@@ -4,6 +4,9 @@
     "confirm": "确定",
     "close_result": "关闭结果"
   },
+  "translate": {
+    "target": "翻译目标语言：{{lang}}"
+  },
   "status": {
     "error_fallback": "错误",
     "transcribing": "正在思考中…",

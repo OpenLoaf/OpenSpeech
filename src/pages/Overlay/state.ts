@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef } from "react";
+import type { BindingId } from "@/lib/hotkey";
 import type { RecordingState } from "@/stores/recording";
 
 // 悬浮条 UI 状态机：单一 reducer + 集中 timer，所有副作用集中在 useOverlayMachine 内。
@@ -40,6 +41,8 @@ export interface DebugState {
 export interface OverlayState {
   /** 镜像主窗 RecordingState；overlay 不参与副作用，仅渲染。 */
   main: RecordingState;
+  /** 当前激活的快捷键 binding；翻译听写时为 "translate"，让悬浮条切到翻译标识。 */
+  activeId: BindingId | null;
   errorMessage: string | null;
   liveTranscript: string;
   toast: ToastState | null;
@@ -51,6 +54,7 @@ export interface OverlayState {
 
 const INITIAL: OverlayState = {
   main: "idle",
+  activeId: null,
   errorMessage: null,
   liveTranscript: "",
   toast: null,
@@ -63,6 +67,7 @@ type Action =
   | {
       type: "fsm";
       state: RecordingState;
+      activeId: BindingId | null;
       errorMessage: string | null;
       liveTranscript: string;
       pillEarlyHide: boolean;
@@ -82,6 +87,7 @@ function reduce(s: OverlayState, a: Action): OverlayState {
       return {
         ...s,
         main: a.state,
+        activeId: a.activeId,
         errorMessage: a.errorMessage,
         liveTranscript: a.liveTranscript,
         pillEarlyHide: a.pillEarlyHide,
@@ -112,6 +118,7 @@ export interface OverlayMachine {
   setEscArmed: (armed: boolean) => void;
   applyFsm: (
     state: RecordingState,
+    activeId: BindingId | null,
     errorMessage: string | null,
     liveTranscript: string,
     pillEarlyHide: boolean,
@@ -162,6 +169,7 @@ export function useOverlayMachine(): OverlayMachine {
 
   const applyFsm = (
     s: RecordingState,
+    activeId: BindingId | null,
     errorMessage: string | null,
     liveTranscript: string,
     pillEarlyHide: boolean,
@@ -169,6 +177,7 @@ export function useOverlayMachine(): OverlayMachine {
     dispatch({
       type: "fsm",
       state: s,
+      activeId,
       errorMessage,
       liveTranscript,
       pillEarlyHide,

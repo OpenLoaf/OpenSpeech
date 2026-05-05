@@ -1,6 +1,7 @@
 {
   "binding": {
     "dictate_ptt": "Dictation",
+    "translate": "Translate dictation",
     "show_main_window": "Open main window",
     "open_toolbox": "Open AI Tools"
   },

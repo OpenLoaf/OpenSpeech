@@ -28,10 +28,12 @@ export const MOD_ORDER: readonly HotkeyMod[] = [
   "meta",
 ];
 
-// 听写 PTT + 唤起主窗口 + 跳到 AI 工具页。`dictate_ptt` 名称沿用 v1 数据兼容；
-// 后两个走 combo，只在 pressed 边沿触发一次，避免与录音 FSM 串扰。
+// 听写 PTT + 翻译听写 + 唤起主窗口 + 跳到 AI 工具页。`dictate_ptt` 名称沿用 v1 数据兼容；
+// `translate` 与 dictate_ptt 同走 modifierOnly，按下后启动一次听写并把转写结果走翻译 prompt
+// 替换文本注入；show_main_window / open_toolbox 走 combo，只在 pressed 边沿触发一次。
 export const BINDING_IDS = [
   "dictate_ptt",
+  "translate",
   "show_main_window",
   "open_toolbox",
 ] as const;
@@ -55,6 +57,12 @@ export function getDefaultBindings(
       ? { kind: "modifierOnly", mods: ["fn", "ctrl"], code: "" }
       : { kind: "modifierOnly", mods: ["ctrl", "meta"], code: "" };
 
+  // 翻译：默认 macOS = Fn + Shift；Win/Linux 没 Fn，回退到 Alt + Shift。
+  const translate: HotkeyBinding =
+    platform === "macos"
+      ? { kind: "modifierOnly", mods: ["fn", "shift"], code: "" }
+      : { kind: "modifierOnly", mods: ["alt", "shift"], code: "" };
+
   const showMainWindow: HotkeyBinding = {
     kind: "combo",
     mods: ["ctrl", "alt"],
@@ -69,6 +77,7 @@ export function getDefaultBindings(
 
   return {
     dictate_ptt: ptt,
+    translate,
     show_main_window: showMainWindow,
     open_toolbox: openToolbox,
   };
