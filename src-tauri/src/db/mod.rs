@@ -100,5 +100,13 @@ ALTER TABLE history ADD COLUMN provider_kind TEXT;
 "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "history_add_target_lang",
+            sql: r#"
+ALTER TABLE history ADD COLUMN target_lang TEXT;
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -38,6 +38,12 @@ const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const DEFAULT_MODEL: &str = "qwen3-asr-flash-realtime";
 const DEFAULT_HOST: &str = "dashscope.aliyuncs.com";
 
+/// dev-only WS frame 日志 target；release 因 LevelFilter::Info 自动消失。
+const WS_LOG_TARGET: &str = "openspeech::asr::aliyun_ws";
+
+/// 出站 audio 帧的 JSON 头：worker 据此把 base64 PCM payload 折成 size 显示而不是全文。
+const AUDIO_APPEND_PREFIX: &str = "{\"type\":\"input_audio_buffer.append\"";
+
 /// 给 worker 的出站消息：base64 audio / finish / 主动关闭。
 enum Outbound {
     /// 已序列化的 input_audio_buffer.append text frame。
@@ -147,6 +153,16 @@ impl AliyunRealtimeSession {
                 )?,
             );
         }
+
+        log::info!(
+            target: WS_LOG_TARGET,
+            "[ws-connect] aliyun wss://{host}/api-ws/v1/realtime?model={model} lang={lang} sample_rate={sr} server_vad={vad}",
+            host = DEFAULT_HOST,
+            model = DEFAULT_MODEL,
+            lang = params.language,
+            sr = params.sample_rate,
+            vad = params.use_server_vad,
+        );
 
         let (mut ws, _resp) = tungstenite::connect(request).map_err(|e| {
             // 401 / 403 / 429 / 5xx 都被 tungstenite 包成 Http(response) 或 ConnectionClosed。
@@ -261,6 +277,15 @@ fn run_worker(
         loop {
             match outbox_rx.try_recv() {
                 Ok(Outbound::AppendText(s)) => {
+                    if s.starts_with(AUDIO_APPEND_PREFIX) {
+                        log::debug!(
+                            target: WS_LOG_TARGET,
+                            "[ws-out] aliyun audio frame {}B (json)",
+                            s.len(),
+                        );
+                    } else {
+                        log::debug!(target: WS_LOG_TARGET, "[ws-out] aliyun text: {s}");
+                    }
                     if let Err(e) = ws.send(Message::Text(s))
                         && !is_would_block(&e)
                     {
@@ -270,6 +295,7 @@ fn run_worker(
                 }
                 Ok(Outbound::Finish) => {
                     let payload = json!({ "type": "session.finish" }).to_string();
+                    log::debug!(target: WS_LOG_TARGET, "[ws-out] aliyun text: {payload}");
                     if let Err(e) = ws.send(Message::Text(payload))
                         && !is_would_block(&e)
                     {
@@ -278,6 +304,7 @@ fn run_worker(
                     }
                 }
                 Ok(Outbound::Close) => {
+                    log::debug!(target: WS_LOG_TARGET, "[ws-out] aliyun close");
                     let _ = ws.close(None);
                     let _ = ws.flush();
                     should_break = true;
@@ -285,6 +312,10 @@ fn run_worker(
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
+                    log::debug!(
+                        target: WS_LOG_TARGET,
+                        "[ws-out] aliyun close (outbox dropped)",
+                    );
                     let _ = ws.close(None);
                     let _ = ws.flush();
                     should_break = true;
@@ -304,37 +335,50 @@ fn run_worker(
         }
 
         match ws.read() {
-            Ok(Message::Text(s)) => match parse_frame(&s) {
-                Ok(Some(ev)) => {
-                    let terminal = matches!(
-                        ev,
-                        AliyunEvent::EndOfStream | AliyunEvent::Error { .. }
-                    );
-                    if inbox_tx.send(SessionEvent::Frame(ev)).is_err() {
-                        return;
+            Ok(Message::Text(s)) => {
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] aliyun text: {s}");
+                match parse_frame(&s) {
+                    Ok(Some(ev)) => {
+                        let terminal = matches!(
+                            ev,
+                            AliyunEvent::EndOfStream | AliyunEvent::Error { .. }
+                        );
+                        if inbox_tx.send(SessionEvent::Frame(ev)).is_err() {
+                            return;
+                        }
+                        if terminal {
+                            let _ = ws.close(None);
+                            let _ = ws.flush();
+                            return;
+                        }
                     }
-                    if terminal {
-                        let _ = ws.close(None);
-                        let _ = ws.flush();
-                        return;
+                    Ok(None) => {
+                        // 已知会被忽略的事件（session.updated / speech_started 等）—— 不上抛。
+                    }
+                    Err(e) => {
+                        let _ = inbox_tx.send(SessionEvent::DecodeError(e.to_string()));
                     }
                 }
-                Ok(None) => {
-                    // 已知会被忽略的事件（session.updated / speech_started 等）—— 不上抛。
-                }
-                Err(e) => {
-                    let _ = inbox_tx.send(SessionEvent::DecodeError(e.to_string()));
-                }
-            },
-            Ok(Message::Binary(_)) | Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
-            Ok(Message::Close(_)) | Ok(Message::Frame(_)) => return,
+            }
+            Ok(Message::Binary(b)) => {
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] aliyun binary {}B", b.len());
+            }
+            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {
+                log::trace!(target: WS_LOG_TARGET, "[ws-in] aliyun ping/pong");
+            }
+            Ok(Message::Close(_)) | Ok(Message::Frame(_)) => {
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] aliyun close");
+                return;
+            }
             Err(e) if is_would_block(&e) => {
                 thread::sleep(READ_POLL_INTERVAL);
             }
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] aliyun connection closed");
                 return;
             }
             Err(e) => {
+                log::warn!(target: WS_LOG_TARGET, "[ws-err] aliyun {e}");
                 let _ = inbox_tx.send(SessionEvent::Network(e.to_string()));
                 return;
             }
