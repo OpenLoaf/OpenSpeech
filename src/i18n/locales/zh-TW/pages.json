@@ -66,6 +66,8 @@
       "earlier": "更早"
     },
     "empty": "// 暫無記錄 //",
+    "loading_more": "// 載入更多 //",
+    "list_end": "// 已到底 · 共 {{count}} 筆 //",
     "status": {
       "success": "成功",
       "failed": "失敗",
@@ -89,6 +91,7 @@
       "failed_placeholder": "您的轉錄被中斷。但 OpenSpeech 仍可以為您重試。",
       "cancelled_placeholder": "{{duration}} 錄音已取消，未轉寫 · 可重新轉寫",
       "view_refined": "AI 優化",
+      "view_translation": "譯文",
       "view_raw": "原始文字",
       "view_details": "查看詳情"
     },
@@ -178,6 +181,7 @@
     "nav": {
       "home": "首頁",
       "toolbox": "AI工具",
+      "meetings": "會議轉錄",
       "history": "歷史記錄",
       "dictionary": "詞典"
     },
@@ -228,7 +232,13 @@
       "right_empty": "請先在左側給一個輸入。",
       "use_sample": "用範例文字",
       "replaced_hint": "已替換為上一步輸出",
-      "restore_original": "還原原文"
+      "restore_original": "還原原文",
+      "paste": "貼上",
+      "history": "歷史",
+      "clear": "清空",
+      "clipboard_detected": "偵測到剪貼簿內容",
+      "clipboard_translate": "貼上並翻譯",
+      "clipboard_fill_only": "僅貼上"
     },
     "tools": {
       "section_label": "// 02 · 工具",
@@ -266,9 +276,13 @@
         "target_label": "譯為",
         "languages": {
           "en": "英文",
-          "zh": "中文",
+          "zh": "簡體中文",
+          "zh-TW": "繁體中文",
           "ja": "日文",
-          "ko": "韓文"
+          "ko": "韓文",
+          "fr": "法文",
+          "de": "德文",
+          "es": "西班牙文"
         }
       },
       "tts": {
@@ -296,8 +310,45 @@
       "idle": "等待輸入",
       "output_empty": "在上方填入或選擇一段輸入"
     },
+    "output": {
+      "idle_label": "等待執行",
+      "ready": "READY",
+      "meta_chars": "{{count}} 字",
+      "meta_elapsed": "耗時 {{seconds}}s"
+    },
     "footer": {
       "ui_only_notice": "// UI 預覽 — 業務尚未接入"
+    }
+  },
+  "meetings": {
+    "title": "會議轉錄",
+    "subtitle": "長時間錄音 · 自動分人 · 時間軸回看",
+    "idle": {
+      "hint": "點擊開始記錄",
+      "recent": "最近會議",
+      "items": "項"
+    },
+    "live": {
+      "recording": "錄音中",
+      "paused": "已暫停",
+      "pause": "暫停",
+      "resume": "繼續",
+      "stop": "結束",
+      "listening": "正在聆聽..."
+    },
+    "review": {
+      "back": "返回",
+      "speakers": "位說話人",
+      "delete": "刪除",
+      "summary": "紀要",
+      "transcript": "逐字稿",
+      "summary_topic": "會議主題",
+      "summary_speakers": "發言人",
+      "summary_abstract": "會議摘要",
+      "summary_section": "討論要點",
+      "summary_loading": "正在生成紀要…",
+      "search": "搜尋",
+      "edit": "編輯"
     }
   }
 }

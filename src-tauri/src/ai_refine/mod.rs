@@ -326,6 +326,18 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         let raw = format!("HTTP {status}: {txt}");
         let code = classify_status(status.as_u16());
         emit_error(&app, task_id.as_deref(), code, &raw);
+        // SaaS 路径 401：access_token 已过期，主动清场让前端 auth store 切到未登录态。
+        // BYOK custom 路径 401：是用户自己的 provider key 错，与 OpenLoaf 登录无关，不清场。
+        // 错误返回值用稳定串前缀 `unauthorized:`/`saas_unauthorized:`，前端按 mode 路由。
+        if status.as_u16() == 401 {
+            return if input.mode == "saas" {
+                let ol = app.state::<SharedOpenLoaf>();
+                handle_session_expired(&app, &ol);
+                Err(format!("saas_unauthorized: {raw}"))
+            } else {
+                Err(format!("custom_unauthorized: {raw}"))
+            };
+        }
         return Err(raw);
     }
 

@@ -22,8 +22,9 @@
     "about": "关于"
   },
   "hotkeys": {
-    "how_it_works": "// HOW IT WORKS",
-    "how_it_works_body": "按一下快捷键开始说话，再按一下结束并把文字插入到当前焦点。两次按下间隔 < 300 ms 视为快速双击误触，本次录音丢弃。"
+    "reset_all": "重置全部",
+    "reset_all_confirm": "确定将所有快捷键恢复为默认值？",
+    "reset_all_done": "已恢复默认快捷键"
   },
   "section": {
     "shortcuts": "键盘快捷键",
@@ -39,6 +40,8 @@
     "interface_lang": "界面语言",
     "translate_target_lang": "翻译目标语言",
     "translate_target_lang_hint": "翻译听写快捷键命中后，转写文本会被译成此语言再注入到当前焦点。",
+    "translate_output_mode": "翻译输出形态",
+    "translate_output_mode_hint": "「仅目标语言」单次模型调用最快；「双语」会先输出整理后的原文，再追加译文（两次调用，更慢但保留原文）。",
     "input_device": "输入设备",
     "input_level": "输入声音",
     "input_level_hint_listening": "实时电平 · 正在监听：{{name}}",
@@ -101,7 +104,7 @@
     "key_save_failed_toast": "API Key 保存失败: {{error}}"
   },
   "ai": {
-    "section_mode": "AI 供应商",
+    "section_mode": "AI 通道",
     "mode_saas_label": "云端（推荐）",
     "mode_saas_hint": "走 OpenLoaf 已登录账号的快速 chat 模型，按积分计费。",
     "mode_custom_label": "自定义供应商",
@@ -153,6 +156,10 @@
     "fr": "Français",
     "de": "Deutsch",
     "es": "Español"
+  },
+  "translate_output_mode": {
+    "target_only": "仅目标语言",
+    "bilingual": "双语（原文 + 译文）"
   },
   "dictation_lang": {
     "label": "听写语种",
@@ -216,6 +223,7 @@
   },
   "about": {
     "version": "版本",
+    "platform": "平台",
     "license": "许可证",
     "source": "源代码",
     "check_update": "检查更新",

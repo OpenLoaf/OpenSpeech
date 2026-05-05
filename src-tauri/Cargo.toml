@@ -88,3 +88,11 @@ objc = "0.2.7"
 # （plugin 只返回 bool，丢失 notDetermined / denied 区分，UX 文案需要）。
 tauri-plugin-macos-permissions = "2.3.0"
 
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
+[profile.release]
+debug = true
+strip = false

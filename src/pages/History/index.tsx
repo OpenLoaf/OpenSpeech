@@ -62,6 +62,9 @@ import type { HistoryRetention } from "@/stores/settings";
 const FILTER_VALUES = ["all", "dictation", "ask", "translate"] as const;
 type FilterValue = (typeof FILTER_VALUES)[number];
 
+// 列表渲染分页大小。仅影响 DOM 节点数；items 全量在 store 内存里。
+const PAGE_SIZE = 50;
+
 type Bucket = "TODAY" | "YESTERDAY" | "THIS WEEK" | "EARLIER";
 const BUCKET_ORDER: Bucket[] = ["TODAY", "YESTERDAY", "THIS WEEK", "EARLIER"];
 const BUCKET_I18N_KEY: Record<Bucket, string> = {
@@ -405,15 +408,29 @@ function RowActions({
 function RefinedToggle({
   showRaw,
   onToggle,
+  type,
+  targetLang,
 }: {
   showRaw: boolean;
   onToggle: (next: boolean) => void;
+  type: HistoryType;
+  targetLang?: string | null;
 }) {
   const { t } = useTranslation();
   const baseCls =
     "rounded-sm px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest transition-colors";
   const activeCls = "bg-te-fg text-te-bg";
   const inactiveCls = "text-te-light-gray hover:text-te-fg";
+  const langLabel =
+    targetLang
+      ? t(`settings:translate_target_lang.${targetLang}`, {
+          defaultValue: "",
+        })
+      : "";
+  const refinedLabel =
+    type === "translate"
+      ? langLabel || t("pages:history.row.view_translation")
+      : t("pages:history.row.view_refined");
   return (
     <div className="inline-flex items-center gap-1 rounded-sm border border-te-gray/30 p-0.5">
       <button
@@ -421,7 +438,7 @@ function RefinedToggle({
         className={`${baseCls} ${!showRaw ? activeCls : inactiveCls}`}
         onClick={() => onToggle(false)}
       >
-        {t("pages:history.row.view_refined")}
+        {refinedLabel}
       </button>
       <button
         type="button"
@@ -934,7 +951,12 @@ function HistoryDetailDialog({
         <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
           {hasRefined && !isFailed && !isCancelled && (
             <div className="mb-3 flex shrink-0 items-center gap-2">
-              <RefinedToggle showRaw={showRaw} onToggle={setShowRaw} />
+              <RefinedToggle
+                showRaw={showRaw}
+                onToggle={setShowRaw}
+                type={item.type}
+                targetLang={item.target_lang}
+              />
             </div>
           )}
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -1292,7 +1314,12 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
         </p>
         {hasRefined && (
           <div className="mt-1.5 flex items-center gap-2">
-            <RefinedToggle showRaw={showRaw} onToggle={setShowRaw} />
+            <RefinedToggle
+              showRaw={showRaw}
+              onToggle={setShowRaw}
+              type={item.type}
+              targetLang={item.target_lang}
+            />
             {item.duration_ms > 0 && (
               <span className="font-mono text-[10px] tracking-widest text-te-light-gray/50">
                 {formatDuration(item.duration_ms)}
@@ -1408,6 +1435,9 @@ export default function HistoryPage() {
   const [query, setQuery] = useState("");
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const handleRefresh = async () => {
     if (refreshing) return;
@@ -1436,6 +1466,35 @@ export default function HistoryPage() {
     });
   }, [items, filter, query]);
 
+  // 切换 filter / 搜索词时重置分页并把滚动条拉回顶部，避免用户停在已不存在的"第 N 页"。
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [filter, query]);
+
+  const visible = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount],
+  );
+  const hasMore = filtered.length > visibleCount;
+
+  // 滚到底部哨兵进入视口 → 追加下一页。rootMargin 提前 400px 触发，让用户感觉不到等待。
+  useEffect(() => {
+    const root = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel || !hasMore) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisibleCount((c) => c + PAGE_SIZE);
+        }
+      },
+      { root, rootMargin: "400px 0px" },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasMore]);
+
   const clearAll = async () => {
     usePlaybackStore.getState().stop();
     await clearAllInDb();
@@ -1449,7 +1508,7 @@ export default function HistoryPage() {
       "THIS WEEK": [],
       EARLIER: [],
     };
-    for (const it of filtered) {
+    for (const it of visible) {
       map[bucketOf(it.created_at)].push(it);
     }
     // 每组内按时间倒序（id 是日期增量，直接字典序倒排即时间倒序）
@@ -1457,7 +1516,7 @@ export default function HistoryPage() {
       map[k].sort((a, b) => (b.id < a.id ? -1 : b.id > a.id ? 1 : 0));
     }
     return map;
-  }, [filtered]);
+  }, [visible]);
 
   return (
     <section className="flex h-full flex-col bg-te-bg">
@@ -1542,7 +1601,7 @@ export default function HistoryPage() {
       </div>
 
       {/* 滚动区：历史列表 */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-[4vw] pb-[clamp(2rem,5vw,5rem)]">
           {filtered.length === 0 ? (
             <EmptyState />
@@ -1553,9 +1612,13 @@ export default function HistoryPage() {
                 if (rows.length === 0) return null;
                 return (
                   <div key={bucket}>
-                    <GroupHeader
-                      label={t(`pages:history.buckets.${BUCKET_I18N_KEY[bucket]}`)}
-                    />
+                    {bucket !== "TODAY" && (
+                      <GroupHeader
+                        label={t(
+                          `pages:history.buckets.${BUCKET_I18N_KEY[bucket]}`,
+                        )}
+                      />
+                    )}
                     <div>
                       {rows.map((item, i) => (
                         <HistoryRow key={item.id} item={item} index={i} />
@@ -1564,6 +1627,16 @@ export default function HistoryPage() {
                   </div>
                 );
               })}
+              <div
+                ref={sentinelRef}
+                className="flex items-center justify-center py-6 font-mono text-[10px] uppercase tracking-widest text-te-light-gray/50"
+              >
+                {hasMore
+                  ? t("pages:history.loading_more")
+                  : filtered.length > PAGE_SIZE
+                    ? t("pages:history.list_end", { count: filtered.length })
+                    : null}
+              </div>
             </div>
           )}
         </div>

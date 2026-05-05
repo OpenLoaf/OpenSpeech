@@ -46,12 +46,22 @@ export async function stopAudioLevel(): Promise<void> {
 }
 
 export interface RecordingResult {
-  /** 相对 app_data_dir 的路径（如 "recordings/<yyyy-MM-dd>/<id>.ogg"）——直接写进 history.audio_path */
+  /**
+   * 相对 app_data_dir 的路径（如 "recordings/<yyyy-MM-dd>/<id>.ogg"）——直接写进 history.audio_path。
+   * voiced=false 时为空字符串（未落盘）。
+   */
   audio_path: string;
+  /** 裁剪后的有效时长（首尾静音已去掉）；voiced=false 时为 0。 */
   duration_ms: number;
   sample_rate: number;
   channels: number;
   samples: number;
+  /** 整段是否检测到人声。false → 用户激活了录音但未实际说话，前端跳过 ASR / 不写历史。 */
+  voiced: boolean;
+  /** 原始未裁剪时长（含首尾静音）。 */
+  raw_duration_ms: number;
+  trimmed_head_ms: number;
+  trimmed_tail_ms: number;
 }
 
 /** 取当前本地日期 yyyy-MM-dd（用于把录音按天分子目录保存）。 */

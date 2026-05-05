@@ -302,7 +302,6 @@ function LevelMeter({ peak }: { peak: number }) {
 const UNDO_WINDOW_MS = 8000;
 
 function HotkeysSection() {
-  const { t } = useTranslation("settings");
   const bindings = useHotkeysStore((s) => s.bindings);
   const setBinding = useHotkeysStore((s) => s.setBinding);
   const recordUndo = useHotkeysStore((s) => s.recordUndo);
@@ -333,29 +332,18 @@ function HotkeysSection() {
     findConflict(bindings, candidate, excludeId);
 
   return (
-    <div className="flex flex-col">
-      <div className="mb-3 border border-te-gray/40 bg-te-surface/60 px-4 py-3">
-        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-accent">
-          {t("hotkeys.how_it_works")}
-        </div>
-        <div className="mt-1.5 font-sans text-xs leading-relaxed text-te-light-gray">
-          {t("hotkeys.how_it_works_body")}
-        </div>
-      </div>
-
-      <div className="divide-y divide-te-gray/30">
-        {BINDING_IDS.map((id) => (
-          <HotkeyField
-            key={id}
-            id={id}
-            value={bindings[id]}
-            onChange={(v) => void commitChange(id, v)}
-            onConflictCheck={(c) => handleCheckConflict(c, id)}
-            // 听写至少保留一个可用绑定：不允许清空
-            canClear={id !== "dictate_ptt"}
-          />
-        ))}
-      </div>
+    <div className="divide-y divide-te-gray/30">
+      {BINDING_IDS.map((id) => (
+        <HotkeyField
+          key={id}
+          id={id}
+          value={bindings[id]}
+          onChange={(v) => void commitChange(id, v)}
+          onConflictCheck={(c) => handleCheckConflict(c, id)}
+          // 听写至少保留一个可用绑定：不允许清空
+          canClear={id !== "dictate_ptt"}
+        />
+      ))}
     </div>
   );
 }
@@ -407,6 +395,30 @@ function GeneralTab() {
             { value: "fr", label: t("translate_target_lang.fr") },
             { value: "de", label: t("translate_target_lang.de") },
             { value: "es", label: t("translate_target_lang.es") },
+          ]}
+        />
+      </Row>
+      <Row
+        label={t("general.translate_output_mode")}
+        hint={t("general.translate_output_mode_hint")}
+      >
+        <Select
+          value={general.translateOutputMode}
+          onChange={(v) =>
+            void setGeneral(
+              "translateOutputMode",
+              v as typeof general.translateOutputMode,
+            )
+          }
+          options={[
+            {
+              value: "target_only",
+              label: t("translate_output_mode.target_only"),
+            },
+            {
+              value: "bilingual",
+              label: t("translate_output_mode.bilingual"),
+            },
           ]}
         />
       </Row>
@@ -490,9 +502,31 @@ function GeneralTab() {
 
 function HotkeysTab() {
   const { t } = useTranslation("settings");
+  const resetAll = useHotkeysStore((s) => s.resetAll);
+
+  const handleResetAll = async () => {
+    if (!window.confirm(t("hotkeys.reset_all_confirm"))) return;
+    await resetAll();
+    toast.success(t("hotkeys.reset_all_done"));
+  };
+
   return (
     <div>
-      <SectionTitle>{t("section.shortcuts")}</SectionTitle>
+      <div className="mt-10 mb-4 flex items-center justify-between gap-3 first:mt-0">
+        <div className="flex items-center gap-3">
+          <span className="h-px w-4 bg-te-accent" />
+          <h3 className="font-mono text-xs uppercase tracking-[0.25em] text-te-light-gray">
+            {t("section.shortcuts")}
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleResetAll()}
+          className="border border-te-gray/40 bg-te-surface px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.15em] text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
+        >
+          {t("hotkeys.reset_all")}
+        </button>
+      </div>
       <HotkeysSection />
     </div>
   );
@@ -631,83 +665,6 @@ function DictationTab() {
 
   return (
     <div>
-      {/* Audio */}
-      <SectionTitle>{t("section.audio")}</SectionTitle>
-      <Row label={t("general.input_device")}>
-        <Select
-          value={general.inputDevice}
-          onChange={(v) => void setGeneral("inputDevice", v)}
-          className="min-w-[18rem]"
-          options={deviceOptions}
-        />
-      </Row>
-      <Row
-        label={t("general.input_level")}
-        hint={
-          effectiveName
-            ? t("general.input_level_hint_listening", { name: effectiveName })
-            : t("general.input_level_hint")
-        }
-      >
-        <LevelMeter peak={peak} />
-      </Row>
-      <Row label={t("general.cue_sound")}>
-        <Switch
-          checked={general.cueSound}
-          onChange={(v) => void setGeneral("cueSound", v)}
-        />
-      </Row>
-      <Row label={t("dictation_lang.label")} hint={t("dictation_lang.hint")}>
-        <Select
-          value={dictation.lang}
-          onChange={(v) => void setDictationLang(v as typeof dictation.lang)}
-          options={[
-            { value: "follow_interface", label: t("dictation_lang.follow_interface") },
-            { value: "auto", label: t("dictation_lang.auto") },
-            { value: "zh", label: t("dictation_lang.zh") },
-            { value: "en", label: t("dictation_lang.en") },
-            { value: "ja", label: t("dictation_lang.ja") },
-            { value: "ko", label: t("dictation_lang.ko") },
-            { value: "yue", label: t("dictation_lang.yue") },
-          ]}
-        />
-      </Row>
-
-      {/* Dictation mode */}
-      <SectionTitle>{t("section.asr_segment")}</SectionTitle>
-      <div className="py-3">
-        <RadioBlock
-          value={general.asrSegmentMode}
-          onChange={(v) => void setGeneral("asrSegmentMode", v)}
-          options={[
-            {
-              value: "UTTERANCE",
-              label: t("asr_segment.utterance_label"),
-              hint: t("asr_segment.utterance_hint"),
-            },
-            {
-              value: "REALTIME",
-              label: t("asr_segment.realtime_label"),
-              hint: t("asr_segment.realtime_hint"),
-            },
-          ]}
-        />
-      </div>
-      <Row
-        label={t("asr_segment.ai_refine_toggle.label")}
-        hint={
-          general.asrSegmentMode === "REALTIME"
-            ? t("asr_segment.ai_refine_toggle.disabled_in_realtime")
-            : t("asr_segment.ai_refine_toggle.hint")
-        }
-      >
-        <Switch
-          checked={general.asrSegmentMode !== "REALTIME" && aiRefine.enabled}
-          disabled={general.asrSegmentMode === "REALTIME"}
-          onChange={(v) => void setAiRefineEnabled(v)}
-        />
-      </Row>
-
       {/* Dictation provider（听写通道）*/}
       <SectionTitle>{t("dictation_provider.section_mode")}</SectionTitle>
       <div className="py-3">
@@ -799,6 +756,83 @@ function DictationTab() {
         </>
       )}
 
+      {/* Audio */}
+      <SectionTitle>{t("section.audio")}</SectionTitle>
+      <Row label={t("general.input_device")}>
+        <Select
+          value={general.inputDevice}
+          onChange={(v) => void setGeneral("inputDevice", v)}
+          className="min-w-[18rem]"
+          options={deviceOptions}
+        />
+      </Row>
+      <Row
+        label={t("general.input_level")}
+        hint={
+          effectiveName
+            ? t("general.input_level_hint_listening", { name: effectiveName })
+            : t("general.input_level_hint")
+        }
+      >
+        <LevelMeter peak={peak} />
+      </Row>
+      <Row label={t("general.cue_sound")}>
+        <Switch
+          checked={general.cueSound}
+          onChange={(v) => void setGeneral("cueSound", v)}
+        />
+      </Row>
+      <Row label={t("dictation_lang.label")} hint={t("dictation_lang.hint")}>
+        <Select
+          value={dictation.lang}
+          onChange={(v) => void setDictationLang(v as typeof dictation.lang)}
+          options={[
+            { value: "follow_interface", label: t("dictation_lang.follow_interface") },
+            { value: "auto", label: t("dictation_lang.auto") },
+            { value: "zh", label: t("dictation_lang.zh") },
+            { value: "en", label: t("dictation_lang.en") },
+            { value: "ja", label: t("dictation_lang.ja") },
+            { value: "ko", label: t("dictation_lang.ko") },
+            { value: "yue", label: t("dictation_lang.yue") },
+          ]}
+        />
+      </Row>
+
+      {/* Dictation mode */}
+      <SectionTitle>{t("section.asr_segment")}</SectionTitle>
+      <div className="py-3">
+        <RadioBlock
+          value={general.asrSegmentMode}
+          onChange={(v) => void setGeneral("asrSegmentMode", v)}
+          options={[
+            {
+              value: "UTTERANCE",
+              label: t("asr_segment.utterance_label"),
+              hint: t("asr_segment.utterance_hint"),
+            },
+            {
+              value: "REALTIME",
+              label: t("asr_segment.realtime_label"),
+              hint: t("asr_segment.realtime_hint"),
+            },
+          ]}
+        />
+      </div>
+      <Row
+        label={t("asr_segment.ai_refine_toggle.label")}
+        hint={
+          general.asrSegmentMode === "REALTIME"
+            ? t("asr_segment.ai_refine_toggle.disabled_in_realtime")
+            : t("asr_segment.ai_refine_toggle.hint")
+        }
+      >
+        <Switch
+          checked={general.asrSegmentMode !== "REALTIME" && aiRefine.enabled}
+          disabled={general.asrSegmentMode === "REALTIME"}
+          onChange={(v) => void setAiRefineEnabled(v)}
+        />
+      </Row>
+
       {!loaded ? (
         <div className="mt-6 font-mono text-xs text-te-light-gray/70">
           {t("general.loading")}
@@ -828,28 +862,6 @@ function AiTab() {
 
   return (
     <div>
-      <AiSystemPromptSection
-        refineCustom={aiRefine.customSystemPrompt}
-        onRefineChange={(v) => void setAiSystemPrompt(v)}
-        translationCustom={aiRefine.customTranslationSystemPrompt}
-        onTranslationChange={(v) => void setAiTranslationSystemPrompt(v)}
-        polishCustom={aiRefine.customPolishSystemPrompt}
-        onPolishChange={(v) => void setAiPolishSystemPrompt(v)}
-        polishScenarios={aiRefine.customPolishScenarios}
-        onPolishScenariosChange={(v) => void setPolishScenarios(v)}
-      />
-
-      <SectionTitle>{t("ai.section_history")}</SectionTitle>
-      <Row
-        label={t("ai.include_history")}
-        hint={t("ai.include_history_hint")}
-      >
-        <Switch
-          checked={aiRefine.includeHistory}
-          onChange={(v) => void setAiIncludeHistory(v)}
-        />
-      </Row>
-
       <SectionTitle>{t("ai.section_mode")}</SectionTitle>
       <div className="py-3">
         <RadioBlock
@@ -914,6 +926,28 @@ function AiTab() {
           </div>
         </>
       )}
+
+      <AiSystemPromptSection
+        refineCustom={aiRefine.customSystemPrompt}
+        onRefineChange={(v) => void setAiSystemPrompt(v)}
+        translationCustom={aiRefine.customTranslationSystemPrompt}
+        onTranslationChange={(v) => void setAiTranslationSystemPrompt(v)}
+        polishCustom={aiRefine.customPolishSystemPrompt}
+        onPolishChange={(v) => void setAiPolishSystemPrompt(v)}
+        polishScenarios={aiRefine.customPolishScenarios}
+        onPolishScenariosChange={(v) => void setPolishScenarios(v)}
+      />
+
+      <SectionTitle>{t("ai.section_history")}</SectionTitle>
+      <Row
+        label={t("ai.include_history")}
+        hint={t("ai.include_history_hint")}
+      >
+        <Switch
+          checked={aiRefine.includeHistory}
+          onChange={(v) => void setAiIncludeHistory(v)}
+        />
+      </Row>
     </div>
   );
 }
@@ -1676,6 +1710,7 @@ function AboutTab() {
   const openFeedback = useUIStore((s) => s.openFeedback);
   const [appVersion, setAppVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [platformInfo, setPlatformInfo] = useState<{ os: string; arch: string } | null>(null);
   // updateChannel 真源在 Rust 侧的 update-channel 文件，前端只缓存当前值用于 UI。
   // 不进 settings.ts schema 避免双源同步问题（settings.json 与 channel 文件不一致时
   // 决定 endpoints 的是 channel 文件）。
@@ -1686,7 +1721,32 @@ function AboutTab() {
     invoke<string>("get_update_channel")
       .then((c) => setUpdateChannel(c === "beta" ? "beta" : "stable"))
       .catch(() => {});
+    invoke<{ os: string; arch: string }>("get_platform_info")
+      .then((p) => setPlatformInfo({ os: p.os, arch: p.arch }))
+      .catch(() => {});
   }, []);
+
+  // os/arch 是 Rust std::env::consts 的小写常量；显示时拼成更易读的形式。
+  // arm64 的 macOS 在 Rust 里是 "aarch64"，对外仍称 Apple Silicon；x86_64 直接叫 Intel。
+  const platformLabel = platformInfo
+    ? (() => {
+        const os =
+          platformInfo.os === "macos"
+            ? "macOS"
+            : platformInfo.os === "windows"
+              ? "Windows"
+              : platformInfo.os === "linux"
+                ? "Linux"
+                : platformInfo.os;
+        const arch =
+          platformInfo.os === "macos" && platformInfo.arch === "aarch64"
+            ? "Apple Silicon"
+            : platformInfo.os === "macos" && platformInfo.arch === "x86_64"
+              ? "Intel"
+              : platformInfo.arch;
+        return `${os} · ${arch}`;
+      })()
+    : "—";
 
   const handleChannelChange = async (next: "stable" | "beta") => {
     if (next === updateChannel) return;
@@ -1766,6 +1826,9 @@ function AboutTab() {
             {t("about.check_update")}
           </button>
         </div>
+      </Row>
+      <Row label={t("about.platform")}>
+        <span className="font-mono text-sm text-te-fg">{platformLabel}</span>
       </Row>
       <Row label={t("about.license")}>
         <span className="font-mono text-sm text-te-fg">MIT</span>

@@ -83,6 +83,10 @@ const VAD_SAMPLE_RATE: u32 = 16_000;
 const VAD_FRAME_SAMPLES: usize = (VAD_SAMPLE_RATE as usize) * 30 / 1000;
 // 检测到 voice 后保留多久不归零——避免"词与词之间的几十 ms 静默"把波形跌到 0。
 const VAD_VOICE_HANG_MS: u64 = 200;
+// 落盘前的首尾静音裁剪 padding：保留 voice 区前后各 300ms 缓冲，避免吞首字 / 尾字。
+const TRIM_PAD_MS: u32 = 300;
+// 裁剪后真正的语音时长低于该阈值视作"整段无人声"，前端跳过 ASR 与历史。
+const TRIM_MIN_VOICED_MS: u32 = 200;
 // OGG Vorbis 输出：采样率 / 声道跟随采集配置，不做 resample / 下混——这两步
 // 留给 STT 集成阶段（大多数 STT 服务上传前自己会做）。
 // 质量取 0.4（≈ 96 kbps mono），人声完全够用且文件 ~1/10 WAV 大小。
@@ -454,6 +458,142 @@ impl VadGate {
     }
 }
 
+/// 离线裁剪结果：要么整段没有 voice，要么给出原 interleaved 缓冲的有效区间 + 真正语音 ms。
+enum TrimDecision {
+    Empty,
+    Bounds {
+        start_sample: usize,
+        end_sample: usize,
+        head_trimmed_ms: u32,
+        tail_trimmed_ms: u32,
+    },
+}
+
+/// 落盘前对整段录音跑一次 webrtc-vad，找出首尾 voice 边界并附 TRIM_PAD_MS padding。
+/// 返回相对原 interleaved 缓冲的样本索引区间，调用方据此切片再交给 ogg 编码器。
+///
+/// 设计要点：
+/// - 只裁首尾，**绝不动中间**——句间停顿对 ASR 是合法分段线索。
+/// - padding 取 TRIM_PAD_MS（300ms），即便 VAD 漏掉首字 50-100ms 也仍在裁切边界内。
+/// - 整段无 voice → 返回 Empty，调用方跳过编码与历史。
+fn analyze_recording_trim(
+    interleaved: &[f32],
+    sample_rate: u32,
+    channels: u16,
+) -> TrimDecision {
+    let ch = channels.max(1) as usize;
+    let total_frames = interleaved.len() / ch;
+    if total_frames == 0 {
+        return TrimDecision::Empty;
+    }
+
+    // 1) 多声道均值 → mono；与 VadGate::feed 同款下混。
+    let mono_src: Vec<f32> = if ch == 1 {
+        interleaved[..total_frames].to_vec()
+    } else {
+        let mut out = Vec::with_capacity(total_frames);
+        for f in 0..total_frames {
+            let base = f * ch;
+            let mut sum = 0.0f32;
+            for c in 0..ch {
+                sum += interleaved[base + c];
+            }
+            out.push(sum / ch as f32);
+        }
+        out
+    };
+
+    // 2) 重采样到 16kHz（webrtc-vad 只接受 8/16/32/48kHz；统一 16k 与现有 VadGate 对齐）。
+    let mono_16k: Vec<f32> = if sample_rate == VAD_SAMPLE_RATE {
+        mono_src
+    } else {
+        let ratio = sample_rate as f64 / VAD_SAMPLE_RATE as f64;
+        let dst_len = (mono_src.len() as f64 / ratio).floor() as usize;
+        if dst_len == 0 {
+            return TrimDecision::Empty;
+        }
+        let last = mono_src.len() - 1;
+        let mut out = Vec::with_capacity(dst_len);
+        for i in 0..dst_len {
+            let src_idx = i as f64 * ratio;
+            let lo = src_idx.floor() as usize;
+            let hi = (lo + 1).min(last);
+            let frac = src_idx - lo as f64;
+            out.push((mono_src[lo] as f64 * (1.0 - frac) + mono_src[hi] as f64 * frac) as f32);
+        }
+        out
+    };
+
+    // 3) f32 → i16；按 30ms 帧喂 webrtc-vad，记录每帧是否 voice。
+    let pcm_i16: Vec<i16> = mono_16k
+        .iter()
+        .map(|s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+        .collect();
+
+    let frame_count = pcm_i16.len() / VAD_FRAME_SAMPLES;
+    if frame_count == 0 {
+        return TrimDecision::Empty;
+    }
+
+    let mut vad = webrtc_vad::Vad::new_with_rate_and_mode(
+        webrtc_vad::SampleRate::Rate16kHz,
+        webrtc_vad::VadMode::Aggressive,
+    );
+
+    let mut first_voice: Option<usize> = None;
+    let mut last_voice: Option<usize> = None;
+    let mut voiced_count: usize = 0;
+    for i in 0..frame_count {
+        let start = i * VAD_FRAME_SAMPLES;
+        let frame = &pcm_i16[start..start + VAD_FRAME_SAMPLES];
+        if matches!(vad.is_voice_segment(frame), Ok(true)) {
+            voiced_count += 1;
+            if first_voice.is_none() {
+                first_voice = Some(i);
+            }
+            last_voice = Some(i);
+        }
+    }
+
+    let voiced_ms = (voiced_count as u32) * 30;
+    if voiced_ms < TRIM_MIN_VOICED_MS {
+        return TrimDecision::Empty;
+    }
+    let (Some(first), Some(last)) = (first_voice, last_voice) else {
+        return TrimDecision::Empty;
+    };
+
+    // 4) 从 16k 帧 idx 反推到原采样率下的 interleaved 样本索引（含 padding）。
+    let total_ms = (total_frames as u64 * 1000) / sample_rate.max(1) as u64;
+    let voice_start_ms = (first as u64) * 30;
+    let voice_end_ms = ((last + 1) as u64) * 30;
+
+    let pad = TRIM_PAD_MS as u64;
+    let start_ms = voice_start_ms.saturating_sub(pad);
+    let end_ms = (voice_end_ms + pad).min(total_ms);
+
+    let start_frame =
+        ((start_ms as u128) * sample_rate as u128 / 1000) as usize;
+    let end_frame =
+        (((end_ms as u128) * sample_rate as u128 / 1000) as usize).min(total_frames);
+
+    if end_frame <= start_frame {
+        return TrimDecision::Empty;
+    }
+
+    let head_trimmed_ms = start_ms as u32;
+    let tail_trimmed_ms = total_ms.saturating_sub(end_ms) as u32;
+
+    let _ = voiced_ms;
+
+    TrimDecision::Bounds {
+        start_sample: start_frame * ch,
+        end_sample: end_frame * ch,
+        head_trimmed_ms,
+        tail_trimmed_ms,
+    }
+}
+
 struct MonitorState {
     ref_count: usize,
     stop_tx: Option<mpsc::Sender<()>>,
@@ -743,7 +883,14 @@ fn spawn_monitor_thread<R: Runtime>(
                     break;
                 }
                 match stop_rx.recv_timeout(Duration::from_millis(TICK_MS)) {
-                    Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Ok(_) => {
+                        log::info!("[audio] stop_rx received → audio thread exiting (normal stop)");
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        log::warn!("[audio] stop_tx dropped (Disconnected) → audio thread exiting");
+                        break;
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         let bits = peak_tick.swap(0, Ordering::Relaxed);
                         let raw_peak = f32::from_bits(bits);
@@ -858,18 +1005,26 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
 }
 
 pub fn stop() {
-    let (tx, th) = {
+    let (tx, th, prev_ref, new_ref) = {
         let mut guard = monitor().lock().expect("monitor mutex poisoned");
+        let prev = guard.ref_count;
         if guard.ref_count > 0 {
             guard.ref_count -= 1;
         }
+        let new_ref = guard.ref_count;
         if guard.ref_count == 0 {
             guard.current_device = None;
-            (guard.stop_tx.take(), guard.thread.take())
+            (guard.stop_tx.take(), guard.thread.take(), prev, new_ref)
         } else {
-            (None, None)
+            (None, None, prev, new_ref)
         }
     };
+    log::info!(
+        "[audio] stop() called: ref_count {} -> {}, will_signal_thread={}",
+        prev_ref,
+        new_ref,
+        tx.is_some()
+    );
     if let Some(tx) = tx {
         let _ = tx.send(());
     }
@@ -890,6 +1045,11 @@ pub fn force_stop() {
         guard.current_device = None;
         (guard.stop_tx.take(), guard.thread.take(), prev)
     };
+    log::warn!(
+        "[audio] force_stop() called: prev_ref={}, will_signal_thread={}",
+        prev_ref,
+        tx.is_some()
+    );
     if tx.is_some() || th.is_some() || prev_ref > 0 {
         log::warn!(
             "[audio] force_stop: clearing stale monitor (prev_ref={})",
@@ -920,17 +1080,27 @@ pub async fn audio_level_start<R: Runtime>(
 
 #[tauri::command]
 pub async fn audio_level_stop() {
+    log::info!("[audio] audio_level_stop command received from frontend");
     let _ = tauri::async_runtime::spawn_blocking(stop).await;
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RecordingResult {
-    /// 相对 app_data_dir 的路径（如 "recordings/<yyyy-MM-dd>/<id>.ogg"），直接写进 history.audio_path
+    /// 相对 app_data_dir 的路径（如 "recordings/<yyyy-MM-dd>/<id>.ogg"），直接写进 history.audio_path。
+    /// voiced=false 时为空字符串（未落盘，前端据此跳过 ASR）。
     pub audio_path: String,
+    /// 裁剪后的有效时长（首尾静音已去除）。voiced=false 时为 0。
     pub duration_ms: u64,
     pub sample_rate: u32,
     pub channels: u16,
     pub samples: usize,
+    /// 整段是否检测到人声。false = 用户激活了录音但未实际说话，前端跳过 ASR。
+    pub voiced: bool,
+    /// 原始未裁剪时长（含首尾静音），用于日志 / 调试观察。
+    pub raw_duration_ms: u64,
+    /// 已被裁掉的开头 / 结尾静音 ms，用于日志观察上传节省了多少。
+    pub trimmed_head_ms: u32,
+    pub trimmed_tail_ms: u32,
 }
 
 /// 前端按下快捷键、进入 recording 前调用。传入的 id 就是 history.id，
@@ -976,6 +1146,7 @@ pub fn audio_recording_start(id: String, date: String) -> Result<(), String> {
 pub async fn audio_recording_stop<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<RecordingResult, String> {
+    log::info!("[audio] audio_recording_stop command received from frontend");
     tauri::async_runtime::spawn_blocking(move || audio_recording_stop_impl(app))
         .await
         .map_err(|e| format!("audio_recording_stop join: {e}"))?
@@ -990,8 +1161,53 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
         return Err("no active recording session".to_string());
     };
 
-    let duration_ms = session.started_at.elapsed().as_millis() as u64;
-    let samples_len = session.samples.len();
+    let raw_duration_ms = session.started_at.elapsed().as_millis() as u64;
+    let raw_samples_len = session.samples.len();
+
+    // 落盘前跑离线 VAD 找首尾 voice 边界——整段无 voice 直接跳过编码，节省云端 ASR 成本与
+    // 用户激活但全程未说话时的"半小时静音"上传问题。
+    let decision = analyze_recording_trim(
+        &session.samples,
+        session.sample_rate,
+        session.channels,
+    );
+
+    if matches!(decision, TrimDecision::Empty) {
+        log::info!(
+            "[audio] recording empty (no voice detected) raw={}ms samples={} {}Hz x{}",
+            raw_duration_ms,
+            raw_samples_len,
+            session.sample_rate,
+            session.channels,
+        );
+        return Ok(RecordingResult {
+            audio_path: String::new(),
+            duration_ms: 0,
+            sample_rate: session.sample_rate,
+            channels: session.channels,
+            samples: 0,
+            voiced: false,
+            raw_duration_ms,
+            trimmed_head_ms: 0,
+            trimmed_tail_ms: 0,
+        });
+    }
+
+    let TrimDecision::Bounds {
+        start_sample,
+        end_sample,
+        head_trimmed_ms,
+        tail_trimmed_ms,
+    } = decision
+    else {
+        unreachable!("Empty branch handled above");
+    };
+
+    // 安全切片：start_sample / end_sample 已按 channels 对齐。
+    let trimmed = &session.samples[start_sample..end_sample];
+    let trimmed_frames = trimmed.len() / session.channels.max(1) as usize;
+    let trimmed_duration_ms =
+        (trimmed_frames as u64 * 1000) / session.sample_rate.max(1) as u64;
 
     // 按日期分子目录落盘：recordings/<yyyy-MM-dd>/<id>.ogg；目录不存在时 mkdir_p。
     let day_dir = db::ensure_recordings_dir(&app)?.join(&session.date);
@@ -1000,23 +1216,30 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
     let rel_path = format!("recordings/{}/{}.ogg", session.date, session.id);
     let abs_path = day_dir.join(format!("{}.ogg", session.id));
 
-    encode_ogg_vorbis(&abs_path, &session.samples, session.sample_rate, session.channels)?;
+    encode_ogg_vorbis(&abs_path, trimmed, session.sample_rate, session.channels)?;
 
     log::info!(
-        "[audio] recording saved: {} ({} ms, {} samples, {}Hz x{})",
+        "[audio] recording saved: {} (raw={}ms trimmed={}ms head=-{}ms tail=-{}ms, {} samples, {}Hz x{})",
         abs_path.display(),
-        duration_ms,
-        samples_len,
+        raw_duration_ms,
+        trimmed_duration_ms,
+        head_trimmed_ms,
+        tail_trimmed_ms,
+        trimmed.len(),
         session.sample_rate,
         session.channels
     );
 
     Ok(RecordingResult {
         audio_path: rel_path,
-        duration_ms,
+        duration_ms: trimmed_duration_ms,
         sample_rate: session.sample_rate,
         channels: session.channels,
-        samples: samples_len,
+        samples: trimmed.len(),
+        voiced: true,
+        raw_duration_ms,
+        trimmed_head_ms: head_trimmed_ms,
+        trimmed_tail_ms: tail_trimmed_ms,
     })
 }
 

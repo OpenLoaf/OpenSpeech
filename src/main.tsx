@@ -108,7 +108,9 @@ const bootPromise = (async () => {
 
     // 用户偏好语言一旦从 settings 读出来就同步给 i18n + 托盘菜单；之后 settings store
     // 写 interfaceLang 时也要走同一条函数（见 settings.ts 的 setGeneral）。
-    void syncI18nFromSettings(useSettingsStore.getState().general.interfaceLang);
+    // 必须 await：i18n init 时只能拿到 navigator.language，若 fire-and-forget，
+    // setBooted(true) 后主窗会先按系统语言渲染一帧再才切到用户偏好。
+    await syncI18nFromSettings(useSettingsStore.getState().general.interfaceLang);
     // 主窗也订阅一次：自己 emit 出去的事件本窗也会收到，applyLang 同语言会跳过，
     // 不会回环；额外的好处是任何第三方窗口（promo / future）也能联动。
     void listenLangChanged();

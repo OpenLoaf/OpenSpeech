@@ -66,6 +66,8 @@
       "earlier": "更早"
     },
     "empty": "// 暂无记录 //",
+    "loading_more": "// 加载更多 //",
+    "list_end": "// 已到底 · 共 {{count}} 条 //",
     "status": {
       "success": "成功",
       "failed": "失败",
@@ -89,6 +91,7 @@
       "failed_placeholder": "您的转录被中断。但 OpenSpeech 仍可以为您重试。",
       "cancelled_placeholder": "{{duration}} 录音已取消，未转录 · 可重新转录",
       "view_refined": "AI 优化",
+      "view_translation": "译文",
       "view_raw": "原始文本",
       "view_details": "查看详情"
     },
@@ -178,6 +181,7 @@
     "nav": {
       "home": "首页",
       "toolbox": "AI工具",
+      "meetings": "会议转录",
       "history": "历史记录",
       "dictionary": "词典"
     },
@@ -228,7 +232,13 @@
       "right_empty": "请先在左侧给一个输入。",
       "use_sample": "用示例文字",
       "replaced_hint": "已替换为上一步输出",
-      "restore_original": "还原原文"
+      "restore_original": "还原原文",
+      "paste": "粘贴",
+      "history": "历史",
+      "clear": "清空",
+      "clipboard_detected": "检测到剪贴板内容",
+      "clipboard_translate": "粘贴并翻译",
+      "clipboard_fill_only": "仅粘贴"
     },
     "tools": {
       "section_label": "// 02 · 工具",
@@ -267,8 +277,12 @@
         "languages": {
           "en": "英文",
           "zh": "中文",
+          "zh-TW": "繁体中文",
           "ja": "日文",
-          "ko": "韩文"
+          "ko": "韩文",
+          "fr": "法文",
+          "de": "德文",
+          "es": "西班牙文"
         }
       },
       "tts": {
@@ -296,8 +310,45 @@
       "idle": "等待输入",
       "output_empty": "在上方填入或选择一段输入"
     },
+    "output": {
+      "idle_label": "等待运行",
+      "ready": "READY",
+      "meta_chars": "{{count}} 字",
+      "meta_elapsed": "耗时 {{seconds}}s"
+    },
     "footer": {
       "ui_only_notice": "// UI 预览 — 业务尚未接入"
+    }
+  },
+  "meetings": {
+    "title": "会议转录",
+    "subtitle": "长时间录音 · 自动分人 · 时间轴回看",
+    "idle": {
+      "hint": "点击开始记录",
+      "recent": "最近会议",
+      "items": "项"
+    },
+    "live": {
+      "recording": "录音中",
+      "paused": "已暂停",
+      "pause": "暂停",
+      "resume": "继续",
+      "stop": "结束",
+      "listening": "正在聆听..."
+    },
+    "review": {
+      "back": "返回",
+      "speakers": "位说话人",
+      "delete": "删除",
+      "summary": "纪要",
+      "transcript": "逐字稿",
+      "summary_topic": "会议主题",
+      "summary_speakers": "发言人",
+      "summary_abstract": "会议摘要",
+      "summary_section": "讨论要点",
+      "summary_loading": "正在生成纪要…",
+      "search": "搜索",
+      "edit": "编辑"
     }
   }
 }

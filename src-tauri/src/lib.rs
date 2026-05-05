@@ -120,6 +120,15 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
+fn get_platform_info() -> serde_json::Value {
+    serde_json::json!({
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "family": std::env::consts::FAMILY,
+    })
+}
+
+#[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -808,6 +817,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            get_platform_info,
             exit_app,
             app_emergency_reset,
             relaunch_app,

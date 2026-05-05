@@ -22,8 +22,9 @@
     "about": "About"
   },
   "hotkeys": {
-    "how_it_works": "// HOW IT WORKS",
-    "how_it_works_body": "Press the hotkey once to start speaking, press again to stop and insert the text into the focused field. A second press within 300 ms is treated as an accidental double-tap and the recording is discarded."
+    "reset_all": "Reset all",
+    "reset_all_confirm": "Reset all hotkeys to their defaults?",
+    "reset_all_done": "Hotkeys restored to defaults"
   },
   "section": {
     "shortcuts": "Keyboard shortcuts",
@@ -39,6 +40,8 @@
     "interface_lang": "Interface language",
     "translate_target_lang": "Translate target language",
     "translate_target_lang_hint": "When the translate-dictation hotkey fires, the transcript is translated into this language and then injected at the cursor.",
+    "translate_output_mode": "Translate output",
+    "translate_output_mode_hint": "\"Target only\" uses one model call (fastest); \"Bilingual\" first outputs the cleaned source, then appends the translation (two calls, slower but keeps the source).",
     "input_device": "Input device",
     "input_level": "Input level",
     "input_level_hint_listening": "Live level · listening on: {{name}}",
@@ -101,7 +104,7 @@
     "key_save_failed_toast": "Failed to save API Key: {{error}}"
   },
   "ai": {
-    "section_mode": "AI provider",
+    "section_mode": "AI channel",
     "mode_saas_label": "Cloud (recommended)",
     "mode_saas_hint": "Use the fast chat model on your signed-in OpenLoaf account; billed by credits.",
     "mode_custom_label": "Custom provider",
@@ -153,6 +156,10 @@
     "fr": "French (Français)",
     "de": "German (Deutsch)",
     "es": "Spanish (Español)"
+  },
+  "translate_output_mode": {
+    "target_only": "Target only",
+    "bilingual": "Bilingual (source + translation)"
   },
   "dictation_lang": {
     "label": "Dictation language",
@@ -216,6 +223,7 @@
   },
   "about": {
     "version": "Version",
+    "platform": "Platform",
     "license": "License",
     "source": "Source code",
     "check_update": "Check for updates",

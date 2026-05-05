@@ -7,6 +7,7 @@ import {
   Coins,
   History,
   Home,
+  Mic,
   Settings,
   Sparkles,
   Timer,
@@ -55,6 +56,7 @@ type NavItem = {
 const MAIN_NAV: NavItem[] = [
   { to: "/", i18nKey: "home", icon: Home },
   { to: "/toolbox", i18nKey: "toolbox", icon: Sparkles },
+  { to: "/meetings", i18nKey: "meetings", icon: Mic },
   { to: "/history", i18nKey: "history", icon: History },
   { to: "/dictionary", i18nKey: "dictionary", icon: BookOpen },
 ];
@@ -414,8 +416,9 @@ export default function Layout() {
     let cancelled = false;
     let redirected = false;
 
-    const checkAll = async () => {
+    const checkAll = async (trigger: string) => {
       if (redirected) return;
+      console.info(`[layout] runtime permission checkAll trigger=${trigger}`);
       try {
         const [m, a, i]: PermissionStatus[] = await Promise.all([
           checkMicrophone(),
@@ -425,6 +428,9 @@ export default function Layout() {
         if (cancelled || redirected) return;
         const anyMissing =
           m !== "granted" || a !== "granted" || i !== "granted";
+        console.info(
+          `[layout] runtime permission result trigger=${trigger} mic=${m} ax=${a} input=${i} anyMissing=${anyMissing}`,
+        );
         if (anyMissing) {
           redirected = true;
           await useSettingsStore
@@ -439,8 +445,8 @@ export default function Layout() {
     };
 
     // 挂载时跑一次（建立 baseline），然后窗口 focus 回到前台时再检测。
-    void checkAll();
-    const onFocus = () => void checkAll();
+    void checkAll("mount");
+    const onFocus = () => void checkAll("window-focus");
     window.addEventListener("focus", onFocus);
     return () => {
       cancelled = true;
@@ -535,15 +541,15 @@ export default function Layout() {
                 realtimeAsrCreditsPerMinute > 0;
               return (
                 <div className="flex items-baseline justify-between gap-2 border-t border-te-gray px-5 py-3">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-te-light-gray">
+                  <span className="font-mono text-xs uppercase tracking-[0.25em] text-te-light-gray">
                     {hasPricing
                       ? t("pages:layout.time_left")
                       : t("pages:layout.credits")}
                   </span>
                   {hasPricing ? (
-                    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] font-bold uppercase text-te-fg tabular-nums">
+                    <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-xs font-bold uppercase text-te-fg tabular-nums">
                       <Timer
-                        className="size-2.5 shrink-0 text-te-accent"
+                        className="size-3 shrink-0 text-te-accent"
                         strokeWidth={2}
                       />
                       {t("pages:layout.time_minutes", {
@@ -557,9 +563,9 @@ export default function Layout() {
                       })}
                     </span>
                   ) : (
-                    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] font-bold tracking-tighter text-te-fg tabular-nums">
+                    <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-xs font-bold text-te-fg tabular-nums">
                       <Coins
-                        className="size-2.5 shrink-0 text-te-accent"
+                        className="size-3 shrink-0 text-te-accent"
                         strokeWidth={2}
                       />
                       {Math.round(profile.creditsBalance).toLocaleString(

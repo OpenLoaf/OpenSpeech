@@ -104,6 +104,8 @@ export interface HistoryItem {
   segment_mode?: HistorySegmentMode | null;
   /** 供应商通道（vendor + 实时/文件）。null = schema v4 之前的老记录。 */
   provider_kind?: ProviderKind | null;
+  /** 翻译条目的目标语言代码（如 "en"/"zh"/"ja"）。null = 非翻译条目或 schema v5 之前的老记录。 */
+  target_lang?: string | null;
 }
 
 /** 新增一条记录时的入参；id 与 created_at 由 store 生成。 */
@@ -120,6 +122,7 @@ export interface HistoryInput {
   ai_model?: string | null;
   segment_mode?: HistorySegmentMode | null;
   provider_kind?: ProviderKind | null;
+  target_lang?: string | null;
 }
 
 // SQLite 取出来的原始行（bind 会回 camelCase 的字段，这里统一保留 snake_case）。
@@ -138,6 +141,7 @@ interface Row {
   ai_model: string | null;
   segment_mode: HistorySegmentMode | null;
   provider_kind: ProviderKind | null;
+  target_lang: string | null;
 }
 
 function rowToItem(r: Row): HistoryItem {
@@ -156,6 +160,7 @@ function rowToItem(r: Row): HistoryItem {
     ai_model: r.ai_model,
     segment_mode: r.segment_mode,
     provider_kind: r.provider_kind,
+    target_lang: r.target_lang,
   };
 }
 
@@ -218,7 +223,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   reload: async () => {
     const d = await db();
     const rows = await d.select<Row[]>(
-      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind FROM history ORDER BY created_at DESC",
+      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang FROM history ORDER BY created_at DESC",
     );
     set({ items: rows.map(rowToItem) });
   },
@@ -239,6 +244,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       ai_model: input.ai_model ?? null,
       segment_mode: input.segment_mode ?? null,
       provider_kind: input.provider_kind ?? null,
+      target_lang: input.target_lang ?? null,
     };
 
     // retention='off'：不写 DB，只塞内存；重启后清空，与 docs/history.md 一致。
@@ -257,7 +263,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
     const d = await db();
     await d.execute(
-      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
       [
         item.id,
         item.type,
@@ -273,6 +279,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         item.ai_model,
         item.segment_mode,
         item.provider_kind,
+        item.target_lang,
       ],
     );
     set({ items: [item, ...get().items] });

@@ -66,6 +66,8 @@
       "earlier": "Earlier"
     },
     "empty": "// No records //",
+    "loading_more": "// loading more //",
+    "list_end": "// end · {{count}} total //",
     "status": {
       "success": "Success",
       "failed": "Failed",
@@ -89,6 +91,7 @@
       "failed_placeholder": "Your transcription was interrupted. OpenSpeech can still retry it for you.",
       "cancelled_placeholder": "{{duration}} recording cancelled · not transcribed · retry available",
       "view_refined": "AI enhanced",
+      "view_translation": "Translation",
       "view_raw": "Raw text",
       "view_details": "View details"
     },
@@ -178,6 +181,7 @@
     "nav": {
       "home": "Home",
       "toolbox": "AI Tools",
+      "meetings": "Meetings",
       "history": "History",
       "dictionary": "Dictionary"
     },
@@ -228,7 +232,13 @@
       "right_empty": "Provide an input on the left first.",
       "use_sample": "Use sample text",
       "replaced_hint": "Replaced with previous step's output",
-      "restore_original": "Restore original"
+      "restore_original": "Restore original",
+      "paste": "Paste",
+      "history": "History",
+      "clear": "Clear",
+      "clipboard_detected": "Clipboard content detected",
+      "clipboard_translate": "Paste & translate",
+      "clipboard_fill_only": "Paste only"
     },
     "tools": {
       "section_label": "// 02 · TOOLS",
@@ -267,8 +277,12 @@
         "languages": {
           "en": "English",
           "zh": "中文",
+          "zh-TW": "繁體",
           "ja": "日本語",
-          "ko": "한국어"
+          "ko": "한국어",
+          "fr": "Français",
+          "de": "Deutsch",
+          "es": "Español"
         }
       },
       "tts": {
@@ -296,8 +310,45 @@
       "idle": "Awaiting input",
       "output_empty": "Provide an input above to see the result here."
     },
+    "output": {
+      "idle_label": "Awaiting run",
+      "ready": "READY",
+      "meta_chars": "{{count}} chars",
+      "meta_elapsed": "{{seconds}}s"
+    },
     "footer": {
       "ui_only_notice": "// UI PREVIEW — actions are not wired up yet"
+    }
+  },
+  "meetings": {
+    "title": "Meetings",
+    "subtitle": "Long-form recording · Speaker labels · Timeline review",
+    "idle": {
+      "hint": "Click to start recording",
+      "recent": "Recent meetings",
+      "items": "items"
+    },
+    "live": {
+      "recording": "Recording",
+      "paused": "Paused",
+      "pause": "Pause",
+      "resume": "Resume",
+      "stop": "Stop",
+      "listening": "Listening..."
+    },
+    "review": {
+      "back": "Back",
+      "speakers": "speakers",
+      "delete": "Delete",
+      "summary": "Summary",
+      "transcript": "Transcript",
+      "summary_topic": "Topic",
+      "summary_speakers": "Speakers",
+      "summary_abstract": "Abstract",
+      "summary_section": "Key points",
+      "summary_loading": "Generating summary…",
+      "search": "Search",
+      "edit": "Edit"
     }
   }
 }

@@ -22,8 +22,9 @@
     "about": "關於"
   },
   "hotkeys": {
-    "how_it_works": "// HOW IT WORKS",
-    "how_it_works_body": "按一下快速鍵開始說話，再按一下結束並將文字插入目前焦點。兩次按下間隔 < 300 ms 會視為快速雙擊誤觸，本次錄音將捨棄。"
+    "reset_all": "重置全部",
+    "reset_all_confirm": "確定將所有快速鍵恢復為預設值？",
+    "reset_all_done": "已恢復預設快速鍵"
   },
   "section": {
     "shortcuts": "鍵盤快速鍵",
@@ -39,6 +40,8 @@
     "interface_lang": "介面語言",
     "translate_target_lang": "翻譯目標語言",
     "translate_target_lang_hint": "翻譯聽寫快速鍵命中後，轉寫文字會被翻譯成此語言再注入到目前焦點。",
+    "translate_output_mode": "翻譯輸出形態",
+    "translate_output_mode_hint": "「僅目標語言」單次模型呼叫最快；「雙語」會先輸出整理後的原文，再追加譯文（兩次呼叫，較慢但保留原文）。",
     "input_device": "輸入裝置",
     "input_level": "輸入音量",
     "input_level_hint_listening": "即時音量 · 正在監聽：{{name}}",
@@ -101,7 +104,7 @@
     "key_save_failed_toast": "API Key 儲存失敗: {{error}}"
   },
   "ai": {
-    "section_mode": "AI 供應商",
+    "section_mode": "AI 通道",
     "mode_saas_label": "雲端（推薦）",
     "mode_saas_hint": "使用 OpenLoaf 已登入帳號的快速 chat 模型，依積分計費。",
     "mode_custom_label": "自訂供應商",
@@ -153,6 +156,10 @@
     "fr": "Français",
     "de": "Deutsch",
     "es": "Español"
+  },
+  "translate_output_mode": {
+    "target_only": "僅目標語言",
+    "bilingual": "雙語（原文 + 譯文）"
   },
   "dictation_lang": {
     "label": "聽寫語言",
@@ -216,6 +223,7 @@
   },
   "about": {
     "version": "版本",
+    "platform": "平台",
     "license": "授權",
     "source": "原始碼",
     "check_update": "檢查更新",

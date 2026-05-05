@@ -30,6 +30,9 @@ use super::signature::build_realtime_url;
 /// `next_event_timeout` 里用这个值做 `set_read_timeout`，让 stop / close 可以快速生效。
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
+/// dev-only WS frame 日志 target；release 因 LevelFilter::Info 自动消失。
+const WS_LOG_TARGET: &str = "openspeech::asr::tencent_ws";
+
 /// 给 worker 的出站消息：音频 / 结束 / 主动关闭。
 enum Outbound {
     Binary(Vec<u8>),
@@ -127,6 +130,14 @@ impl TencentRealtimeSession {
             params.secret_key,
         );
 
+        log::info!(
+            target: WS_LOG_TARGET,
+            "[ws-connect] tencent wss://asr.cloud.tencent.com/asr/v2/{} engine={} sample_rate={}",
+            params.app_id,
+            params.engine_model_type,
+            params.sample_rate,
+        );
+
         let request = url
             .as_str()
             .into_client_request()
@@ -204,6 +215,11 @@ fn run_worker(
         loop {
             match outbox_rx.try_recv() {
                 Ok(Outbound::Binary(bytes)) => {
+                    log::debug!(
+                        target: WS_LOG_TARGET,
+                        "[ws-out] tencent audio binary {}B",
+                        bytes.len(),
+                    );
                     if let Err(e) = ws.send(Message::Binary(bytes)) {
                         if !is_would_block(&e) {
                             let _ = inbox_tx.send(SessionEvent::Network(e.to_string()));
@@ -212,6 +228,7 @@ fn run_worker(
                     }
                 }
                 Ok(Outbound::End) => {
+                    log::debug!(target: WS_LOG_TARGET, "[ws-out] tencent text {{\"type\":\"end\"}}");
                     if let Err(e) = ws.send(Message::Text("{\"type\":\"end\"}".into())) {
                         if !is_would_block(&e) {
                             let _ = inbox_tx.send(SessionEvent::Network(e.to_string()));
@@ -220,6 +237,7 @@ fn run_worker(
                     }
                 }
                 Ok(Outbound::Close) => {
+                    log::debug!(target: WS_LOG_TARGET, "[ws-out] tencent close");
                     let _ = ws.close(None);
                     let _ = ws.flush();
                     should_break = true;
@@ -227,7 +245,10 @@ fn run_worker(
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    // 上层已 drop session：发 Close 帧后退出。
+                    log::debug!(
+                        target: WS_LOG_TARGET,
+                        "[ws-out] tencent close (outbox dropped)",
+                    );
                     let _ = ws.close(None);
                     let _ = ws.flush();
                     should_break = true;
@@ -249,40 +270,48 @@ fn run_worker(
 
         // 3) 拉一帧服务端消息。WouldBlock = 暂无数据，睡一小会儿。
         match ws.read() {
-            Ok(Message::Text(s)) => match realtime::parse_frame(&s) {
-                Ok(ev) => {
-                    let terminal = matches!(
-                        ev,
-                        TencentEvent::Error { .. } | TencentEvent::EndOfStream
-                    );
-                    if inbox_tx.send(SessionEvent::Frame(ev)).is_err() {
-                        return;
+            Ok(Message::Text(s)) => {
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] tencent text: {s}");
+                match realtime::parse_frame(&s) {
+                    Ok(ev) => {
+                        let terminal = matches!(
+                            ev,
+                            TencentEvent::Error { .. } | TencentEvent::EndOfStream
+                        );
+                        if inbox_tx.send(SessionEvent::Frame(ev)).is_err() {
+                            return;
+                        }
+                        if terminal {
+                            // 终态后服务端会主动关；不再循环以免读到 ConnectionClosed 噪音。
+                            let _ = ws.close(None);
+                            let _ = ws.flush();
+                            return;
+                        }
                     }
-                    if terminal {
-                        // 终态后服务端会主动关；不再循环以免读到 ConnectionClosed 噪音。
-                        let _ = ws.close(None);
-                        let _ = ws.flush();
-                        return;
+                    Err(e) => {
+                        let _ = inbox_tx.send(SessionEvent::DecodeError(e.to_string()));
                     }
                 }
-                Err(e) => {
-                    let _ = inbox_tx.send(SessionEvent::DecodeError(e.to_string()));
-                }
-            },
-            Ok(Message::Binary(_)) | Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {
-                // 腾讯实时 ASR 不会发 binary；Ping/Pong tungstenite 自动回。
+            }
+            Ok(Message::Binary(b)) => {
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] tencent binary {}B", b.len());
+            }
+            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {
+                log::trace!(target: WS_LOG_TARGET, "[ws-in] tencent ping/pong");
             }
             Ok(Message::Close(_)) | Ok(Message::Frame(_)) => {
-                // 服务端 close：不一定是错误（可能 Final 已经发过了）。
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] tencent close");
                 return;
             }
             Err(e) if is_would_block(&e) => {
                 thread::sleep(READ_POLL_INTERVAL);
             }
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                log::debug!(target: WS_LOG_TARGET, "[ws-in] tencent connection closed");
                 return;
             }
             Err(e) => {
+                log::warn!(target: WS_LOG_TARGET, "[ws-err] tencent {e}");
                 let _ = inbox_tx.send(SessionEvent::Network(e.to_string()));
                 return;
             }
