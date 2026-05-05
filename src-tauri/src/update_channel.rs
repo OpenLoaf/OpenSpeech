@@ -6,14 +6,15 @@ use tauri_plugin_updater::UpdaterExt;
 
 const CHANNEL_FILE: &str = "update-channel";
 
-// COS 国内分发（主）+ GitHub 兜底。Tauri updater 按数组顺序逐个尝试，第一个 200 命中即用，
-// 所以 COS 全挂时会回退到 GitHub Release，用户至少还能升级。
-const STABLE_COS: &str =
-    "https://openspeech-1329813561.cos.accelerate.myqcloud.com/latest.json";
+// 分发链路：上传单写 Cloudflare R2 一份；国内访问由腾讯云 CDN 回源 R2 加速。
+// 客户端按运行时 locale 在 CDN / R2 host 之间分流；任一域名挂掉都能回退另一个，最后兜底 GitHub。
+// Tauri updater 按数组顺序逐个尝试，第一个 200 命中即用。
+const STABLE_R2: &str = "https://openspeech-r2.hexems.com/latest.json";
+const STABLE_CDN: &str = "https://openspeech-cdn.hexems.com/latest.json";
 const STABLE_GITHUB: &str =
     "https://github.com/OpenLoaf/OpenSpeech/releases/latest/download/latest.json";
-const BETA_COS: &str =
-    "https://openspeech-1329813561.cos.accelerate.myqcloud.com/latest-beta.json";
+const BETA_R2: &str = "https://openspeech-r2.hexems.com/latest-beta.json";
+const BETA_CDN: &str = "https://openspeech-cdn.hexems.com/latest-beta.json";
 const BETA_GITHUB: &str =
     "https://github.com/OpenLoaf/OpenSpeech/releases/download/channel-beta/latest-beta.json";
 
@@ -44,10 +45,36 @@ fn write_channel<R: Runtime>(app: &AppHandle<R>, channel: &str) -> std::io::Resu
     fs::write(dir.join(CHANNEL_FILE), normalized)
 }
 
+// 简单按进程 locale 信号判定是否为简体中文用户。
+// 不准代价 = 走慢一档（海外用 CDN 也能 hit / CN 用 R2 也能 hit），不会"拿不到"。
+// 不引入时区/GeoIP 依赖：updater 这种轻量场景不值当。
+fn is_cn_runtime() -> bool {
+    for var in ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
+        if let Ok(v) = std::env::var(var) {
+            let lc = v.to_ascii_lowercase();
+            if lc.starts_with("zh_cn") || lc.starts_with("zh-cn") || lc.contains("hans") {
+                return true;
+            }
+            if lc.starts_with("zh_tw")
+                || lc.starts_with("zh-tw")
+                || lc.starts_with("zh_hk")
+                || lc.starts_with("zh-hk")
+                || lc.contains("hant")
+            {
+                return false;
+            }
+        }
+    }
+    false
+}
+
 fn endpoints_for(channel: &str) -> Vec<&'static str> {
-    match channel {
-        "beta" => vec![BETA_COS, BETA_GITHUB],
-        _ => vec![STABLE_COS, STABLE_GITHUB],
+    let cn = is_cn_runtime();
+    match (channel, cn) {
+        ("beta", true) => vec![BETA_CDN, BETA_R2, BETA_GITHUB],
+        ("beta", false) => vec![BETA_R2, BETA_CDN, BETA_GITHUB],
+        (_, true) => vec![STABLE_CDN, STABLE_R2, STABLE_GITHUB],
+        (_, false) => vec![STABLE_R2, STABLE_CDN, STABLE_GITHUB],
     }
 }
 

@@ -382,11 +382,15 @@ jobs:
       # （包括老版本 < 0.2.26，endpoint 写死 GitHub 的）从这一份 manifest 解析后下载安装包
       # 也走 COS。代价：COS 全挂时无自动 fallback——发版时手工 gh release upload --clobber
       # 一份 GitHub-url 版 manifest 顶替即可应急。
+      # manifest 里的 url 统一写 R2 自定义域名（海外口）；客户端 update_channel.rs 在国内
+      # 运行时按地区把 host 重写成 openspeech-cdn.hexems.com，所以这里写哪个 host 都行——
+      # 选 R2 海外是因为：(1) endpoints 顺序里它本来就在；(2) GitHub Release 上传一份
+      # 一致的 manifest 给老客户端兜底（老客户端不会 rewrite，直接按 url 下载，hit R2 海外）。
       - name: Generate latest.json
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
-          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
+          CDN_HOST: https://openspeech-r2.hexems.com
         run: |
           set -euo pipefail
           cd staging
@@ -472,14 +476,14 @@ jobs:
       # download.json 是给"非 Tauri updater 客户端"（官网下载页 / 第三方页面 / 移动端）用的清单。
       # 与 latest.json 的关键差异：url 字段指向**用户友好的安装包**（dmg / -setup.exe / AppImage），
       # 而不是 updater 拉的中间产物（.app.tar.gz / .AppImage signed by tauri）。
-      # 字段结构对齐 OpenLoaf 的 download.json：channel + updatedAt + desktop.{version, downloads,
-      # mirrors, ...}；去掉 web/server 字段（OpenSpeech 纯桌面应用），mirrors 只保留 cos + github
-      # （无 R2）。downloads.* 的主 url 走 COS，mirrors 同时列出 cos / github 供前端容灾切源。
+      # downloads.* 的主 url 走 R2 海外（与 latest.json 同步），mirrors 同时列出 cdn（国内 CDN
+      # 回源 R2）/ r2（海外 R2 直连）/ github（GitHub Release）三路给前端按地区/容灾切源。
       - name: Generate download.json
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
-          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
+          R2_HOST:  https://openspeech-r2.hexems.com
+          CDN_HOST: https://openspeech-cdn.hexems.com
           IS_BETA: ${{ steps.channel.outputs.is_beta }}
           REPO: ${{ github.repository }}
         run: |
@@ -509,22 +513,24 @@ jobs:
               continue
             fi
             size=$(stat -c %s "$staged")
-            cos_url="${CDN_HOST}/v${version}/${file}"
+            r2_url="${R2_HOST}/v${version}/${file}"
+            cdn_url="${CDN_HOST}/v${version}/${file}"
             gh_url="${gh_base}/${file}"
             downloads=$(jq -n --argjson d "$downloads" --arg key "$key" \
-              --arg ext "$ext" --arg url "$cos_url" --arg cos "$cos_url" \
+              --arg ext "$ext" --arg url "$r2_url" --arg cdn "$cdn_url" --arg r2 "$r2_url" \
               --arg gh "$gh_url" --argjson size "$size" \
-              '$d + {($key): {ext: $ext, url: $url, sha256: null, size: $size, mirrors: {cos: $cos, github: $gh}}}')
+              '$d + {($key): {ext: $ext, url: $url, sha256: null, size: $size, mirrors: {cdn: $cdn, r2: $r2, github: $gh}}}')
           done
           jq -n \
             --arg channel "$channel" \
             --arg updated_at "$updated_at" \
             --arg version "$version" \
             --argjson downloads "$downloads" \
+            --arg r2 "$R2_HOST" \
             --arg cdn "$CDN_HOST" \
             --arg gh_releases "https://github.com/${REPO}/releases" \
             --arg gh_release "https://github.com/${REPO}/releases/tag/${TAG}" \
-            --arg latest_url "${CDN_HOST}/latest.json" \
+            --arg latest_url "${R2_HOST}/latest.json" \
             '{
               channel: $channel,
               updatedAt: $updated_at,
@@ -536,7 +542,8 @@ jobs:
                 versionManifestUrl: $latest_url
               },
               mirrors: {
-                cos: $cdn,
+                cdn: $cdn,
+                r2: $r2,
                 github: $gh_releases
               }
             }' > "download-${channel}.json"
@@ -588,29 +595,81 @@ jobs:
           gh release edit channel-beta --repo "$REPO" \
             --notes "Latest beta-channel pointer · upstream tag: ${TAG} · updated $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-      # 同步发布产物到腾讯云 COS（国内分发）：
-      #   - cos://bucket/v<version>/OpenSpeech-...   按版本号归档（永不重复，长缓存安全）
-      #   - cos://bucket/latest.json                  Tauri updater stable 滚动指针（no-cache）
-      #   - cos://bucket/latest-beta.json             Tauri updater beta 滚动指针
-      #   - cos://bucket/download-stable.json         官网下载页 stable 清单（用户友好 dmg/exe/AppImage URL）
-      #   - cos://bucket/download-beta.json           官网下载页 beta 清单
-      #   - cos://bucket/download.json                聚合入口：stable 优先，beta 仅在还没 stable 时占位
-      # 失败不阻塞 GitHub Release（已经在前面 publish 了），只是丢失这次的 COS 镜像。
-      - name: Install coscli
-        # 上游产物文件名是 `coscli-vX.Y.Z-linux-amd64`（带版本号），不是 `coscli-linux-amd64`。
-        # 升级时同步改 URL 与文件名两处。
+      # ==========================================================================
+      # 上传产物到 Cloudflare R2（单一上传目标）
+      # 国内访问由腾讯云 CDN(openspeech-cdn.hexems.com) 回源 R2 自定义域(openspeech-r2.hexems.com)
+      # 客户端按地区分流：
+      #   - CN  → openspeech-cdn.hexems.com
+      #   - 海外 → openspeech-r2.hexems.com
+      #
+      # R2 路径布局（保持与历史 COS 一致，方便客户端逻辑无差别）：
+      #   - r2://openspeech/v<version>/OpenSpeech-...    按版本归档，长缓存安全
+      #   - r2://openspeech/latest.json                  Tauri updater stable 滚动指针（no-cache）
+      #   - r2://openspeech/latest-beta.json             Tauri updater beta 滚动指针
+      #   - r2://openspeech/download-stable.json         官网下载页 stable 清单
+      #   - r2://openspeech/download-beta.json           官网下载页 beta 清单
+      #   - r2://openspeech/download.json                聚合入口：stable 优先，beta 仅在还没 stable 时占位
+      # 失败不阻塞 GitHub Release（已经在前面 publish 了），只是丢失这次的 R2 镜像。
+      #
+      # 注意：R2_ENDPOINT 必须**不带 bucket 段**（仅 https://<account>.r2.cloudflarestorage.com）；
+      # 带 /openspeech 后缀会让 SDK 拼成 /openspeech/openspeech/... 直接 403。
+      - name: Upload artifacts to R2
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT }}
+          AWS_DEFAULT_REGION:    auto
+          R2_BUCKET:             ${{ secrets.R2_BUCKET }}
+          TAG: ${{ github.ref_name }}
+          IS_BETA: ${{ steps.channel.outputs.is_beta }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          aws s3 sync staging/ "s3://${R2_BUCKET}/v${version}/" \
+            --no-progress --only-show-errors
+
+          # 滚动指针 manifest 必须 no-cache，否则 CDN 缓存会让用户拿不到新版本
+          aws s3 cp latest-beta.json   "s3://${R2_BUCKET}/latest-beta.json" \
+            --content-type application/json --cache-control "no-cache,max-age=0"
+          aws s3 cp download-beta.json "s3://${R2_BUCKET}/download-beta.json" \
+            --content-type application/json --cache-control "no-cache,max-age=0"
+
+          if [[ "$IS_BETA" != "true" ]]; then
+            aws s3 cp latest.json          "s3://${R2_BUCKET}/latest.json" \
+              --content-type application/json --cache-control "no-cache,max-age=0"
+            aws s3 cp download-stable.json "s3://${R2_BUCKET}/download-stable.json" \
+              --content-type application/json --cache-control "no-cache,max-age=0"
+            # stable 总是覆盖聚合入口
+            aws s3 cp download-stable.json "s3://${R2_BUCKET}/download.json" \
+              --content-type application/json --cache-control "no-cache,max-age=0"
+          else
+            # beta：仅当 R2 上还没 download-stable.json 时才让 beta 占位聚合入口
+            if aws s3api head-object --bucket "$R2_BUCKET" --key download-stable.json >/dev/null 2>&1; then
+              echo "download-stable.json already on R2, keeping it as aggregate entry"
+            else
+              echo "no stable yet, beta takes the aggregate slot"
+              aws s3 cp download-beta.json "s3://${R2_BUCKET}/download.json" \
+                --content-type application/json --cache-control "no-cache,max-age=0"
+            fi
+          fi
+          echo "Uploaded to R2: s3://${R2_BUCKET}/v${version}/"
+
+      # ==========================================================================
+      # 兼容老客户端：仅同步 manifest（latest.json / latest-beta.json）到旧 COS。
+      # 已发布的 ≤0.2.30-beta.2 客户端 endpoints 写死 cos.accelerate.myqcloud.com，
+      # 必须保留这两个文件让它们能升级；二进制大文件不再镜像 COS——manifest 里的 url
+      # 已指向 R2 海外域名，老客户端按 url 直接下载到 R2（国内会慢但能拿到）。
+      # 老客户端基本升级完后（约 1~2 个月），可整段删除并清理 TENCENT_* secrets。
+      - name: Install coscli (legacy compat)
         run: |
           curl -fsSL "https://github.com/tencentyun/coscli/releases/download/v1.0.8/coscli-v1.0.8-linux-amd64" -o /tmp/coscli
           chmod +x /tmp/coscli
           sudo mv /tmp/coscli /usr/local/bin/coscli
           coscli --version
 
-      - name: Configure coscli
-        # GitHub runner 在境外，走默认 region endpoint 上传到国内 COS 极慢（v0.2.26-beta.2 跑超
-        # 17 分钟仍卡）。改走全球加速 endpoint：bucket 加 endpoint=cos.accelerate.myqcloud.com，
-        # coscli 会拼成 <bucket>.cos.accelerate.myqcloud.com，大幅缩短上传时间。
+      - name: Configure coscli (legacy compat)
         env:
-          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_ID:  ${{ secrets.TENCENT_SECRET_ID }}
           TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
           TENCENT_COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
           TENCENT_COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
@@ -629,45 +688,15 @@ jobs:
                 endpoint: cos.accelerate.myqcloud.com
           EOF
 
-      - name: Upload artifacts to COS
-        # --routines 16 把单步骤内的并发从默认 3 提高到 16，配合全球加速 endpoint 把跨境上传
-        # 压到几分钟内。manifest 内容跟 GitHub Release 上的同名 latest.json/-beta.json/download-*.json
-        # 完全一致（都是 COS-url 版），COS 这边只是镜像，方便新版本走 COS endpoint 直接拉。
-        #
-        # download.json 聚合入口的策略与 OpenLoaf 对齐：
-        #   - stable 发版 → 直接覆盖 cos://openspeech/download.json
-        #   - beta   发版 → 仅在 cos 上还没有 download-stable.json 时才占位写 download.json
-        #     （已发过 stable 之后再发 beta，官网首页的下载链接不会被 beta 拉回）
+      - name: Mirror manifests to COS (legacy clients)
         env:
-          TAG: ${{ github.ref_name }}
           IS_BETA: ${{ steps.channel.outputs.is_beta }}
-          CDN_HOST: ${{ secrets.OPENSPEECH_CDN_HOST }}
         run: |
           set -euo pipefail
-          version="${TAG#v}"
-          coscli sync staging/ cos://openspeech/v${version}/ --recursive --routines 16
           coscli cp latest-beta.json cos://openspeech/latest-beta.json \
-            --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
-          coscli cp download-beta.json cos://openspeech/download-beta.json \
             --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
           if [[ "$IS_BETA" != "true" ]]; then
             coscli cp latest.json cos://openspeech/latest.json \
               --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
-            coscli cp download-stable.json cos://openspeech/download-stable.json \
-              --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
-            # stable 总是覆盖聚合入口
-            coscli cp download-stable.json cos://openspeech/download.json \
-              --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
-          else
-            # beta：先 HEAD 探测 cos 上 download-stable.json 是否存在；不存在才把当前 beta 占位
-            # 给聚合入口。CDN_HOST 缺省时用默认加速域名兜底（与 latest.json step 同口径）。
-            probe_host="${CDN_HOST:-https://openspeech-1329813561.cos.accelerate.myqcloud.com}"
-            if curl -fsSI "${probe_host}/download-stable.json" >/dev/null 2>&1; then
-              echo "download-stable.json already on COS, keeping it as aggregate entry"
-            else
-              echo "no stable yet, beta takes the aggregate slot"
-              coscli cp download-beta.json cos://openspeech/download.json \
-                --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
-            fi
           fi
-          echo "Uploaded to COS: cos://openspeech/v${version}/"
+          echo "Mirrored manifests to COS for legacy ≤0.2.30-beta.2 clients"
