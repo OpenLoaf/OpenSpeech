@@ -87,6 +87,10 @@ const VAD_VOICE_HANG_MS: u64 = 200;
 const TRIM_PAD_MS: u32 = 300;
 // 裁剪后真正的语音时长低于该阈值视作"整段无人声"，前端跳过 ASR 与历史。
 const TRIM_MIN_VOICED_MS: u32 = 200;
+// webrtc-vad 在 Aggressive 模式仍会把"低能 babble / HVAC 嗡嗡声"判成 voice。
+// 叠一层每帧 RMS 能量门：≈ -40 dBFS（线性 0.01），实测真实语音哪怕轻声也在 -25 dBFS 以上，
+// 不影响真人声但能把 -41 dB 峰值的"录音环境底噪"案例稳稳挡掉。
+const VAD_FRAME_MIN_RMS: f32 = 0.01;
 // OGG Vorbis 输出：采样率 / 声道跟随采集配置，不做 resample / 下混——这两步
 // 留给 STT 集成阶段（大多数 STT 服务上传前自己会做）。
 // 质量取 0.4（≈ 96 kbps mono），人声完全够用且文件 ~1/10 WAV 大小。
@@ -546,13 +550,25 @@ fn analyze_recording_trim(
     for i in 0..frame_count {
         let start = i * VAD_FRAME_SAMPLES;
         let frame = &pcm_i16[start..start + VAD_FRAME_SAMPLES];
-        if matches!(vad.is_voice_segment(frame), Ok(true)) {
-            voiced_count += 1;
-            if first_voice.is_none() {
-                first_voice = Some(i);
-            }
-            last_voice = Some(i);
+        let is_voice = matches!(vad.is_voice_segment(frame), Ok(true));
+        if !is_voice {
+            continue;
         }
+        // 二级能量门：webrtc-vad 在低能噪声上会假阳，叠一层 RMS 阈值兜底。
+        let mono_frame = &mono_16k[start..start + VAD_FRAME_SAMPLES];
+        let mut sumsq = 0.0f64;
+        for s in mono_frame {
+            sumsq += (*s as f64) * (*s as f64);
+        }
+        let rms = (sumsq / mono_frame.len() as f64).sqrt() as f32;
+        if rms < VAD_FRAME_MIN_RMS {
+            continue;
+        }
+        voiced_count += 1;
+        if first_voice.is_none() {
+            first_voice = Some(i);
+        }
+        last_voice = Some(i);
     }
 
     let voiced_ms = (voiced_count as u32) * 30;
