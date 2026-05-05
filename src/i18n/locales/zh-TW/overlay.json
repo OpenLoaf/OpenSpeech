@@ -69,6 +69,20 @@
       "description": "請登入後再使用語音輸入",
       "action": "登入"
     },
+    "dictation_fallback": {
+      "title": "已切換為 OpenLoaf SaaS",
+      "description": "自訂供應商尚未設定，本次轉寫已改用雲端服務"
+    },
+    "ai_refine_auto_fallback": {
+      "title": "AI 改寫已切換為 OpenLoaf SaaS",
+      "description": "自訂 AI 供應商尚未設定完成，已改用雲端服務"
+    },
+    "ai_refine_custom_failed": {
+      "title": "AI 改寫失敗（自訂供應商）",
+      "description_missing_key": "找不到自訂供應商的 ApiKey，可點擊按鈕切回雲端服務",
+      "description_runtime": "自訂供應商無法存取：{{error}}\n可點擊按鈕切回雲端服務",
+      "action": "切換為 SaaS"
+    },
     "asr_error": {
       "title": "轉寫異常",
       "unknown": "未知錯誤"

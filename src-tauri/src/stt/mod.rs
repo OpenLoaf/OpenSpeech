@@ -96,6 +96,8 @@ const EVENT_READY: &str = "openspeech://stt-ready";
 // dispatch 完成后立即广播本次会话最终落到了哪条通道。前端写 history 时直接
 // 拿 providerKind，不再凭 dictation 设置反推。
 const EVENT_PROVIDER_RESOLVED: &str = "openspeech://stt-provider-resolved";
+// 自定义 provider 没配齐时悄悄回退到 SaaS，前端弹一次性 toast 解释原因。
+const EVENT_DICTATION_FALLBACK: &str = "openspeech://dictation-fallback";
 
 /// send_finish 后等 Final 的最长时间。服务端典型 < 500ms，3s 能兜住抖动；
 /// 超时走空串，前端自行决定是否把 history 标 failed。
@@ -206,7 +208,7 @@ pub async fn stt_start<R: Runtime>(
 
     // BYOK 路由：custom 模式先在前置 dispatch，避开 SaaS 鉴权流程
     // （PR-4 / PR-6 实现 Custom 路径前直接返回 not_implemented）。
-    let provider_ref = provider.unwrap_or(ProviderRef {
+    let saas_default = || ProviderRef {
         mode: crate::asr::byok::ProviderMode::Saas,
         active_custom_provider_id: None,
         custom_provider_vendor: None,
@@ -214,11 +216,28 @@ pub async fn stt_start<R: Runtime>(
         tencent_region: None,
         tencent_cos_bucket: None,
         custom_provider_name: None,
-    });
-    let backend = dispatch(&provider_ref, DictationModality::Realtime).map_err(|e| {
-        log::warn!("[stt] backend dispatch failed: {e}");
-        e.code().to_string()
-    })?;
+    };
+    let provider_ref = provider.unwrap_or_else(saas_default);
+    let backend = match dispatch(&provider_ref, DictationModality::Realtime) {
+        Ok(b) => b,
+        Err(e) if e.should_fallback_to_saas() => {
+            log::warn!(
+                "[stt] backend dispatch fallback to SaaS: {e} (custom provider not configured)"
+            );
+            let _ = app.emit(
+                EVENT_DICTATION_FALLBACK,
+                serde_json::json!({ "reason": "provider_not_configured" }),
+            );
+            dispatch(&saas_default(), DictationModality::Realtime).map_err(|e2| {
+                log::warn!("[stt] saas fallback dispatch failed: {e2}");
+                e2.code().to_string()
+            })?
+        }
+        Err(e) => {
+            log::warn!("[stt] backend dispatch failed: {e}");
+            return Err(e.code().to_string());
+        }
+    };
     let resolved_kind = provider_kind_str(&backend);
     log::info!("[stt] dispatch → provider_kind={resolved_kind} mode={mode:?}");
     let _ = app.emit(EVENT_PROVIDER_RESOLVED, resolved_kind);

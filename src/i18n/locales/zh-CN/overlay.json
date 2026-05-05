@@ -69,6 +69,20 @@
       "description": "请登录后再使用语音输入",
       "action": "登录"
     },
+    "dictation_fallback": {
+      "title": "已切换到 OpenLoaf SaaS",
+      "description": "自定义供应商尚未配置，本次转写已自动改用云端服务"
+    },
+    "ai_refine_auto_fallback": {
+      "title": "AI 改写已切换到 OpenLoaf SaaS",
+      "description": "自定义 AI 供应商尚未配置完成，已自动改用云端服务"
+    },
+    "ai_refine_custom_failed": {
+      "title": "AI 改写失败（自定义供应商）",
+      "description_missing_key": "未找到自定义供应商的 ApiKey，可点击按钮切回云端服务",
+      "description_runtime": "自定义供应商无法访问：{{error}}\n可点击按钮切回云端服务",
+      "action": "切到 SaaS"
+    },
     "asr_error": {
       "title": "转写异常",
       "unknown": "未知错误"

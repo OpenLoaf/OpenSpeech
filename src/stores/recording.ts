@@ -33,6 +33,7 @@ import {
 import { buildProviderRef } from "@/lib/dictation-provider-ref";
 import { resolveDictationLang } from "@/lib/dictation-lang";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
+import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { newId } from "@/lib/ids";
@@ -798,11 +799,14 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           `[refine] stream failed after ${Math.round(performance.now() - refineStart)}ms, falling back to raw transcript:`,
           e,
         );
-        notifyOverlay(
-          "warning",
-          i18n.t("overlay:toast.transcribe_failed.title"),
-          { description: humanizeSttError(e) },
-        );
+        const handled = await handleAiRefineCustomFailure(e);
+        if (!handled) {
+          notifyOverlay(
+            "warning",
+            i18n.t("overlay:toast.transcribe_failed.title"),
+            { description: humanizeSttError(e) },
+          );
+        }
       }
     }
     // refine 一个 chunk 都没到就抛错（network / auth / 0 token） →
@@ -859,9 +863,15 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     } catch {}
     // 等 chain 排空后再确认一次：用户可能刚好在 await 期间双击 ESC 取消。
     if (!isInjectFlowActive()) {
+      console.log("[inject] tail skipped: flow no longer active (esc / cancel)");
       resetIncrementalInject();
       return { rec, text: finalText };
     }
+    console.log("[inject] tail enter", {
+      finalLen: finalText.length,
+      injectedLen: lastInjectedText.length,
+      prefixMatch: finalText.startsWith(lastInjectedText),
+    });
     if (finalText.startsWith(lastInjectedText)) {
       const remaining = finalText.slice(lastInjectedText.length);
       if (remaining) {
@@ -869,36 +879,52 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         // 上面 L446-450 已经把整段 refinedText 写过一次剪贴板供用户手动复用，
         // 这里 remaining 不需要再走剪贴板。
         try {
+          console.log("[inject] tail → type", { remaining: remaining.length });
           await invoke("inject_type", { text: remaining });
+          console.log("[inject] tail type ok");
         } catch (e) {
-          console.warn("[inject] type tail failed, fallback to paste:", e);
+          console.warn("[inject] tail type failed, fallback to paste:", e);
           // type 失败时降级到剪贴板路径，保证文字最终落得到。
           try {
             await writeClipboard(remaining);
             await invoke("inject_paste");
+            console.log("[inject] tail paste fallback ok");
           } catch (e2) {
-            console.warn("[inject] paste fallback also failed:", e2);
+            console.error("[inject] tail paste fallback also failed:", e2);
             notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
               description: i18n.t("overlay:toast.paste_failed.description"),
             });
           }
         }
+      } else {
+        console.log("[inject] tail no-op: remaining is empty (stream covered all)");
       }
     } else {
+      // 前缀对不上一般是 refine 流式抛错后 finalText 退回原始 transcript，与已敲下
+      // 的 refined 不一致。直接续敲会拼成"半 refined 半 raw"——不安全。退而求
+      // 其次：把整段 finalText 写剪贴板，让用户手动 Ctrl/Cmd+V。
       console.warn(
-        "[stt] finalText prefix mismatch with injected text → fallback to clipboard-only",
-        { injected: lastInjectedText.length, final: finalText.length },
+        "[inject] tail prefix mismatch → clipboard-only fallback",
+        {
+          finalLen: finalText.length,
+          injectedLen: lastInjectedText.length,
+          finalHead: finalText.slice(0, 24),
+          injectedHead: lastInjectedText.slice(0, 24),
+        },
       );
       try {
         await writeClipboard(finalText);
+        console.log("[inject] clipboard-only write ok");
       } catch (e) {
-        console.warn("[clipboard] writeText failed:", e);
+        console.error("[clipboard] writeText failed:", e);
       }
       notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
         description: i18n.t("overlay:toast.paste_failed.description"),
       });
     }
     resetIncrementalInject();
+  } else if (!finalText) {
+    console.log("[inject] tail skipped: empty finalText");
   }
   return { rec, text: finalText };
 };
@@ -944,7 +970,13 @@ const injectIncremental = (fullText: string) => {
     try {
       await invoke("inject_type", { text: delta });
     } catch (e) {
-      console.warn("[stt] incremental inject failed:", e);
+      // 把累计 + 当次 delta 一起带上，事后看日志能立刻判断是"中途某个 delta
+      // 失败"还是"从头到尾就没敲进去"——后者通常是 enigo 静默失败的伴随信号。
+      console.warn("[inject] incremental type failed", {
+        deltaLen: delta.length,
+        cumulativeLen: lastInjectedText.length,
+        err: String(e),
+      });
     }
   });
 };
@@ -1386,17 +1418,19 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           playStartCue();
 
           // Gate：转写后端必须至少一条可用，否则录了一段没人转的废录音是浪费。
-          // 当前只剩 SAAS 路径：已登录 OpenLoaf 即可（custom 直连通道也复用同一登录态）。
+          // saas 路径：已登录 OpenLoaf；custom 路径：BYOK 自带凭证，跳过登录 gate。
           // 主窗 / overlay 都会跑到这里：overlay 没 init auth/settings，默认值
           // 也会判 blocked → return；openLogin 在 overlay 里写自己 store 没渲染 dialog，
           // 等价于 no-op，主窗弹窗由主窗 store 驱动。
+          const dictationModeAtGate = useSettingsStore.getState().dictation.mode;
+          const usingCustomDictation = dictationModeAtGate === "custom";
           let auth = useAuthStore.getState();
           let saasReady = auth.isAuthenticated;
           // 未登录但 keychain 里可能还有 refresh_token（启动时网络断或本地后端
           // 没起导致 bootstrap 没恢复成功）——把"按下快捷键"当作主动重试信号，
           // 静默尝试用 refresh_token 换一次 access_token。1.5s 超时兜底，避免
           // 服务器很慢时让用户感觉"按了没反应"；超时后走原弹登录 dialog 路径。
-          if (!saasReady) {
+          if (!saasReady && !usingCustomDictation) {
             const recovered = await Promise.race([
               invoke<boolean>("openloaf_try_recover").catch(() => false),
               new Promise<boolean>((r) => setTimeout(() => r(false), 1500)),
@@ -1406,7 +1440,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               saasReady = auth.isAuthenticated;
             }
           }
-          if (!saasReady) {
+          if (!saasReady && !usingCustomDictation) {
             console.log("[recording] gate blocked: no STT backend available");
             // 只有主窗"完全藏起来"（hide 到 tray / 最小化）时才推悬浮条 toast——
             // 此时用户多半在别的 app 里输入，强行拉前台打扰。其余只要主窗 visible
@@ -1449,19 +1483,16 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           //      preparing/recording 阶段则 cancel + 弹窗。
           // 与登录 gate 一样，overlay 也会跑到这里——openNoInternet 写自己 store
           // 不渲染 dialog 等价 no-op，主窗 dialog 由主窗 ui store 驱动。
-          const usingSaas = saasReady;
-          if (
-            usingSaas &&
-            typeof navigator !== "undefined" &&
-            navigator.onLine === false
-          ) {
-            console.warn("[recording] gate blocked: offline (SAAS path) — silent");
+          // 离线 gate 不分 saas / custom：腾讯 / 阿里 BYOK 同样走云端 ASR，离线一样
+          // 必然失败，先拦住避免空跑。
+          if (typeof navigator !== "undefined" && navigator.onLine === false) {
+            console.warn("[recording] gate blocked: offline — silent");
             return;
           }
           // custom 听写通道直连 vendor，不经过 SaaS — 跳过 health probe，避免无意义网络开销。
-          const dictationMode = useSettingsStore.getState().dictation.mode;
+          const usingSaasDictation = !usingCustomDictation && saasReady;
           // 异步健康探针——只在主窗执行（IS_MAIN_WINDOW）以避免重复 invoke。
-          if (usingSaas && dictationMode !== "custom" && IS_MAIN_WINDOW) {
+          if (usingSaasDictation && IS_MAIN_WINDOW) {
             invoke<boolean>("openloaf_health_check")
               .then((healthy) => {
                 if (healthy) return;
@@ -1765,6 +1796,19 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
+      // Rust dispatch 发现 mode=custom 但 active provider 没配齐时，会自动走 SaaS
+      // 并把这条事件发出来——前端只需要弹一次 toast 解释为什么"明明选了自定义却走了云端"。
+      const u7f = await listen<{ reason?: string }>(
+        "openspeech://dictation-fallback",
+        () => {
+          notifyOverlay(
+            "warning",
+            i18n.t("overlay:toast.dictation_fallback.title"),
+            { description: i18n.t("overlay:toast.dictation_fallback.description") },
+          );
+        },
+      );
+
       // Esc 取消——走 Rust modifier_only 的预览通道（`openspeech://key-preview`），
       // 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc）。状态门控：录音 /
       // 转写 / 注入全流程都响应，仅 idle 忽略。注入态生效要点：AI refine 流式
@@ -1885,7 +1929,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u7r, u7p, u8, u9);
+      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u7r, u7p, u7f, u8, u9);
       console.log(
         "[recording] listeners attached (hotkey + register-failed + audio-level + asr-* + stream-error)",
       );
@@ -2119,11 +2163,14 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             handleAuthLost();
           } else {
             console.warn("[debug] refine failed:", e);
-            notifyOverlay(
-              "warning",
-              i18n.t("overlay:toast.transcribe_failed.title"),
-              { description: humanizeSttError(e) },
-            );
+            const handled = await handleAiRefineCustomFailure(e);
+            if (!handled) {
+              notifyOverlay(
+                "warning",
+                i18n.t("overlay:toast.transcribe_failed.title"),
+                { description: humanizeSttError(e) },
+              );
+            }
           }
         }
         // refine 0 chunk 抛错路径兜底：留在 transcribing 时补切 injecting，

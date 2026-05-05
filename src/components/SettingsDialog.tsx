@@ -1,4 +1,6 @@
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+import i18n from "@/i18n";
 import {
   Dialog,
   DialogContent,
@@ -8,6 +10,11 @@ import {
 } from "@/components/ui/dialog";
 import SettingsContent from "@/components/SettingsContent";
 import type { SettingsTabId } from "@/stores/ui";
+import {
+  useSettingsStore,
+  hasUnverifiedActiveDictation,
+  hasUnverifiedActiveAiRefine,
+} from "@/stores/settings";
 
 type Props = {
   open: boolean;
@@ -16,10 +23,46 @@ type Props = {
   initialTab?: SettingsTabId;
 };
 
+/// 关闭设置时的回退策略：用户切到了 custom 但没把 provider 测通过 → 直接把 mode
+/// 写回 saas，并 toast 告诉用户为什么。这条路径保证关闭后下次调用一定能跑：要么
+/// custom 确实测通了，要么自动回到云端。
+async function rollbackUnverifiedToSaas() {
+  const state = useSettingsStore.getState();
+  let rolledBack: ("dictation" | "ai")[] = [];
+
+  if (hasUnverifiedActiveDictation(state.dictation)) {
+    await state.setDictationMode("saas");
+    rolledBack.push("dictation");
+  }
+  if (hasUnverifiedActiveAiRefine(state.aiRefine)) {
+    await state.setAiRefineMode("saas");
+    rolledBack.push("ai");
+  }
+
+  if (rolledBack.length > 0) {
+    const which =
+      rolledBack.length === 2
+        ? i18n.t("settings:provider_rollback.both")
+        : rolledBack[0] === "dictation"
+          ? i18n.t("settings:provider_rollback.dictation")
+          : i18n.t("settings:provider_rollback.ai");
+    toast.warning(i18n.t("settings:provider_rollback.title"), {
+      description: i18n.t("settings:provider_rollback.description", { which }),
+    });
+  }
+}
+
 export function SettingsDialog({ open, onOpenChange, initialTab = "GENERAL" }: Props) {
   const { t } = useTranslation("settings");
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      // fire-and-forget：toast 用 i18n 当场拿，不阻塞 dialog 关闭。
+      void rollbackUnverifiedToSaas();
+    }
+    onOpenChange(next);
+  };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className="flex h-[82vh] w-[92vw] max-w-6xl flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 sm:max-w-6xl"
       >

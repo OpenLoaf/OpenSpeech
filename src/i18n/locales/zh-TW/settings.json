@@ -6,6 +6,13 @@
     "dialog_title": "設定",
     "dialog_sr": "OpenSpeech 設定"
   },
+  "provider_rollback": {
+    "title": "已回退至 OpenLoaf SaaS",
+    "description": "{{which}}的自訂供應商未通過測試，已切換為雲端服務",
+    "dictation": "聽寫",
+    "ai": "AI 改寫",
+    "both": "聽寫與 AI 改寫"
+  },
   "tabs": {
     "general": "一般",
     "hotkeys": "快速鍵",
@@ -191,6 +198,8 @@
     "test_pass": "測試通過：憑證有效",
     "test_fail": "測試失敗：{{message}}",
     "test_missing_fields": "必填欄位未填",
+    "verified_badge": "已驗證",
+    "unverified_badge": "未驗證",
     "test_code": {
       "ok": "測試通過",
       "unauthenticated": "驗證失敗：請檢查 Secret/ApiKey 是否正確",

@@ -94,6 +94,9 @@ export interface AiCustomProvider {
   name: string;
   baseUrl: string;
   model: string;
+  /// 最近一次"测试"是否通过；任意字段或 ApiKey 变更后重置为 false。
+  /// 关闭设置页时凭这个字段决定是否回退到 saas。
+  verified?: boolean;
 }
 
 export interface AiRefineSettings {
@@ -151,6 +154,9 @@ export interface DictationCustomProvider {
   /// 腾讯云 COS bucket 名（含 appid 后缀，如 myaudio-1234567890）。留空 = 走 base64
   /// 上传，单文件 ≤5MB；填了 = 上传到 COS 解除限制，单文件 ≤512MB。
   tencentCosBucket?: string;
+  /// 最近一次 testDictationProvider 是否通过；任意字段或凭证变更后重置为 false。
+  /// 关闭设置页时凭这个字段判断是否拦截。老数据缺这个字段 = 未验证。
+  verified?: boolean;
 }
 
 export interface DictationSettings {
@@ -224,6 +230,7 @@ interface SettingsState {
   updateAiProvider: (id: string, patch: Partial<Omit<AiCustomProvider, "id">>) => Promise<void>;
   removeAiProvider: (id: string) => Promise<void>;
   setActiveAiProvider: (id: string | null) => Promise<void>;
+  setAiProviderVerified: (id: string, verified: boolean) => Promise<void>;
   setAiSystemPrompt: (value: string | null) => Promise<void>;
   setAiTranslationSystemPrompt: (value: string | null) => Promise<void>;
   setAiPolishSystemPrompt: (value: string | null) => Promise<void>;
@@ -238,6 +245,7 @@ interface SettingsState {
   ) => Promise<void>;
   removeDictationProvider: (id: string) => Promise<void>;
   setActiveDictationProvider: (id: string | null) => Promise<void>;
+  setDictationProviderVerified: (id: string, verified: boolean) => Promise<void>;
 }
 
 let storePromise: Promise<Store> | null = null;
@@ -344,10 +352,12 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
   }
   const r = raw as Partial<AiRefineSettings> & { systemPrompts?: unknown };
   const providers = Array.isArray(r.customProviders)
-    ? r.customProviders.filter(
-        (p): p is AiCustomProvider =>
-          !!p && typeof p === "object" && typeof p.id === "string",
-      )
+    ? r.customProviders
+        .filter(
+          (p): p is AiCustomProvider =>
+            !!p && typeof p === "object" && typeof p.id === "string",
+        )
+        .map((p) => ({ ...p, verified: p.verified === true }))
     : [];
   const active =
     typeof r.activeCustomProviderId === "string" &&
@@ -410,9 +420,14 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
     customPolishScenarios = null;
   }
 
+  // mode=custom 但没可用 provider（列表空 / active 找不到）→ 直接回写 saas，
+  // 与 dictation 处的兜底对称：AI 改写本来就是可选叠加，没配齐就走默认云端而不是
+  // 让每次调用都"missing_custom_provider"再 fallback 一遍。
+  const mode: AiRefineMode =
+    r.mode === "custom" && active && providers.some((p) => p.id === active) ? "custom" : "saas";
   return {
     enabled,
-    mode: r.mode === "custom" ? "custom" : "saas",
+    mode,
     customProviders: providers,
     activeCustomProviderId: active,
     customSystemPrompt,
@@ -450,13 +465,15 @@ function mergeDictation(raw: unknown, langOverride?: DictationLang): DictationSe
   }
   const r = raw as Partial<DictationSettings> & { lang?: unknown };
   const providers = Array.isArray(r.customProviders)
-    ? r.customProviders.filter(
-        (p): p is DictationCustomProvider =>
-          !!p &&
-          typeof p === "object" &&
-          typeof p.id === "string" &&
-          (p.vendor === "tencent" || p.vendor === "aliyun"),
-      )
+    ? r.customProviders
+        .filter(
+          (p): p is DictationCustomProvider =>
+            !!p &&
+            typeof p === "object" &&
+            typeof p.id === "string" &&
+            (p.vendor === "tencent" || p.vendor === "aliyun"),
+        )
+        .map((p) => ({ ...p, verified: p.verified === true }))
     : [];
   const active =
     typeof r.activeCustomProviderId === "string" &&
@@ -464,8 +481,13 @@ function mergeDictation(raw: unknown, langOverride?: DictationLang): DictationSe
       ? r.activeCustomProviderId
       : providers[0]?.id ?? null;
   const lang = langOverride ?? normalizeDictationLang(r.lang);
+  // mode=custom 但根本没有可用的自定义 provider（列表空 / active id 也无对应项）：
+  // 这是无法 dispatch 成功的"空 custom 模式"，在这里就回写成 saas，避免后续每次按
+  // 录音键都触发后端 byok_provider_not_configured fallback + toast 骚扰。
+  const mode: DictationProviderMode =
+    r.mode === "custom" && active && providers.some((p) => p.id === active) ? "custom" : "saas";
   return {
-    mode: r.mode === "custom" ? "custom" : "saas",
+    mode,
     customProviders: providers,
     activeCustomProviderId: active,
     lang,
@@ -652,7 +674,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     addAiProvider: async (provider) => {
       const cur = get().aiRefine;
       if (cur.customProviders.some((p) => p.id === provider.id)) return;
-      const customProviders = [...cur.customProviders, provider];
+      const customProviders = [...cur.customProviders, { ...provider, verified: false }];
       const activeCustomProviderId = cur.activeCustomProviderId ?? provider.id;
       const next = { ...cur, customProviders, activeCustomProviderId };
       set({ aiRefine: next });
@@ -661,8 +683,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     updateAiProvider: async (id, patch) => {
       const cur = get().aiRefine;
+      // baseUrl / model 改了就要重新测试；改名不影响调用，不清 verified。
+      const affectsDispatch = "baseUrl" in patch || "model" in patch;
       const customProviders = cur.customProviders.map((p) =>
-        p.id === id ? { ...p, ...patch } : p,
+        p.id === id ? { ...p, ...patch, ...(affectsDispatch ? { verified: false } : {}) } : p,
       );
       const next = { ...cur, customProviders };
       set({ aiRefine: next });
@@ -691,6 +715,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const exists = id === null || cur.customProviders.some((p) => p.id === id);
       if (!exists) return;
       const next = { ...cur, activeCustomProviderId: id };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setAiProviderVerified: async (id, verified) => {
+      const cur = get().aiRefine;
+      const customProviders = cur.customProviders.map((p) =>
+        p.id === id ? { ...p, verified } : p,
+      );
+      const next = { ...cur, customProviders };
       set({ aiRefine: next });
       await persist({ aiRefine: next });
     },
@@ -745,7 +779,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     addDictationProvider: async (provider) => {
       const cur = get().dictation;
       if (cur.customProviders.some((p) => p.id === provider.id)) return;
-      const customProviders = [...cur.customProviders, provider];
+      const customProviders = [...cur.customProviders, { ...provider, verified: false }];
       const activeCustomProviderId = cur.activeCustomProviderId ?? provider.id;
       const next = { ...cur, customProviders, activeCustomProviderId };
       set({ dictation: next });
@@ -754,8 +788,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     updateDictationProvider: async (id, patch) => {
       const cur = get().dictation;
+      // 改名不影响 dispatch / 测试结果，不清 verified；其它影响实际请求的字段一旦改动
+      // 就把 verified 重置成 false，强制用户重新测试。
+      const affectsDispatch =
+        "vendor" in patch ||
+        "tencentAppId" in patch ||
+        "tencentRegion" in patch ||
+        "tencentCosBucket" in patch;
       const customProviders = cur.customProviders.map((p) =>
-        p.id === id ? { ...p, ...patch } : p,
+        p.id === id ? { ...p, ...patch, ...(affectsDispatch ? { verified: false } : {}) } : p,
       );
       const next = { ...cur, customProviders };
       set({ dictation: next });
@@ -787,5 +828,32 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       set({ dictation: next });
       await persist({ dictation: next });
     },
+
+    setDictationProviderVerified: async (id, verified) => {
+      const cur = get().dictation;
+      const customProviders = cur.customProviders.map((p) =>
+        p.id === id ? { ...p, verified } : p,
+      );
+      const next = { ...cur, customProviders };
+      set({ dictation: next });
+      await persist({ dictation: next });
+    },
   };
 });
+
+/// 关闭设置页时的回退判据：mode=custom 且 active provider 未通过测试。
+/// 调用方据此把 mode 写回 saas，并弹一条通知告诉用户为什么。
+export function hasUnverifiedActiveDictation(d: DictationSettings): boolean {
+  if (d.mode !== "custom") return false;
+  if (!d.activeCustomProviderId) return false;
+  const active = d.customProviders.find((p) => p.id === d.activeCustomProviderId);
+  return !!active && active.verified !== true;
+}
+
+/// AI refine 这边的同款判据。
+export function hasUnverifiedActiveAiRefine(a: AiRefineSettings): boolean {
+  if (a.mode !== "custom") return false;
+  if (!a.activeCustomProviderId) return false;
+  const active = a.customProviders.find((p) => p.id === a.activeCustomProviderId);
+  return !!active && active.verified !== true;
+}

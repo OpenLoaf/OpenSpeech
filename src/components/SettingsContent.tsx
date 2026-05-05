@@ -681,14 +681,14 @@ function DictationTab() {
           onChange={(v) => void setGeneral("asrSegmentMode", v)}
           options={[
             {
-              value: "REALTIME",
-              label: t("asr_segment.realtime_label"),
-              hint: t("asr_segment.realtime_hint"),
-            },
-            {
               value: "UTTERANCE",
               label: t("asr_segment.utterance_label"),
               hint: t("asr_segment.utterance_hint"),
+            },
+            {
+              value: "REALTIME",
+              label: t("asr_segment.realtime_label"),
+              hint: t("asr_segment.realtime_hint"),
             },
           ]}
         />
@@ -1145,13 +1145,14 @@ function AiProviderCard({
   onRemove,
   onSetActive,
 }: {
-  provider: { id: string; name: string; baseUrl: string; model: string };
+  provider: { id: string; name: string; baseUrl: string; model: string; verified?: boolean };
   isActive: boolean;
   onUpdate: (patch: Partial<{ name: string; baseUrl: string; model: string }>) => void;
   onRemove: () => void;
   onSetActive: () => void;
 }) {
   const { t } = useTranslation("settings");
+  const setAiProviderVerified = useSettingsStore((s) => s.setAiProviderVerified);
   const [apiKey, setApiKey] = useState<string>("");
   const [keyDirty, setKeyDirty] = useState(false);
 
@@ -1175,6 +1176,10 @@ function AiProviderCard({
     try {
       await saveAiProviderKey(provider.id, apiKey);
       setKeyDirty(false);
+      // ApiKey 改了，之前的 verified 不再可信。
+      if (provider.verified) {
+        await setAiProviderVerified(provider.id, false);
+      }
     } catch (e) {
       console.warn("[ai-refine] save api key failed:", e);
     }
@@ -1190,6 +1195,7 @@ function AiProviderCard({
       const model = (provider.model ?? "").trim();
       if (!baseUrl || !model) {
         toast.error(t("ai.provider_test_fail", { message: t("ai.provider_test_missing_fields") }));
+        if (provider.verified) await setAiProviderVerified(provider.id, false);
         return;
       }
       let acc = "";
@@ -1211,12 +1217,15 @@ function AiProviderCard({
       void logInfo(`[ai-refine][test] provider=${provider.id} reply=${JSON.stringify(reply)}`);
       if (reply.length === 0) {
         toast.error(t("ai.provider_test_fail", { message: t("ai.provider_test_empty_reply") }));
+        if (provider.verified) await setAiProviderVerified(provider.id, false);
         return;
       }
       toast.success(t("ai.provider_test_pass"));
+      await setAiProviderVerified(provider.id, true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(t("ai.provider_test_fail", { message: msg }));
+      if (provider.verified) await setAiProviderVerified(provider.id, false);
     } finally {
       setTesting(false);
     }
@@ -1234,6 +1243,18 @@ function AiProviderCard({
           <span className={cn("size-2", isActive ? "bg-te-accent" : "bg-te-gray")} />
           <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
             {isActive ? t("ai.provider_active") : provider.id.slice(0, 8)}
+          </span>
+          <span
+            className={cn(
+              "border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em]",
+              provider.verified
+                ? "border-te-accent/60 text-te-accent"
+                : "border-amber-500/60 text-amber-500",
+            )}
+          >
+            {provider.verified
+              ? t("dictation_provider.verified_badge")
+              : t("dictation_provider.unverified_badge")}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -1322,6 +1343,9 @@ function DictationProviderCard({
   onSetActive: () => void;
 }) {
   const { t } = useTranslation("settings");
+  const setDictationProviderVerified = useSettingsStore(
+    (s) => s.setDictationProviderVerified,
+  );
   // 双字段（腾讯）/ 单字段（阿里）凭证统一存为 keyring 里的 JSON。
   const [aliApiKey, setAliApiKey] = useState<string>("");
   const [tencentSecretId, setTencentSecretId] = useState<string>("");
@@ -1361,6 +1385,10 @@ function DictationProviderCard({
             };
       await saveDictationProviderCredentials(provider.id, creds);
       setCredsDirty(false);
+      // 凭证一改，之前的 verified 不再可信——强制用户再点一次"测试"。
+      if (provider.verified) {
+        await setDictationProviderVerified(provider.id, false);
+      }
     } catch (e) {
       console.warn("[dictation] save credentials failed:", e);
     }
@@ -1410,16 +1438,23 @@ function DictationProviderCard({
       );
       if (result.ok) {
         toast.success(t("dictation_provider.test_pass"));
+        await setDictationProviderVerified(provider.id, true);
       } else {
         const reason =
           t(`dictation_provider.test_code.${result.code}`, {
             defaultValue: result.message,
           }) || result.message;
         toast.error(t("dictation_provider.test_fail", { message: reason }));
+        if (provider.verified) {
+          await setDictationProviderVerified(provider.id, false);
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(t("dictation_provider.test_fail", { message: msg }));
+      if (provider.verified) {
+        await setDictationProviderVerified(provider.id, false);
+      }
     } finally {
       setTesting(false);
     }
@@ -1446,6 +1481,18 @@ function DictationProviderCard({
             {isActive
               ? t("dictation_provider.active_label", { vendor: vendorLabel })
               : `${vendorLabel} · ${provider.id.slice(0, 8)}`}
+          </span>
+          <span
+            className={cn(
+              "border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em]",
+              provider.verified
+                ? "border-te-accent/60 text-te-accent"
+                : "border-amber-500/60 text-amber-500",
+            )}
+          >
+            {provider.verified
+              ? t("dictation_provider.verified_badge")
+              : t("dictation_provider.unverified_badge")}
           </span>
         </div>
         <div className="flex items-center gap-2">

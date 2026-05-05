@@ -6,6 +6,13 @@
     "dialog_title": "Settings",
     "dialog_sr": "OpenSpeech settings"
   },
+  "provider_rollback": {
+    "title": "Reverted to OpenLoaf SaaS",
+    "description": "Your {{which}} custom provider didn't pass the test — switched to the cloud service",
+    "dictation": "dictation",
+    "ai": "AI refine",
+    "both": "dictation and AI refine"
+  },
   "tabs": {
     "general": "General",
     "hotkeys": "Hotkeys",
@@ -191,6 +198,8 @@
     "test_pass": "Test passed: credentials are valid",
     "test_fail": "Test failed: {{message}}",
     "test_missing_fields": "Required fields are missing",
+    "verified_badge": "Verified",
+    "unverified_badge": "Unverified",
     "test_code": {
       "ok": "Test passed",
       "unauthenticated": "Authentication failed: check your Secret/ApiKey",

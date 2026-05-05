@@ -6,6 +6,7 @@ import { transcribeRecordingFile } from "@/lib/stt";
 import { buildProviderRef } from "@/lib/dictation-provider-ref";
 import { resolveDictationLang } from "@/lib/dictation-lang";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
+import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { useAuthStore } from "@/stores/auth";
 import {
@@ -430,6 +431,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
             throw new NotAuthenticatedError();
           }
           console.warn("[history] refine failed, keeping raw transcript:", e);
+          await handleAiRefineCustomFailure(e);
         }
       }
 

@@ -27,6 +27,7 @@ import {
 } from "@/stores/settings";
 import { resolveLang } from "@/i18n";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
+import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 
 type InputTab = "text" | "voice" | "history" | "file";
 type ToolKey = "polish" | "translate" | "tts";
@@ -417,6 +418,7 @@ function ToolBody({ tool, text, hasInput }: ToolBodyProps) {
         const result = await runChat(sysPrompt);
         setStatus({ kind: "done", result });
       } catch (e) {
+        await handleAiRefineCustomFailure(e);
         const msg = e instanceof Error ? e.message : String(e);
         setStatus({ kind: "error", message: msg });
       }
@@ -436,6 +438,7 @@ function ToolBody({ tool, text, hasInput }: ToolBodyProps) {
         const result = await runChat(sysPrompt);
         setStatus({ kind: "done", result });
       } catch (e) {
+        await handleAiRefineCustomFailure(e);
         const msg = e instanceof Error ? e.message : String(e);
         setStatus({ kind: "error", message: msg });
       }

@@ -6,6 +6,13 @@
     "dialog_title": "设置",
     "dialog_sr": "OpenSpeech 设置"
   },
+  "provider_rollback": {
+    "title": "已回退到 OpenLoaf SaaS",
+    "description": "{{which}}的自定义供应商未通过测试，已切换到云端服务",
+    "dictation": "听写",
+    "ai": "AI 改写",
+    "both": "听写与 AI 改写"
+  },
   "tabs": {
     "general": "通用",
     "hotkeys": "快捷键",
@@ -191,6 +198,8 @@
     "test_pass": "测试通过：凭证有效",
     "test_fail": "测试失败：{{message}}",
     "test_missing_fields": "必填字段未填",
+    "verified_badge": "已验证",
+    "unverified_badge": "未验证",
     "test_code": {
       "ok": "测试通过",
       "unauthenticated": "鉴权失败：请检查 Secret/ApiKey 是否正确",

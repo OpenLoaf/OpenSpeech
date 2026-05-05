@@ -111,6 +111,15 @@
     --te-dialog-bg: #fafafa;
     --te-dialog-border: #999999;
     --te-overlay: rgba(0, 0, 0, 0.6);
+
+    /* 旧 Safari (<16.2) 不支持 color-mix()，Tailwind v4 alpha 修饰符回退到不透明色，
+       会把 8% 高亮渲染成 100% 实色块。下面是分通道 fallback 用的 RGB 值。 */
+    --te-bg-rgb: 255 255 255;
+    --te-fg-rgb: 10 10 10;
+    --te-accent-rgb: 196 150 0;
+    --te-gray-rgb: 201 201 201;
+    --te-light-gray-rgb: 85 85 85;
+    --te-surface-rgb: 240 240 240;
 }
 
 .dark {
@@ -159,6 +168,13 @@
     --te-dialog-bg: #1a1a1a;
     --te-dialog-border: #5a5a5a;
     --te-overlay: rgba(0, 0, 0, 0.85);
+
+    --te-bg-rgb: 0 0 0;
+    --te-fg-rgb: 255 255 255;
+    --te-accent-rgb: 255 204 0;
+    --te-gray-rgb: 58 58 58;
+    --te-light-gray-rgb: 181 181 181;
+    --te-surface-rgb: 20 20 20;
 }
 
 @layer base {
@@ -251,6 +267,86 @@
     user-select: text;
     cursor: text;
   }
+}
+
+/* macOS 12 / Intel Mac 旧 WKWebView 的 Safari 15 不支持 color-mix()，Tailwind v4
+   会先输出 background-color: var(--te-accent) 作为 fallback，再输出 color-mix 版本；
+   旧 Safari 解析失败回退到第一条，半透明高亮直接被刷成 100% 不透明实色块（典型症状：
+   设置页 active 卡片整块发亮黄）。下面用 @supports not 显式枚举所有项目里在用的
+   te-* token × alpha 组合，rgb()/{N}% 在 Safari 15+ 都支持。 */
+@supports not (background: color-mix(in oklab, red 50%, transparent)) {
+  /* bg-te-accent */
+  .bg-te-accent\/5  { background-color: rgb(var(--te-accent-rgb) / 5%); }
+  .bg-te-accent\/8  { background-color: rgb(var(--te-accent-rgb) / 8%); }
+  .bg-te-accent\/10 { background-color: rgb(var(--te-accent-rgb) / 10%); }
+  .bg-te-accent\/15 { background-color: rgb(var(--te-accent-rgb) / 15%); }
+  .bg-te-accent\/30 { background-color: rgb(var(--te-accent-rgb) / 30%); }
+  .bg-te-accent\/70 { background-color: rgb(var(--te-accent-rgb) / 70%); }
+  .bg-te-accent\/85 { background-color: rgb(var(--te-accent-rgb) / 85%); }
+  .bg-te-accent\/90 { background-color: rgb(var(--te-accent-rgb) / 90%); }
+  .enabled\:hover\:bg-te-accent\/85:enabled:hover { background-color: rgb(var(--te-accent-rgb) / 85%); }
+
+  /* bg-te-bg */
+  .bg-te-bg\/30 { background-color: rgb(var(--te-bg-rgb) / 30%); }
+  .bg-te-bg\/40 { background-color: rgb(var(--te-bg-rgb) / 40%); }
+  .bg-te-bg\/60 { background-color: rgb(var(--te-bg-rgb) / 60%); }
+  .bg-te-bg\/80 { background-color: rgb(var(--te-bg-rgb) / 80%); }
+
+  /* bg-te-gray */
+  .bg-te-gray\/30 { background-color: rgb(var(--te-gray-rgb) / 30%); }
+  .bg-te-gray\/40 { background-color: rgb(var(--te-gray-rgb) / 40%); }
+  .bg-te-gray\/60 { background-color: rgb(var(--te-gray-rgb) / 60%); }
+
+  /* bg-te-light-gray */
+  .bg-te-light-gray\/25 { background-color: rgb(var(--te-light-gray-rgb) / 25%); }
+  .bg-te-light-gray\/50 { background-color: rgb(var(--te-light-gray-rgb) / 50%); }
+
+  /* bg-te-surface */
+  .bg-te-surface\/30 { background-color: rgb(var(--te-surface-rgb) / 30%); }
+  .bg-te-surface\/40 { background-color: rgb(var(--te-surface-rgb) / 40%); }
+  .bg-te-surface\/50 { background-color: rgb(var(--te-surface-rgb) / 50%); }
+  .bg-te-surface\/60 { background-color: rgb(var(--te-surface-rgb) / 60%); }
+
+  /* divide-te-* (子元素 border) */
+  .divide-te-gray\/20 > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--te-gray-rgb) / 20%); }
+  .divide-te-gray\/30 > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--te-gray-rgb) / 30%); }
+
+  /* border-te-* */
+  .border-te-accent\/30 { border-color: rgb(var(--te-accent-rgb) / 30%); }
+  .border-te-accent\/40 { border-color: rgb(var(--te-accent-rgb) / 40%); }
+  .border-te-accent\/50 { border-color: rgb(var(--te-accent-rgb) / 50%); }
+  .border-te-accent\/60 { border-color: rgb(var(--te-accent-rgb) / 60%); }
+  .border-te-accent\/70 { border-color: rgb(var(--te-accent-rgb) / 70%); }
+  .border-te-fg\/50     { border-color: rgb(var(--te-fg-rgb) / 50%); }
+  .border-te-gray\/20   { border-color: rgb(var(--te-gray-rgb) / 20%); }
+  .border-te-gray\/30   { border-color: rgb(var(--te-gray-rgb) / 30%); }
+  .border-te-gray\/40   { border-color: rgb(var(--te-gray-rgb) / 40%); }
+  .border-te-gray\/50   { border-color: rgb(var(--te-gray-rgb) / 50%); }
+  .border-te-gray\/60   { border-color: rgb(var(--te-gray-rgb) / 60%); }
+
+  /* ring-te-* (Tailwind v4 走 box-shadow，但兜底直接覆盖也无害) */
+  .ring-te-gray\/60 { --tw-ring-color: rgb(var(--te-gray-rgb) / 60%); }
+
+  /* text-te-* */
+  .text-te-accent\/70    { color: rgb(var(--te-accent-rgb) / 70%); }
+  .text-te-accent\/80    { color: rgb(var(--te-accent-rgb) / 80%); }
+  .text-te-accent\/90    { color: rgb(var(--te-accent-rgb) / 90%); }
+  .text-te-fg\/40        { color: rgb(var(--te-fg-rgb) / 40%); }
+  .text-te-fg\/70        { color: rgb(var(--te-fg-rgb) / 70%); }
+  .text-te-fg\/80        { color: rgb(var(--te-fg-rgb) / 80%); }
+  .text-te-fg\/85        { color: rgb(var(--te-fg-rgb) / 85%); }
+  .text-te-fg\/90        { color: rgb(var(--te-fg-rgb) / 90%); }
+  .text-te-light-gray\/40 { color: rgb(var(--te-light-gray-rgb) / 40%); }
+  .text-te-light-gray\/50 { color: rgb(var(--te-light-gray-rgb) / 50%); }
+  .text-te-light-gray\/55 { color: rgb(var(--te-light-gray-rgb) / 55%); }
+  .text-te-light-gray\/60 { color: rgb(var(--te-light-gray-rgb) / 60%); }
+  .text-te-light-gray\/65 { color: rgb(var(--te-light-gray-rgb) / 65%); }
+  .text-te-light-gray\/70 { color: rgb(var(--te-light-gray-rgb) / 70%); }
+  .text-te-light-gray\/80 { color: rgb(var(--te-light-gray-rgb) / 80%); }
+
+  /* gradient stops */
+  .to-te-accent\/80 { --tw-gradient-to: rgb(var(--te-accent-rgb) / 80%); }
+  .to-te-fg\/70     { --tw-gradient-to: rgb(var(--te-fg-rgb) / 70%); }
 }
 
 /* base-ui Dialog：overlay 与 popup 都只 fade opacity，不带任何 transform。

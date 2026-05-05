@@ -18,12 +18,15 @@ use openloaf_saas::v4_tools::{
 };
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::asr::byok::{
     DictationBackend, DictationModality, ERR_BYOK_NOT_IMPLEMENTED, ERR_TENCENT_COS_BUCKET_REQUIRED,
     ProviderMode, ProviderRef, dispatch, provider_kind_str,
 };
+
+/// 自定义 provider 没配齐时悄悄回退到 SaaS，前端弹一次性 toast 解释原因。
+const EVENT_DICTATION_FALLBACK: &str = "openspeech://dictation-fallback";
 use crate::asr::aliyun::file::{
     DashScopeClient, FileTransError, ReqwestDashScopeClient, TokioSleeper as AliyunSleeper,
     merge_transcripts_payload, poll_task_until_terminal,
@@ -137,10 +140,26 @@ pub async fn transcribe_recording_file<R: Runtime>(
     provider: Option<ProviderRef>,
 ) -> Result<TranscribeFileResult, String> {
     let provider_ref = provider.unwrap_or_else(default_saas_provider_ref);
-    let backend = dispatch(&provider_ref, DictationModality::File).map_err(|e| {
-        log::warn!("[transcribe] backend dispatch failed: {e}");
-        e.code().to_string()
-    })?;
+    let backend = match dispatch(&provider_ref, DictationModality::File) {
+        Ok(b) => b,
+        Err(e) if e.should_fallback_to_saas() => {
+            log::warn!(
+                "[transcribe] backend dispatch fallback to SaaS: {e} (custom provider not configured)"
+            );
+            let _ = app.emit(
+                EVENT_DICTATION_FALLBACK,
+                serde_json::json!({ "reason": "provider_not_configured" }),
+            );
+            dispatch(&default_saas_provider_ref(), DictationModality::File).map_err(|e2| {
+                log::warn!("[transcribe] saas fallback dispatch failed: {e2}");
+                e2.code().to_string()
+            })?
+        }
+        Err(e) => {
+            log::warn!("[transcribe] backend dispatch failed: {e}");
+            return Err(e.code().to_string());
+        }
+    };
 
     let kind = provider_kind_str(&backend).to_string();
     log::info!(

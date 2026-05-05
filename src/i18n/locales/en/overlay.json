@@ -69,6 +69,20 @@
       "description": "Sign in to use voice input",
       "action": "Sign in"
     },
+    "dictation_fallback": {
+      "title": "Switched to OpenLoaf SaaS",
+      "description": "Custom provider isn't configured — this run used the cloud service"
+    },
+    "ai_refine_auto_fallback": {
+      "title": "AI refine switched to OpenLoaf SaaS",
+      "description": "Custom AI provider isn't fully configured — switched to the cloud service"
+    },
+    "ai_refine_custom_failed": {
+      "title": "AI refine failed (custom provider)",
+      "description_missing_key": "ApiKey for the custom provider is missing — tap the button to fall back to the cloud service",
+      "description_runtime": "Custom provider unreachable: {{error}}\nTap the button to fall back to the cloud service",
+      "action": "Use SaaS"
+    },
     "asr_error": {
       "title": "Transcription error",
       "unknown": "Unknown error"
