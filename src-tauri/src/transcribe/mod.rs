@@ -314,6 +314,7 @@ async fn transcribe_tencent_file_via_cos(
         .await?;
     log::info!("[transcribe] tencent COS uploaded key={key} bucket={bucket} region={region_str}");
     let url = cos.presigned_get_url(&key, COS_PRESIGN_TTL_SECS)?;
+    log::debug!("[transcribe] tencent COS presigned url={url} ttl_secs={COS_PRESIGN_TTL_SECS}");
 
     let req = CreateRecTaskRequest::new_url(url).engine(tencent_engine_for(lang.as_deref()));
     let region_opt = Some(region_str);

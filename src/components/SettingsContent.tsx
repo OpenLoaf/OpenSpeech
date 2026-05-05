@@ -681,14 +681,14 @@ function DictationTab() {
           onChange={(v) => void setGeneral("asrSegmentMode", v)}
           options={[
             {
-              value: "UTTERANCE",
-              label: t("asr_segment.utterance_label"),
-              hint: t("asr_segment.utterance_hint"),
-            },
-            {
               value: "REALTIME",
               label: t("asr_segment.realtime_label"),
               hint: t("asr_segment.realtime_hint"),
+            },
+            {
+              value: "UTTERANCE",
+              label: t("asr_segment.utterance_label"),
+              hint: t("asr_segment.utterance_hint"),
             },
           ]}
         />

@@ -51,7 +51,6 @@ type FieldState =
   | { kind: "error"; message: string }
   | { kind: "conflict"; with: BindingId; candidate: HotkeyBinding };
 
-const SETTLING_MS = 150;
 const RECORDING_TIMEOUT_MS = 5000;
 
 export function HotkeyField({
@@ -101,22 +100,23 @@ export function HotkeyField({
     pressedModsRef.current = [];
     everPressedModsRef.current = [];
     sawMainKeyRef.current = false;
-    setState({ kind: "settling", until: Date.now() + SETTLING_MS });
-    window.setTimeout(() => {
-      setState({
-        kind: "recording",
-        startedAt: Date.now(),
-        pressedMods: [],
-        everPressedMods: [],
-        sawMainKey: false,
-      });
-      startRustRecording();
-      // 5 秒超时取消
-      timeoutRef.current = window.setTimeout(() => {
-        stopRustRecording();
-        setState({ kind: "idle" });
-      }, RECORDING_TIMEOUT_MS);
-    }, SETTLING_MS);
+    // 立刻启用 Rust 端 RECORDING_ACTIVE + 挂事件监听——必须早于 settling 结束。
+    // 不然用户为快速触发而提前按下的 Fn 等修饰键在 settling 期间会被 Rust 当作
+    // 普通按键事件吃掉，永远不进 frontend everPressedModsRef，松开时 modifier-only
+    // 候选拼不出来，UI 死等到 5s 超时（用户感知"卡住"）。
+    startRustRecording();
+    setState({
+      kind: "recording",
+      startedAt: Date.now(),
+      pressedMods: [],
+      everPressedMods: [],
+      sawMainKey: false,
+    });
+    // 5 秒超时取消
+    timeoutRef.current = window.setTimeout(() => {
+      stopRustRecording();
+      setState({ kind: "idle" });
+    }, RECORDING_TIMEOUT_MS);
   };
 
   const exitToIdle = () => {
