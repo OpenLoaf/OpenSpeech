@@ -88,6 +88,54 @@ RefineChatInput {
 
 **集成 example**：`src-tauri/examples/test_ai_refine_chat.rs` 复用 `~/.openspeech/dev_session.json` 拿 token，本地一键 `cargo run --example test_ai_refine_chat` 端到端跑一次真实 SaaS chat。
 
+## 翻译听写流水线（Translate hotkey）
+
+翻译听写（`activeId === "translate"`，默认 Fn+Shift）走**两阶段独立 chat 调用**，不复用同一个 conversation：
+
+```
+raw transcript ──[call 1: refine system prompt]──▶ refined ──[call 2: translation system prompt]──▶ translation
+```
+
+### 为什么不是单次调用 / 不是同 conversation 续聊
+
+- **单 prompt 复合方案废弃**：把"清洗+翻译"塞进一个 prompt，refine 的 5 个 examples 会拽住模型输出源语言；如果加翻译 examples，又会跟 refine 注意力打架，回归 011 这类长段会输出未整理原文。已在 `.claude/skills/openspeech-prompt-eval` 验证过这条路走不通。
+- **同 conversation 续聊废弃**：让 phase 2 用同一份 system prompt + 续 turn 续聊看似省 cache，但 refine prompt 的 `<role>` 是"清洗"不是"翻译"，5 个示例全是中文 → 中文，模型会被 examples 拽住继续输出源语言或四不像。
+- **正解**：两个 system prompt 各管各的，**phase 2 是全新 HTTP 请求**——only `[system_translation, user=refined_text]` 两条消息，不带 phase 1 的 user/assistant 残留。两个 prompt 各自被 SaaS prompt cache 命中（首次冷之后稳定）。高内聚低耦合。
+
+### Phase 1 = refine
+
+- system prompt = `getEffectiveAiSystemPrompt(customSystemPrompt, lang)`（与普通听写共用）
+- userText = raw ASR transcript
+- 处理填充词、撤回信号、长段分段、UI 元素引号、命名实体大小写——见 `defaultAiPrompts.ts` 的 `<examples>`
+- 输出 `refinedSrc`，作为 phase 2 输入
+
+### Phase 2 = translate
+
+- system prompt = `getEffectiveAiTranslationSystemPrompt(customTranslationSystemPrompt, lang) + "\n\nTarget language: <name>"`，目标语言名取自 `TRANSLATE_LANG_NAMES[generalSettings.translateTargetLang]`（"English" / "日本語" / "繁體中文" 等 human-readable）
+- userText = phase 1 输出的 `refinedSrc`，**不传 historyEntries**（phase 1 已经把历史/热词融入 refined 结果，phase 2 只翻译这一段干净文本）
+- 输出 `translation`
+
+### 输出形态（`general.translateOutputMode`）
+
+| 形态 | UX | refinedText 落 history 的内容 |
+|---|---|---|
+| `target_only`（默认） | phase 1 静默累计 token（pill 留在 `transcribing`/思考中），phase 2 切到 `translating` 才开始流式注入译文 | 仅 translation |
+| `bilingual` | phase 1 流式注入 refined（pill 切到 `injecting`），完成后注入 `\n\n`，phase 2 切到 `translating` 流式注入译文 | `${refinedSrc}\n\n${translation}` |
+
+`target_only` 默认把 phase 1 静默是为了避免"先注入中文 → 再清掉 → 注入英文"的视觉跳跃。`bilingual` 让用户保留原文做核对。
+
+### FSM 切换点
+
+`recording.ts` 翻译路径：
+
+1. 录音结束 → `transcribing`
+2. phase 1 流式（bilingual）/ 静默（target_only）
+3. phase 1 done → 主动 `setState({ state: "translating" })`
+4. phase 2 onChunk 复用普通 `onChunk`（其内部仅在 `state === "transcribing"` 时切到 `injecting`，所以 `translating` 不会被覆盖，整个 phase 2 期间保持 `translating`）
+5. phase 2 done → 末尾兜底 paste + `idle`
+
+`isInjectFlowActive()` 三个状态都算 active：`transcribing | injecting | translating`，让 ESC / history 写入 / 末尾兜底门控统一。
+
 ## 与现有 docs 关系
 
 替换 [`docs/speech-providers.md`](./speech-providers.md) 中 `llm.polish` capability 走的旧 V4 工具调用路径。前端 / Rust 端均已不再实现该旧通道，AI refine 只走本页定义的 chat completions 协议。

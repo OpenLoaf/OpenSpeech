@@ -15,7 +15,9 @@
 
 ```
   Idle ──按下快捷键──▶ Recording ──松开快捷键──▶ Transcribing ──成功──▶ Injecting ──▶ Idle
-                           │                        │                         │
+                           │                        │            │            │
+                           │                        │            └─[翻译]──▶ Translating ──▶ Idle
+                           │                        │
                            │                        └── 失败 ─▶ Error ─(用户 × / Esc / 下次触发)─▶ Idle
                            └── 用户取消 / Esc ─▶ Idle
 ```
@@ -28,6 +30,7 @@
 | Recording | 正在录音 | 悬浮条出现：左上角 mono 标签（`DICTATE`/`ASK`/`TRANSLATE`），红色呼吸圆点，中央实时波形，右侧计时（mono），最右 `×`；右下角小字 `HOLD` 或 `CLICK TO STOP` 标明模式；托盘图标变红 |
 | Transcribing | 已结束录音，等待大模型返回 | 悬浮条显示 spinner + `Transcribing via {模型名}...`，右侧 `Esc 取消` 提示；托盘图标变 accent 色 |
 | Injecting | 正在把文字写入目标应用 | 悬浮条短暂闪一下对钩 + `Inserted`，200 ms 后淡出 |
+| Translating | **仅翻译听写 phase 2**：refine 已完成，独立的 translation prompt 正在流式输出译文 | 悬浮条显示 `Translating…`（与 Injecting 共用进度容器，进度条不重启）；译文 token 一边到一边注入光标 |
 | Error | 网络错误 / API 失败 / 权限错误 | 悬浮条红底显示错误文案；**粘滞不自动淡出**，直到用户点 `×` 或发起下一次录音；整条可点击跳历史页查看详情与"重试"；历史中对应条目标记为 failed |
 
 ### 悬浮条显隐策略（与主窗口焦点联动）
@@ -43,7 +46,7 @@
 
 Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idle 时悬浮条直接消失，但 Home 面板**必须保留最近一次结果**，挂到屏幕上等用户主动处置。
 
-- 触发条件：FSM 经历 `recording/transcribing/injecting → idle` 且本次拿到了非空 transcript（partial 或 final 任一）。
+- 触发条件：FSM 经历 `recording/transcribing/injecting/translating → idle` 且本次拿到了非空 transcript（partial 或 final 任一）。
 - 关闭路径仅两条：
   1. 用户点结果面板右上角 `✕`
   2. 用户再次按下听写快捷键开启新一轮录音（新一轮的 live 内容会替换掉上一次的 result）
@@ -100,7 +103,9 @@ Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idl
 1. 每次成功转写必须记录一条。
 2. 失败的转写也记录，但标记为失败状态，可"重试"。
 3. **用户 Esc 取消的录音，若已完成转写也进入历史**（状态标记为 cancelled）——用户仍可从历史中复制或重新注入。
-4. 记录内容见 [history.md](./history.md)。
+4. **录音 / 转写已经发生后，任何远端错误都不应吞掉 history 与本地录音文件。** 即使 SaaS 401（access_token 真过期）需要弹登录框，也仅弹框，不得 `discardRecording` / 切 idle / 回收 PCM。raw transcript 已拿到就按 `status=success`、`refined_text=null` 落 history；transcript 没拿到就按 `status=failed` 落 history（占位文字 + 错误码）。"录音是本地资产"——任何远端故障都不该把它销毁。
+5. **BYOK 自定义 AI provider 的 401 / auth 错误绝不能走 OpenLoaf 登录路径。** 用户填错自家 provider 的 key 时，应按"AI provider 失败"toast + "切到 SaaS"action 处理，不能弹 OpenLoaf 登录框（OpenLoaf 登录态本身根本没问题）。前端按 `aiSettings.mode === "custom"` 优先级判断，不要靠错误串子串 grep。
+6. 记录内容见 [history.md](./history.md)。
 
 ## 边界情况
 
