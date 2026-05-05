@@ -100,8 +100,12 @@ pub enum DictationBackend {
 
 #[derive(Debug, Clone)]
 pub enum BackendDispatchError {
-    /// 用户切到 custom 模式但 (a) 没选 active provider，或 (b) keyring 读不到对应凭证。
-    /// provider_id = None 表示连 active id 都没有；Some(id) 表示有 id 但 keyring 缺。
+    /// 用户切到 custom 但结构性没配：active provider id 缺失 / vendor 缺失 / 列表空。
+    /// 调用方据此自动 fallback 到 SaaS——用户根本没设过自定义供应商，硬报错没意义。
+    ProviderNotConfigured { provider_id: Option<String> },
+    /// provider 选好了、vendor 也对得上，但 keyring 里读不到对应密钥（或 app_id 这类
+    /// 必填非 secret 字段没填）。说明用户主动配过但缺东西，不 fallback——避免悄悄
+    /// 跳过用户的配置意图掩盖问题。
     MissingCredentials { provider_id: Option<String> },
     /// keyring 读取层异常（解码失败 / OS 钥匙串报错）。
     KeyringError(String),
@@ -111,15 +115,25 @@ impl BackendDispatchError {
     /// 稳定错误码字符串：前端 humanizeSttError 按这个串路由。
     pub fn code(&self) -> &'static str {
         match self {
+            BackendDispatchError::ProviderNotConfigured { .. } => "byok_provider_not_configured",
             BackendDispatchError::MissingCredentials { .. } => "byok_missing_credentials",
             BackendDispatchError::KeyringError(_) => "byok_keyring_error",
         }
+    }
+
+    /// 上层是否应当悄悄 fallback 到 SaaS 而不是把错误抛给用户。
+    pub fn should_fallback_to_saas(&self) -> bool {
+        matches!(self, BackendDispatchError::ProviderNotConfigured { .. })
     }
 }
 
 impl std::fmt::Display for BackendDispatchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            BackendDispatchError::ProviderNotConfigured { provider_id } => match provider_id {
+                Some(id) => write!(f, "byok_provider_not_configured: provider={id}"),
+                None => write!(f, "byok_provider_not_configured"),
+            },
             BackendDispatchError::MissingCredentials { provider_id } => match provider_id {
                 Some(id) => write!(f, "byok_missing_credentials: provider={id}"),
                 None => write!(f, "byok_missing_credentials"),
@@ -151,13 +165,12 @@ pub fn dispatch(
                 .active_custom_provider_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .ok_or(BackendDispatchError::MissingCredentials { provider_id: None })?;
-            let vendor =
-                provider_ref
-                    .custom_provider_vendor
-                    .ok_or(BackendDispatchError::MissingCredentials {
-                        provider_id: Some(provider_id.to_string()),
-                    })?;
+                .ok_or(BackendDispatchError::ProviderNotConfigured { provider_id: None })?;
+            let vendor = provider_ref.custom_provider_vendor.ok_or(
+                BackendDispatchError::ProviderNotConfigured {
+                    provider_id: Some(provider_id.to_string()),
+                },
+            )?;
             let creds = load_dictation_provider_credentials_for_rust(provider_id)
                 .map_err(BackendDispatchError::KeyringError)?
                 .ok_or(BackendDispatchError::MissingCredentials {
@@ -267,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_without_active_id_errors() {
+    fn custom_without_active_id_returns_not_configured() {
         let pr = ProviderRef {
             mode: ProviderMode::Custom,
             active_custom_provider_id: None,
@@ -278,11 +291,12 @@ mod tests {
             custom_provider_name: None,
         };
         let err = dispatch(&pr, DictationModality::Realtime).unwrap_err();
-        assert_eq!(err.code(), "byok_missing_credentials");
+        assert_eq!(err.code(), "byok_provider_not_configured");
+        assert!(err.should_fallback_to_saas());
     }
 
     #[test]
-    fn custom_without_vendor_errors() {
+    fn custom_without_vendor_returns_not_configured() {
         let pr = ProviderRef {
             mode: ProviderMode::Custom,
             active_custom_provider_id: Some("p1".into()),
@@ -293,7 +307,8 @@ mod tests {
             custom_provider_name: None,
         };
         let err = dispatch(&pr, DictationModality::Realtime).unwrap_err();
-        assert_eq!(err.code(), "byok_missing_credentials");
+        assert_eq!(err.code(), "byok_provider_not_configured");
+        assert!(err.should_fallback_to_saas());
     }
 
     #[test]
