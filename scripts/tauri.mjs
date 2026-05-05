@@ -18,7 +18,16 @@ if (sub === "dev" && !hasConfig) {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-const tauriBin = resolve(here, "..", "node_modules", ".bin", "tauri");
+// Windows pnpm 装的是 tauri.cmd shim，裸 `tauri` 无扩展名 spawn 直接 ENOENT；
+// 必须选 .cmd 文件并 shell:true 让 cmd.exe 解析。
+const isWin = process.platform === "win32";
+const tauriBin = resolve(
+  here,
+  "..",
+  "node_modules",
+  ".bin",
+  isWin ? "tauri.cmd" : "tauri",
+);
 
-const child = spawn(tauriBin, finalArgs, { stdio: "inherit" });
+const child = spawn(tauriBin, finalArgs, { stdio: "inherit", shell: isWin });
 child.on("exit", (code) => process.exit(code ?? 1));
