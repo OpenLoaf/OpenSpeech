@@ -155,11 +155,12 @@ pub async fn transcribe_recording_file<R: Runtime>(
             .map_err(|e| format!("transcribe join: {e}"))?
         }
         DictationBackend::TencentFile {
+            app_id,
             secret_id,
             secret_key,
             region,
             cos_bucket,
-            ..
+            name,
         } => {
             let bucket = cos_bucket
                 .as_deref()
@@ -168,6 +169,15 @@ pub async fn transcribe_recording_file<R: Runtime>(
                 .ok_or_else(|| ERR_TENCENT_COS_BUCKET_REQUIRED.to_string())?
                 .to_string();
             let bytes = read_recording_bytes(&app, &audio_path)?;
+            log::info!(
+                "[transcribe] tencent file vendor=tencent name={name} bucket={bucket} region={region} engine={}",
+                tencent_engine_for(lang.as_deref()),
+            );
+            log::debug!(
+                "[transcribe] tencent file params app_id={app_id} bytes_len={} lang={:?} audio_path={audio_path}",
+                bytes.len(),
+                lang
+            );
             transcribe_tencent_file_via_cos(
                 bytes,
                 &audio_path,
@@ -186,8 +196,16 @@ pub async fn transcribe_recording_file<R: Runtime>(
             })
             .map_err(|e| e.to_string())
         }
-        DictationBackend::AliyunFile { api_key, .. } => {
+        DictationBackend::AliyunFile { api_key, name } => {
             let bytes = read_recording_bytes(&app, &audio_path)?;
+            log::info!(
+                "[transcribe] aliyun file vendor=aliyun name={name} model=paraformer-v2 lang={:?}",
+                lang
+            );
+            log::debug!(
+                "[transcribe] aliyun file params bytes_len={} audio_path={audio_path}",
+                bytes.len()
+            );
             transcribe_aliyun_file(bytes, &audio_path, lang.as_deref(), &api_key)
                 .await
                 .map(|text| TranscribeFileResult {
