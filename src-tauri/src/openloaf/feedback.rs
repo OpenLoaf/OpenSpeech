@@ -13,6 +13,9 @@ use tauri::{AppHandle, State};
 use super::{DEFAULT_BASE_URL, SharedOpenLoaf, handle_session_expired};
 
 const APP_CLIENT_CODE: &str = "openspeech";
+// SaaS feedback `source` 字段是 z.enum(["tenas","openloaf","openloaf-saas"])，
+// "openspeech" 走 client 字段而不是 source；source 反映所属生态。
+const FEEDBACK_SOURCE: &str = "openloaf-saas";
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -80,7 +83,7 @@ pub async fn openloaf_submit_feedback(
 
     let email_owned = payload.email.as_ref().map(|s| s.trim().to_string());
     let body = SubmitFeedbackBody {
-        source: APP_CLIENT_CODE,
+        source: FEEDBACK_SOURCE,
         r#type: payload.r#type,
         content: &content,
         context,
