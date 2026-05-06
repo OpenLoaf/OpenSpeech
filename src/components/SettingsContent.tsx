@@ -557,6 +557,12 @@ function DictationTab() {
   const setActiveDictationProvider = useSettingsStore(
     (s) => s.setActiveDictationProvider,
   );
+  const setDictationStreamingInject = useSettingsStore(
+    (s) => s.setDictationStreamingInject,
+  );
+  const setDictationClipboardCopy = useSettingsStore(
+    (s) => s.setDictationClipboardCopy,
+  );
 
   // 真实输入设备列表（cpal 枚举）
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
@@ -835,6 +841,27 @@ function DictationTab() {
           checked={general.asrSegmentMode !== "REALTIME" && aiRefine.enabled}
           disabled={general.asrSegmentMode === "REALTIME"}
           onChange={(v) => void setAiRefineEnabled(v)}
+        />
+      </Row>
+
+      {/* 输出方式：逐字 vs 一次粘贴 + 是否复制到剪贴板 */}
+      <SectionTitle>{t("section.output")}</SectionTitle>
+      <Row
+        label={t("output.streaming_inject.label")}
+        hint={t("output.streaming_inject.hint")}
+      >
+        <Switch
+          checked={dictation.streamingInject}
+          onChange={(v) => void setDictationStreamingInject(v)}
+        />
+      </Row>
+      <Row
+        label={t("output.clipboard_copy.label")}
+        hint={t("output.clipboard_copy.hint")}
+      >
+        <Switch
+          checked={dictation.clipboardCopy}
+          onChange={(v) => void setDictationClipboardCopy(v)}
         />
       </Row>
 

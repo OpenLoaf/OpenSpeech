@@ -2,7 +2,10 @@ import { create } from "zustand";
 import { emit, emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
+import {
+  writeText as writeClipboard,
+  readText as readClipboard,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "sonner";
 import i18n from "@/i18n";
 import type { BindingId, HotkeyBinding } from "@/lib/hotkey";
@@ -994,7 +997,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         await injectChain;
       } catch {}
       // ESC 在流末/末尾兜底之前完成取消时，state 已切 idle——不再覆盖用户剪贴板。
-      if (isInjectFlowActive()) {
+      // 用户关了"自动复制到剪贴板"时也跳过——若一次性 paste 路径内部用过剪贴板，
+      // pasteAllAtOnce 已自行还原。
+      if (
+        isInjectFlowActive() &&
+        useSettingsStore.getState().dictation.clipboardCopy
+      ) {
         try {
           await writeClipboard(refinedText);
         } catch (e) {
@@ -1145,25 +1153,44 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     if (finalText.startsWith(lastInjectedText)) {
       const remaining = finalText.slice(lastInjectedText.length);
       if (remaining) {
-        // 末尾兜底走 inject_type 直接键入：和流式路径一致，不污染用户剪贴板。
-        // 上面 L446-450 已经把整段 refinedText 写过一次剪贴板供用户手动复用，
-        // 这里 remaining 不需要再走剪贴板。
-        try {
-          console.log("[inject] tail → type", { remaining: remaining.length });
-          await invoke("inject_type", { text: remaining });
-          console.log("[inject] tail type ok");
-        } catch (e) {
-          console.warn("[inject] tail type failed, fallback to paste:", e);
-          // type 失败时降级到剪贴板路径，保证文字最终落得到。
+        // 用户关掉"逐字流式"：整段一次 paste（绕开微信输入法 / 部分全拼 IME 的
+        // 逐字符拦截）。clipboardCopy=false 时 pasteAllAtOnce 还会还原原剪贴板。
+        const streaming =
+          useSettingsStore.getState().dictation.streamingInject;
+        if (!streaming) {
           try {
-            await writeClipboard(remaining);
-            await invoke("inject_paste");
-            console.log("[inject] tail paste fallback ok");
-          } catch (e2) {
-            console.error("[inject] tail paste fallback also failed:", e2);
+            console.log("[inject] tail → paste-all", {
+              remaining: remaining.length,
+            });
+            await pasteAllAtOnce(remaining);
+            console.log("[inject] tail paste-all ok");
+          } catch (e) {
+            console.error("[inject] tail paste-all failed:", e);
             notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
               description: i18n.t("overlay:toast.paste_failed.description"),
             });
+          }
+        } else {
+          // 末尾兜底走 inject_type 直接键入：和流式路径一致，不污染用户剪贴板。
+          // 上面 L446-450 已经把整段 refinedText 写过一次剪贴板供用户手动复用，
+          // 这里 remaining 不需要再走剪贴板。
+          try {
+            console.log("[inject] tail → type", { remaining: remaining.length });
+            await invoke("inject_type", { text: remaining });
+            console.log("[inject] tail type ok");
+          } catch (e) {
+            console.warn("[inject] tail type failed, fallback to paste:", e);
+            // type 失败时降级到剪贴板路径，保证文字最终落得到。
+            try {
+              await writeClipboard(remaining);
+              await invoke("inject_paste");
+              console.log("[inject] tail paste fallback ok");
+            } catch (e2) {
+              console.error("[inject] tail paste fallback also failed:", e2);
+              notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
+                description: i18n.t("overlay:toast.paste_failed.description"),
+              });
+            }
           }
         }
       } else {
@@ -1228,6 +1255,9 @@ const resetIncrementalInject = () => {
 const injectIncremental = (fullText: string) => {
   if (!IS_MAIN_WINDOW) return;
   if (!isInjectFlowActive()) return;
+  // 用户关闭了"逐字流式输出"——本轮全部跳过，让末尾兜底走整段 paste。
+  // 不更新 lastInjectedText，保证 finalize 时 remaining = 完整 finalText。
+  if (!useSettingsStore.getState().dictation.streamingInject) return;
   // 服务端纠错把已注入的前缀改写时（极少），无法回退已敲下去的字符；
   // 跳过本轮增量，等末尾兜底 diff 把"剩余的"再敲一次（用户视觉上会出现重复，
   // 但比反复抖动更可控）。
@@ -1249,6 +1279,34 @@ const injectIncremental = (fullText: string) => {
       });
     }
   });
+};
+
+// 整段一次粘贴：写剪贴板 → invoke("inject_paste") → 视 clipboardCopy 决定是否
+// 还原用户原剪贴板内容。clipboardCopy=true（默认）时保留写入的整段，方便用户
+// 再次手动粘贴；false 时把粘贴前备份的旧内容写回，避免污染。
+const pasteAllAtOnce = async (text: string): Promise<void> => {
+  if (!text) return;
+  const keepClipboard =
+    useSettingsStore.getState().dictation.clipboardCopy;
+  let backup: string | null = null;
+  if (!keepClipboard) {
+    try {
+      backup = await readClipboard();
+    } catch (e) {
+      console.warn("[inject] read clipboard for backup failed:", e);
+    }
+  }
+  await writeClipboard(text);
+  await invoke("inject_paste");
+  if (!keepClipboard) {
+    // 给目标应用一点时间消化 Ctrl/Cmd+V，避免还原比 paste 更早落地。
+    await new Promise((r) => setTimeout(r, 80));
+    try {
+      await writeClipboard(backup ?? "");
+    } catch (e) {
+      console.warn("[inject] restore clipboard failed:", e);
+    }
+  }
 };
 
 const discardRecording = () => {

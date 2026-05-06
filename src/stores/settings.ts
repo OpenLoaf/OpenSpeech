@@ -171,6 +171,12 @@ export interface DictationSettings {
   activeCustomProviderId: string | null;
   // 听写口语语种。默认 follow_interface（resolve 时按 interfaceLang 推导）。
   lang: DictationLang;
+  // 注入方式：true=逐字流式 type（默认），false=整段一次 paste。
+  // 关闭逐字主要绕开微信输入法 / 部分全拼 IME 的逐字符拦截（首字吞 + 双标点）。
+  streamingInject: boolean;
+  // 注入完成后是否把整段文本保留在剪贴板。false 时若必须借剪贴板 paste，
+  // 完成后会恢复用户原剪贴板内容。
+  clipboardCopy: boolean;
 }
 
 interface PersistShape {
@@ -219,6 +225,8 @@ const DEFAULT_DICTATION: DictationSettings = {
   customProviders: [],
   activeCustomProviderId: null,
   lang: "follow_interface",
+  streamingInject: true,
+  clipboardCopy: true,
 };
 
 interface SettingsState {
@@ -253,6 +261,8 @@ interface SettingsState {
   removeDictationProvider: (id: string) => Promise<void>;
   setActiveDictationProvider: (id: string | null) => Promise<void>;
   setDictationProviderVerified: (id: string, verified: boolean) => Promise<void>;
+  setDictationStreamingInject: (v: boolean) => Promise<void>;
+  setDictationClipboardCopy: (v: boolean) => Promise<void>;
 }
 
 let storePromise: Promise<Store> | null = null;
@@ -493,11 +503,21 @@ function mergeDictation(raw: unknown, langOverride?: DictationLang): DictationSe
   // 录音键都触发后端 byok_provider_not_configured fallback + toast 骚扰。
   const mode: DictationProviderMode =
     r.mode === "custom" && active && providers.some((p) => p.id === active) ? "custom" : "saas";
+  const streamingInject =
+    typeof r.streamingInject === "boolean"
+      ? r.streamingInject
+      : DEFAULT_DICTATION.streamingInject;
+  const clipboardCopy =
+    typeof r.clipboardCopy === "boolean"
+      ? r.clipboardCopy
+      : DEFAULT_DICTATION.clipboardCopy;
   return {
     mode,
     customProviders: providers,
     activeCustomProviderId: active,
     lang,
+    streamingInject,
+    clipboardCopy,
   };
 }
 
@@ -847,6 +867,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         p.id === id ? { ...p, verified } : p,
       );
       const next = { ...cur, customProviders };
+      set({ dictation: next });
+      await persist({ dictation: next });
+    },
+
+    setDictationStreamingInject: async (v) => {
+      const next = { ...get().dictation, streamingInject: v };
+      set({ dictation: next });
+      await persist({ dictation: next });
+    },
+
+    setDictationClipboardCopy: async (v) => {
+      const next = { ...get().dictation, clipboardCopy: v };
       set({ dictation: next });
       await persist({ dictation: next });
     },

@@ -38,7 +38,8 @@
     "text_injection": "Text injection",
     "behavior": "Behavior",
     "model_rest": "Large model (REST)",
-    "build": "Build"
+    "build": "Build",
+    "output": "Output"
   },
   "general": {
     "interface_lang": "Interface language",
@@ -90,6 +91,16 @@
       "label": "Enable AI enhancement",
       "hint": "On top of \"whole utterance\", run an LLM pass to remove fillers, dedupe, and recognise self-corrections. Same language — no translation.",
       "disabled_in_realtime": "Not available in realtime mode"
+    }
+  },
+  "output": {
+    "streaming_inject": {
+      "label": "Stream characters into the input",
+      "hint": "On by default — characters land at the cursor as the model produces them. Turn off to paste the whole text in one shot, bypassing per-character interception by IMEs like WeChat or full-pinyin (which can swallow the first character or duplicate punctuation)."
+    },
+    "clipboard_copy": {
+      "label": "Auto copy to clipboard",
+      "hint": "On by default — the full text stays on the clipboard after injection so you can paste it again manually. Turn off and OpenSpeech restores your previous clipboard contents after any internal paste."
     }
   },
   "model": {
