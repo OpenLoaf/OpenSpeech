@@ -167,11 +167,7 @@ pub async fn transcribe_recording_file<R: Runtime>(
     );
     match backend {
         DictationBackend::SaasFile => {
-            tauri::async_runtime::spawn_blocking(move || {
-                transcribe_recording_file_impl(app, audio_path, duration_ms, lang, kind)
-            })
-            .await
-            .map_err(|e| format!("transcribe join: {e}"))?
+            transcribe_recording_file_impl_async(app, audio_path, duration_ms, lang, kind).await
         }
         DictationBackend::TencentFile {
             app_id,
@@ -540,53 +536,113 @@ fn strip_tencent_timestamps(raw: &str) -> String {
         .join("")
 }
 
-fn transcribe_recording_file_impl<R: Runtime>(
+async fn transcribe_recording_file_impl_async<R: Runtime>(
     app: AppHandle<R>,
     audio_path: String,
     duration_ms: u64,
     lang: Option<String>,
     provider_kind: String,
 ) -> Result<TranscribeFileResult, String> {
-    let ol = app.state::<SharedOpenLoaf>();
-    let client = ol.authenticated_client().ok_or_else(|| {
-        handle_session_expired(&app, &ol);
-        ERR_NOT_AUTHENTICATED.to_string()
-    })?;
+    let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
 
-    if duration_ms <= SHORT_AUDIO_LIMIT_MS {
-        let bytes = read_recording_bytes(&app, &audio_path)?;
-        let b64 = B64.encode(&bytes);
-        let input = AsrShortOlTl003Input::from_base64(b64, media_type_for(&audio_path));
-        let params = AsrShortOlTl003Params {
-            language: parse_lang_short(lang.as_deref()),
-            enable_itn: None,
-        };
-        let r = client
-            .tools_v4()
-            .asr_short_ol_tl_003(&input, &params)
-            .map_err(|e| {
-                let raw = e.to_string();
-                if is_unauthorized(&raw) {
-                    handle_session_expired(&app, &ol);
-                    ERR_UNAUTHORIZED.to_string()
-                } else {
-                    format!("asr_short failed: {e}")
-                }
-            })?;
-        Ok(TranscribeFileResult {
+    if duration_ms > SHORT_AUDIO_LIMIT_MS {
+        return Err(
+            "long audio retry needs a public URL; local recording cannot be uploaded yet (>5min)"
+                .into(),
+        );
+    }
+
+    // B：发请求前先确保 access_token 还没过期。唤醒场景必备——睡眠期间 refresh 定时器
+    // 没机会跑，醒来第一次调如果不预检就一定 401，会把用户当登录失效踢出去。
+    if !ol.ensure_access_token_fresh().await {
+        log::warn!("[transcribe] saas preflight refresh failed; signaling auth-lost");
+        handle_session_expired(&app, &ol);
+        return Err(ERR_NOT_AUTHENTICATED.to_string());
+    }
+
+    let bytes = read_recording_bytes(&app, &audio_path)?;
+    let b64 = B64.encode(&bytes);
+    let media_type = media_type_for(&audio_path);
+    let lang_short = parse_lang_short(lang.as_deref());
+
+    // 第一次尝试。spawn_blocking 包同步 SDK 调用，避免阻塞 tauri 主异步执行器。
+    match run_asr_short_blocking(&ol, &b64, media_type, lang_short.clone()).await? {
+        AsrShortAttempt::Ok(r) => Ok(TranscribeFileResult {
             text: r.data.text,
             variant: "asrShort".into(),
             credits_consumed: r.credits_consumed,
             provider_kind,
-        })
-    } else {
-        // 长音频：服务端只接受公网 URL，本地音频没有可访问的 URL。
-        // 给出明确错误让 UI 提示，避免用户以为是转写失败。
-        Err(
-            "long audio retry needs a public URL; local recording cannot be uploaded yet (>5min)"
-                .into(),
-        )
+        }),
+        AsrShortAttempt::Unauthorized(raw) => {
+            // C：401 → 续期一次再重试一次；续期失败 / 重试还 401 才清场。
+            log::warn!("[transcribe] asr_short hit 401; attempting refresh + retry. raw={raw}");
+            if !ol.ensure_fresh_token().await {
+                log::warn!("[transcribe] refresh failed; signaling auth-lost");
+                handle_session_expired(&app, &ol);
+                return Err(ERR_UNAUTHORIZED.to_string());
+            }
+            match run_asr_short_blocking(&ol, &b64, media_type, lang_short).await? {
+                AsrShortAttempt::Ok(r) => {
+                    log::info!("[transcribe] asr_short retry after refresh succeeded");
+                    Ok(TranscribeFileResult {
+                        text: r.data.text,
+                        variant: "asrShort".into(),
+                        credits_consumed: r.credits_consumed,
+                        provider_kind,
+                    })
+                }
+                AsrShortAttempt::Unauthorized(raw2) => {
+                    log::warn!(
+                        "[transcribe] asr_short retry still 401 after refresh; clearing session. raw={raw2}"
+                    );
+                    handle_session_expired(&app, &ol);
+                    Err(ERR_UNAUTHORIZED.to_string())
+                }
+                AsrShortAttempt::Other(raw2) => Err(format!("asr_short failed: {raw2}")),
+            }
+        }
+        AsrShortAttempt::Other(raw) => Err(format!("asr_short failed: {raw}")),
     }
+}
+
+enum AsrShortAttempt {
+    Ok(openloaf_saas::v4_tools::AsrShortOlTl003Result),
+    Unauthorized(String),
+    Other(String),
+}
+
+async fn run_asr_short_blocking(
+    ol: &SharedOpenLoaf,
+    b64: &str,
+    media_type: &'static str,
+    lang_short: Option<String>,
+) -> Result<AsrShortAttempt, String> {
+    let client = ol.authenticated_client().ok_or_else(|| {
+        log::warn!("[transcribe] authenticated_client() returned None right before dispatch");
+        ERR_NOT_AUTHENTICATED.to_string()
+    })?;
+    let b64_owned = b64.to_string();
+    let join = tokio::task::spawn_blocking(move || {
+        let input = AsrShortOlTl003Input::from_base64(b64_owned, media_type);
+        let params = AsrShortOlTl003Params {
+            language: lang_short,
+            enable_itn: None,
+        };
+        client.tools_v4().asr_short_ol_tl_003(&input, &params)
+    })
+    .await
+    .map_err(|e| format!("transcribe join: {e}"))?;
+    Ok(match join {
+        Ok(r) => AsrShortAttempt::Ok(r),
+        Err(e) => {
+            let raw = e.to_string();
+            if is_unauthorized(&raw) {
+                AsrShortAttempt::Unauthorized(raw)
+            } else {
+                AsrShortAttempt::Other(raw)
+            }
+        }
+    })
 }
 
 #[tauri::command]
@@ -595,6 +651,17 @@ pub async fn transcribe_long_audio_url<R: Runtime>(
     url: String,
     lang: Option<String>,
 ) -> Result<TranscribeFileResult, String> {
+    // 先在异步上下文里做 B 预检，再把同步 SDK polling 逻辑扔进 spawn_blocking。
+    // polling 循环时间很长（最多 24 min），靠预检保证 submit 那一发不会因为
+    // 唤醒后 token 已过期直接被踢出去。polling 期间 401 仍走原路径清场——这种
+    // 场景概率极小（24 min 内 token 剩余寿命够用），且需要中断 thread::sleep
+    // 才能 await refresh，改造成本不划算。
+    let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
+    if !ol.ensure_access_token_fresh().await {
+        log::warn!("[transcribe] long audio preflight refresh failed; signaling auth-lost");
+        handle_session_expired(&app, &ol);
+        return Err(ERR_NOT_AUTHENTICATED.to_string());
+    }
     tauri::async_runtime::spawn_blocking(move || transcribe_long_audio_url_impl(app, url, lang))
         .await
         .map_err(|e| format!("transcribe long join: {e}"))?

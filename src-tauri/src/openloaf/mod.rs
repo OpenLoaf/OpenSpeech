@@ -190,16 +190,21 @@ impl OpenLoafState {
         self.pending.lock().ok().and_then(|mut m| m.remove(state))
     }
 
-    /// 给不走 `call_authed` 的链路（realtime WebSocket 等）连接前用：
-    /// 解 access_token 的 JWT exp，已过期 / 距离过期 ≤ 30s 才走 ensure_fresh_token。
-    /// 没 token 直接 false，调用方自己决定清场策略。
+    /// 给不走 `call_authed` 的链路（realtime WebSocket / saas-file 转写 / ai_refine
+    /// chat completions 等）连接前用：解 access_token 的 JWT exp，已过期 / 距离过期
+    /// ≤ 30s 才走 ensure_fresh_token。没 token 直接 false，调用方自己决定清场策略。
     pub async fn ensure_access_token_fresh(&self) -> bool {
         let Some(token) = self.client.access_token() else {
+            log::warn!("openloaf: ensure_access_token_fresh: no access token in memory");
             return false;
         };
         if access_token_still_fresh(&token, 30) {
             return true;
         }
+        log::info!(
+            "openloaf: access token near/past exp, kicking off pre-flight refresh; jwt {}",
+            summarize_jwt_claims(&token)
+        );
         self.ensure_fresh_token().await
     }
 
@@ -211,16 +216,18 @@ impl OpenLoafState {
     ///   把新 access_token 写进 client + 把新 session persist 回 storage。
     /// - SDK 明确判失效（在 bootstrap 内部接住）→ storage 已被 SDK 清，返回 false
     ///   由调用方负责清场（emit auth-lost）。
-    async fn ensure_fresh_token(&self) -> bool {
+    pub async fn ensure_fresh_token(&self) -> bool {
         let stale = self.client.access_token();
         let _guard = self.refresh_lock.lock().await;
 
         // Double-check：排队等 Mutex 时别人可能已经 refresh 过。
         let current = self.client.access_token();
         if current.is_some() && current != stale {
+            log::info!("openloaf: refresh skipped, token already rotated by concurrent task");
             return true;
         }
 
+        log::info!("openloaf: refreshing access token via SDK bootstrap…");
         let client = self.client.clone();
         let result =
             tokio::task::spawn_blocking(move || client.auth().bootstrap(Some(&client_info())))
@@ -733,14 +740,30 @@ where
 
     match first {
         Err(SaaSError::Http { status: 401, .. }) => {
+            log::warn!("openloaf: call_authed got 401, attempting refresh + retry");
             if ol.ensure_fresh_token().await {
                 // 成功续期，重试一次
                 let client = ol.client.clone();
-                tokio::task::spawn_blocking(move || op(client))
+                let retried = tokio::task::spawn_blocking(move || op(client))
                     .await
-                    .map_err(|e| SaaSError::Input(format!("join error: {e}")))?
+                    .map_err(|e| SaaSError::Input(format!("join error: {e}")))?;
+                match &retried {
+                    Ok(_) => log::info!("openloaf: call_authed retry after refresh succeeded"),
+                    Err(SaaSError::Http { status: 401, .. }) => {
+                        log::warn!(
+                            "openloaf: call_authed retry still 401 after refresh; clearing session"
+                        );
+                        clear_session(ol);
+                        if let Err(e) = app.emit(AUTH_LOST_EVENT, ()) {
+                            log::warn!("openloaf: emit auth-lost failed: {e}");
+                        }
+                    }
+                    Err(e) => log::warn!("openloaf: call_authed retry returned non-401 error: {e}"),
+                }
+                retried
             } else {
                 // refresh 也失败 → 登录彻底失效
+                log::warn!("openloaf: call_authed refresh failed, clearing session");
                 clear_session(ol);
                 if let Err(e) = app.emit(AUTH_LOST_EVENT, ()) {
                     log::warn!("openloaf: emit auth-lost failed: {e}");
