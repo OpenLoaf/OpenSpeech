@@ -37,6 +37,7 @@ OpenSpeech is a cross-platform desktop voice typing tool. Press a hotkey in any 
 - **Global voice input** — Works in editors, browsers, chat apps and terminals. No per-app integration required.
 - **Customisable hotkeys** — Defaults: `Fn + Ctrl` on macOS, `Ctrl + Win` on Windows, `Ctrl + Super` on Linux. Rebind to anything you like.
 - **Real-time AI clean-up** — Removes filler words like "um/uh", fixes slips of the tongue, and produces text you can use as-is.
+- **BYOK / custom providers** — Plug your own ASR and AI endpoints (URL, key, model). Credentials live in the system keychain and never touch our servers. Built-in ASR adapters for **Tencent Cloud** and **Aliyun Bailian (DashScope)**; AI side accepts any OpenAI-compatible endpoint.
 - **History & retry** — Every transcription is saved locally; review, copy, or re-transcribe at any time.
 - **Personal dictionary** — Add proper nouns, people's names and jargon to improve accuracy.
 - **Localised UI** — Simplified Chinese and English; light/dark themes follow the system.
@@ -65,17 +66,18 @@ You'll be asked to grant microphone access on first launch; macOS additionally n
 - [x] Real-time transcription with AI clean-up
 - [x] History and retry
 - [x] Dictionary
+- [x] Custom AI provider (any OpenAI-compatible endpoint)
+- [x] Custom ASR provider: Tencent Cloud
+- [x] Custom ASR provider: Aliyun Bailian (DashScope)
 
 ### In progress
-- [ ] Long-form / meeting mode
+- [ ] Meeting transcription (long-form recording / meeting mode)
 
 ### Planned
-Multi-provider STT integrations:
+More STT provider integrations:
 
 - [ ] Microsoft Azure Speech
 - [ ] Google Cloud Speech-to-Text
-- [ ] Tencent Cloud Speech
-- [ ] Alibaba Cloud Speech
 - [ ] Volcengine (Doubao) Speech
 - [ ] iFlytek Speech
 - [ ] OpenAI Whisper API
