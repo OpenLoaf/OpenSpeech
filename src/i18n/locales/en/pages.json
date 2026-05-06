@@ -327,6 +327,9 @@
       "hint": "Click to start recording",
       "recent": "Recent meetings",
       "items": "items",
+      "empty": "No meetings yet",
+      "empty_transcript": "(empty)",
+      "loading": "Loading…",
       "language_support": "// Currently supports Chinese, English, Cantonese & several Mandarin dialects"
     },
     "live": {
@@ -341,6 +344,7 @@
       "back": "Back",
       "speakers": "speakers",
       "delete": "Delete",
+      "delete_confirm": "Delete this meeting record?",
       "summary": "Summary",
       "transcript": "Transcript",
       "summary_topic": "Topic",

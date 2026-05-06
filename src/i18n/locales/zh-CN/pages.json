@@ -327,6 +327,9 @@
       "hint": "点击开始记录",
       "recent": "最近会议",
       "items": "项",
+      "empty": "暂无会议记录",
+      "empty_transcript": "（无内容）",
+      "loading": "加载中…",
       "language_support": "// 当前仅支持 中文 / 英语 / 粤语 / 多种方言（川、陕、豫、沪、湘、鄂、皖）"
     },
     "live": {
@@ -341,6 +344,7 @@
       "back": "返回",
       "speakers": "位说话人",
       "delete": "删除",
+      "delete_confirm": "确认删除这条会议记录？",
       "summary": "纪要",
       "transcript": "逐字稿",
       "summary_topic": "会议主题",

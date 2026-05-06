@@ -22,7 +22,6 @@
     "save_failed": "Failed to save recording",
     "mic_not_ready": "Microphone is not ready",
     "realtime_not_started": "Realtime transcription didn't start",
-    "register_failed": "Registration failed: {{id}} ({{error}})",
     "hotkey_sync_failed": "Failed to sync hotkeys to Rust: {{error}}"
   },
   "stt": {
@@ -42,5 +41,26 @@
   "update": {
     "check_failed": "Failed to check for updates",
     "available": "New version {{version}} available"
+  },
+  "meetings": {
+    "go_to_settings": "Open settings",
+    "meeting_provider_unsupported": "Dictation channel doesn't support speaker diarization",
+    "meeting_provider_unsupported_hint": "Switch the dictation channel to Custom → Tencent and fill in AppID / SecretId / SecretKey.",
+    "meeting_provider_not_configured": "Dictation channel is not configured",
+    "meeting_provider_not_configured_hint": "Open Settings → Dictation and configure a custom provider first.",
+    "network_exit": "Connection lost",
+    "network_exit_hint": "The realtime ASR connection was dropped. Check your network and try again.",
+    "idle_timeout": "Disconnected due to silence",
+    "idle_timeout_hint": "The provider closed the session after a long silence. Resume to reconnect.",
+    "start_failed": "Failed to start meeting",
+    "pause_failed": "Failed to pause",
+    "resume_failed": "Failed to resume",
+    "history_save_failed": "Failed to save meeting record",
+    "history_open_failed": "Failed to open meeting record",
+    "history_delete_failed": "Failed to delete meeting record",
+    "unauthenticated_byok": "Custom provider authentication failed",
+    "unauthenticated_byok_hint": "Re-check the AppID / SecretId / SecretKey of the active Tencent provider.",
+    "insufficient_funds": "Provider balance exhausted",
+    "insufficient_funds_hint": "Top up the Tencent ASR account or switch to another provider."
   }
 }

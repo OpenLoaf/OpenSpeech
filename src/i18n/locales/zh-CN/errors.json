@@ -22,7 +22,6 @@
     "save_failed": "录音保存失败",
     "mic_not_ready": "麦克风未就绪",
     "realtime_not_started": "实时转写未启动",
-    "register_failed": "注册失败：{{id}}（{{error}}）",
     "hotkey_sync_failed": "同步快捷键到 Rust 失败：{{error}}"
   },
   "stt": {
@@ -42,5 +41,26 @@
   "update": {
     "check_failed": "检查更新失败",
     "available": "发现新版本 {{version}}"
+  },
+  "meetings": {
+    "go_to_settings": "前往设置",
+    "meeting_provider_unsupported": "听写通道不支持说话人分离",
+    "meeting_provider_unsupported_hint": "请把听写通道切换到「自定义 → 腾讯」并填好 AppID / SecretId / SecretKey。",
+    "meeting_provider_not_configured": "未配置听写通道",
+    "meeting_provider_not_configured_hint": "请先到「设置 → 听写」配置自定义供应商。",
+    "network_exit": "连接已断开",
+    "network_exit_hint": "实时语音识别连接被中断，请检查网络后重试。",
+    "idle_timeout": "长时间无声音被断开",
+    "idle_timeout_hint": "供应商在长时间静音后关闭了会话，点击「继续」可重连。",
+    "start_failed": "无法开始会议",
+    "pause_failed": "无法暂停",
+    "resume_failed": "无法继续",
+    "history_save_failed": "保存会议记录失败",
+    "history_open_failed": "打开会议记录失败",
+    "history_delete_failed": "删除会议记录失败",
+    "unauthenticated_byok": "自定义供应商鉴权失败",
+    "unauthenticated_byok_hint": "请检查腾讯供应商的 AppID / SecretId / SecretKey 是否正确。",
+    "insufficient_funds": "供应商余额不足",
+    "insufficient_funds_hint": "请充值腾讯语音识别账户，或切换到其他供应商。"
   }
 }

@@ -327,6 +327,9 @@
       "hint": "點擊開始記錄",
       "recent": "最近會議",
       "items": "項",
+      "empty": "尚無會議記錄",
+      "empty_transcript": "（無內容）",
+      "loading": "載入中…",
       "language_support": "// 目前僅支援 中文 / 英語 / 粵語 / 多種方言（川、陝、豫、滬、湘、鄂、皖）"
     },
     "live": {
@@ -341,6 +344,7 @@
       "back": "返回",
       "speakers": "位說話人",
       "delete": "刪除",
+      "delete_confirm": "確認刪除這條會議記錄？",
       "summary": "紀要",
       "transcript": "逐字稿",
       "summary_topic": "會議主題",

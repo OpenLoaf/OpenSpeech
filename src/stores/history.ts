@@ -43,7 +43,7 @@ export class NotAuthenticatedError extends Error {
   }
 }
 
-export type HistoryType = "dictation" | "ask" | "translate";
+export type HistoryType = "dictation" | "ask" | "translate" | "meeting";
 export type HistoryStatus = "success" | "failed" | "cancelled";
 
 /**
@@ -222,8 +222,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
   reload: async () => {
     const d = await db();
+    // type='meeting' 由 useMeetingsStore 自管列表，不混进听写主历史。
     const rows = await d.select<Row[]>(
-      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang FROM history ORDER BY created_at DESC",
+      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang FROM history WHERE type != 'meeting' ORDER BY created_at DESC",
     );
     set({ items: rows.map(rowToItem) });
   },

@@ -17,6 +17,8 @@ import {
   useMeetingsStore,
   type MeetingSegment,
 } from "@/stores/meetings";
+import type { MeetingHistoryRow } from "@/lib/meetings-history";
+import { useUIStore } from "@/stores/ui";
 
 const SPEAKER_COLORS = [
   "text-te-accent",
@@ -27,9 +29,12 @@ const SPEAKER_COLORS = [
   "text-amber-400",
 ];
 
-// MVP：历史列表暂未接 SQLite（meeting 类型 history 行 + history_segments 已建表，
-// 但写入与读取走 DB layer 是下个 PR）。先空着，等接入后从 history.ts 拉。
-const RECENT_SESSIONS: never[] = [];
+// 错误条 → 引导按钮：把这些 code 映射成"前往设置 → 听写"。
+// 其它 code 仅显示文本，不挂引导。
+const ERROR_CODES_OPEN_SETTINGS: ReadonlySet<string> = new Set([
+  "meeting_provider_unsupported",
+  "meeting_provider_not_configured",
+]);
 
 function formatHMS(ms: number): string {
   const total = Math.floor(ms / 1000);
@@ -172,12 +177,22 @@ export default function MeetingsPage() {
   const resumeMeeting = useMeetingsStore((s) => s.resume);
   const stopMeeting = useMeetingsStore((s) => s.stop);
   const back = useMeetingsStore((s) => s.back);
+  const dismissError = () => useMeetingsStore.setState({ error: null });
+  const openSettings = useUIStore((s) => s.openSettings);
 
   useEffect(() => {
     let off: (() => void) | undefined;
     initSubscriptions().then((u) => { off = u; });
     return () => { off?.(); };
   }, [initSubscriptions]);
+
+  const errorTitle = error
+    ? t(`errors:meetings.${error.code}`, { defaultValue: error.message || error.code })
+    : "";
+  const errorHintKey = error ? `errors:meetings.${error.code}_hint` : "";
+  const errorHint = error
+    ? t(errorHintKey, { defaultValue: "" })
+    : "";
 
   return (
     <section className="relative flex h-full flex-col bg-te-bg">
@@ -214,8 +229,31 @@ export default function MeetingsPage() {
       ) : null}
 
       {error ? (
-        <div className="border-b border-[#ff4d4d]/40 bg-[#ff4d4d]/10 px-[4vw] py-2 font-mono text-[11px] text-[#ff4d4d]">
-          [{error.code}] {error.message}
+        <div className="flex items-start gap-3 border-b border-[#ff4d4d]/40 bg-[#ff4d4d]/10 px-[4vw] py-2 font-mono text-[11px] text-[#ff4d4d]">
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold uppercase tracking-[0.15em]">{errorTitle}</div>
+            {errorHint ? (
+              <div className="mt-1 text-[10px] tracking-[0.05em] opacity-90">{errorHint}</div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {ERROR_CODES_OPEN_SETTINGS.has(error.code) ? (
+              <button
+                type="button"
+                onClick={() => openSettings("DICTATION")}
+                className="border border-[#ff4d4d]/60 px-2 py-1 text-[10px] uppercase tracking-[0.15em] hover:bg-[#ff4d4d]/20"
+              >
+                {t("errors:meetings.go_to_settings", { defaultValue: "Open settings" })}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={dismissError}
+              className="px-2 py-1 text-[10px] uppercase tracking-[0.15em] opacity-80 hover:opacity-100"
+            >
+              {t("common:actions.close", { defaultValue: "Close" })}
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -236,6 +274,16 @@ export default function MeetingsPage() {
 
 function IdleView({ onStart }: { onStart: () => void }) {
   const { t } = useTranslation();
+  const recent = useMeetingsStore((s) => s.recentMeetings);
+  const recentLoaded = useMeetingsStore((s) => s.recentLoaded);
+  const loadRecent = useMeetingsStore((s) => s.loadRecent);
+  const openMeeting = useMeetingsStore((s) => s.openMeeting);
+  const removeMeeting = useMeetingsStore((s) => s.removeMeeting);
+
+  useEffect(() => {
+    void loadRecent();
+  }, [loadRecent]);
+
   return (
     <div className="flex h-full flex-col">
       <div className="relative mx-auto w-full max-w-5xl px-[4vw] py-[clamp(1.5rem,4vw,3rem)]">
@@ -287,14 +335,82 @@ function IdleView({ onStart }: { onStart: () => void }) {
               {t("pages:meetings.idle.recent")}
             </span>
             <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/60">
-              {RECENT_SESSIONS.length} {t("pages:meetings.idle.items")}
+              {recent.length} {t("pages:meetings.idle.items")}
             </span>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto" />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-5xl px-[4vw]">
+            {recent.length === 0 ? (
+              <div className="py-8 text-center font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/60">
+                {recentLoaded
+                  ? t("pages:meetings.idle.empty", { defaultValue: "No meetings yet" })
+                  : t("pages:meetings.idle.loading", { defaultValue: "Loading…" })}
+              </div>
+            ) : (
+              <ul className="divide-y divide-te-gray/30">
+                {recent.map((m) => (
+                  <RecentMeetingRow
+                    key={m.id}
+                    item={m}
+                    onOpen={() => openMeeting(m.id)}
+                    onDelete={() => removeMeeting(m.id)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </div>
     </div>
+  );
+}
+
+function RecentMeetingRow({
+  item,
+  onOpen,
+  onDelete,
+}: {
+  item: MeetingHistoryRow;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useTranslation();
+  const date = new Date(item.created_at);
+  const dateLabel = date.toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const preview = (item.text ?? "").trim().split(/\r?\n/).filter((s) => s.length > 0)[0] ?? "";
+  return (
+    <li className="group flex items-center gap-4 py-3">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex min-w-0 flex-1 items-center gap-4 text-left transition hover:bg-te-surface-hover/50"
+      >
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] tabular-nums text-te-light-gray">
+          {dateLabel}
+        </span>
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] tabular-nums text-te-light-gray">
+          {formatHMS(item.duration_ms)}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-te-fg">
+          {preview || t("pages:meetings.idle.empty_transcript", { defaultValue: "(empty)" })}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="shrink-0 p-1 text-te-light-gray opacity-0 transition group-hover:opacity-100 hover:text-[#ff4d4d]"
+        title={t("pages:meetings.review.delete")}
+      >
+        <Trash2 className="size-3.5" />
+      </button>
+    </li>
   );
 }
 
@@ -407,6 +523,9 @@ function ReviewView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   const segments = useMeetingsStore(selectSortedSegments);
   const elapsedMs = useMeetingsStore((s) => s.elapsedMs);
+  const reviewMeetingId = useMeetingsStore((s) => s.reviewMeetingId);
+  const recent = useMeetingsStore((s) => s.recentMeetings);
+  const removeMeeting = useMeetingsStore((s) => s.removeMeeting);
 
   const speakerCount = useMemo(() => {
     const set = new Set<number>();
@@ -414,8 +533,20 @@ function ReviewView({ onBack }: { onBack: () => void }) {
     return set.size;
   }, [segments]);
 
-  const titleDate = new Date().toLocaleDateString();
+  // 优先用历史记录的 created_at 渲染标题日期，避免打开旧会议时显示"今天"。
+  const meta = reviewMeetingId ? recent.find((m) => m.id === reviewMeetingId) : null;
+  const titleDate = new Date(meta?.created_at ?? Date.now()).toLocaleDateString();
   const title = `${t("pages:meetings.title")} · ${titleDate}`;
+
+  const handleDelete = async () => {
+    if (!reviewMeetingId) return onBack();
+    const ok = window.confirm(
+      t("pages:meetings.review.delete_confirm", { defaultValue: "Delete this meeting?" }),
+    );
+    if (!ok) return;
+    await removeMeeting(reviewMeetingId);
+    onBack();
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -439,8 +570,9 @@ function ReviewView({ onBack }: { onBack: () => void }) {
           <button
             type="button"
             data-tauri-drag-region="false"
-            onClick={onBack}
-            className="flex shrink-0 items-center gap-2 border border-te-gray/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition hover:border-[#ff4d4d] hover:text-[#ff4d4d]"
+            onClick={handleDelete}
+            disabled={!reviewMeetingId}
+            className="flex shrink-0 items-center gap-2 border border-te-gray/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition hover:border-[#ff4d4d] hover:text-[#ff4d4d] disabled:opacity-40"
           >
             <Trash2 className="size-3" />
             {t("pages:meetings.review.delete")}

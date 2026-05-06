@@ -22,7 +22,6 @@
     "save_failed": "錄音儲存失敗",
     "mic_not_ready": "麥克風尚未就緒",
     "realtime_not_started": "即時轉寫尚未啟動",
-    "register_failed": "註冊失敗：{{id}}（{{error}}）",
     "hotkey_sync_failed": "同步快速鍵到 Rust 失敗：{{error}}"
   },
   "stt": {
@@ -42,5 +41,26 @@
   "update": {
     "check_failed": "檢查更新失敗",
     "available": "發現新版本 {{version}}"
+  },
+  "meetings": {
+    "go_to_settings": "前往設定",
+    "meeting_provider_unsupported": "聽寫通道不支援說話人分離",
+    "meeting_provider_unsupported_hint": "請將聽寫通道切換到「自訂 → 騰訊」，並填入 AppID / SecretId / SecretKey。",
+    "meeting_provider_not_configured": "尚未設定聽寫通道",
+    "meeting_provider_not_configured_hint": "請先到「設定 → 聽寫」設定自訂供應商。",
+    "network_exit": "連線已中斷",
+    "network_exit_hint": "即時語音辨識連線被中斷，請檢查網路後重試。",
+    "idle_timeout": "長時間無聲音而被中斷",
+    "idle_timeout_hint": "供應商在長時間靜音後關閉了會話，點選「繼續」可重新連線。",
+    "start_failed": "無法開始會議",
+    "pause_failed": "無法暫停",
+    "resume_failed": "無法繼續",
+    "history_save_failed": "儲存會議記錄失敗",
+    "history_open_failed": "開啟會議記錄失敗",
+    "history_delete_failed": "刪除會議記錄失敗",
+    "unauthenticated_byok": "自訂供應商驗證失敗",
+    "unauthenticated_byok_hint": "請確認騰訊供應商的 AppID / SecretId / SecretKey 是否正確。",
+    "insufficient_funds": "供應商餘額不足",
+    "insufficient_funds_hint": "請為騰訊語音辨識帳戶儲值，或切換到其他供應商。"
   }
 }
