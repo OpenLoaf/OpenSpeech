@@ -481,10 +481,13 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 let mut newly_released: Vec<(BindingId, String)> = Vec::new();
 
                 // 优先用 OS 同步 API 校准 pressed（目前 Windows 实现，macOS/Linux 后续）。
-                // 校准能根治 rdev 漏报带来的"幽灵 modifier 卡住"——典型症状：日志里
-                // 连续多个事件 `pressed_before={Meta}` 不消失，下一次 Ctrl press 立刻
-                // 被算成 Ctrl+Meta 命中 PTT 错误响声。校准后 pressed 直接等于 OS 真实
-                // 物理状态（含本次事件之后的结果），无需 ghost 检测 + insert/remove。
+                // 兜的是 Windows LL hook 在双修饰键同时释放（典型 Win+Ctrl）时 OS
+                // 会"mask"掉其中一个 KEYUP 的副作用——这是 OS 抑制开始菜单弹出的副
+                // 产物，AutoHotkey 圈记录已久。rdev 忠实转发它收到的事件，hook 队列
+                // 里就缺那条 release，所以"幽灵 modifier 卡住"的根因是 OS 不是 rdev。
+                // 典型症状：日志里连续多个事件 `pressed_before={Meta}` 不消失，下一
+                // 次 Ctrl press 立刻被算成 Ctrl+Meta 命中 PTT 错误响声。校准后 pressed
+                // 直接等于 OS 真实物理状态（含本次事件之后的结果），无需 ghost 检测。
                 let os_synced = if let Some(real) = query_real_modifier_state() {
                     // Fn 仅 macOS 走 rdev::Key::Function 路径，Windows 永远不会进入
                     // pressed；此处保留 had_fn 是面向"将来 macOS 也接入校准"的预留。
@@ -495,14 +498,18 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                         s.pressed.insert(Mod::Fn);
                     }
                     if prev != s.pressed {
-                        // chord 中第二个键尚未到达 rdev 时，OS 先于 rdev 知道全集，
-                        // correction 表现为"补进"——这是预期视角差，非 rdev bug。
-                        // 真信号是反向：内部有键但 OS 已无 → rdev 漏报 release，
-                        // 幽灵 modifier 被纠正掉。只在这种情况打 WARN。
+                        // 两类 correction 都是预期、可重现、自动兜底的，全走 debug：
+                        //   - "filled in"：chord 中第二个键尚未到达 rdev 时，OS 先于
+                        //     rdev 知道全集，correction 把另一个键补进来。
+                        //   - "removed stale"：双修饰键释放时 OS 吞掉一个 KEYUP，
+                        //     下一个事件入口处 OS 同步把卡住的 modifier 清掉。
+                        // 两路都不代表 bug，留 debug 仅供排查"PTT 错触发/不触发"时按时
+                        // 序追状态。如果未来真出新问题（PTT 没响、误响），症状会在更
+                        // 高层暴露，那时再回看这里的 debug 流水。
                         let removed: HashSet<Mod> =
                             prev.difference(&s.pressed).cloned().collect();
                         if !removed.is_empty() {
-                            log::warn!(
+                            log::debug!(
                                 "[modifier_only] OS sync removed stale modifier(s): {:?} (prev={:?} → {:?}, event {:?} {})",
                                 removed,
                                 prev,
