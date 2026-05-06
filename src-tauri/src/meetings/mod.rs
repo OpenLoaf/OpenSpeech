@@ -30,7 +30,7 @@ use crate::asr::byok::{
 };
 use crate::asr::meeting::tencent_speaker::TencentSpeakerProvider;
 use crate::asr::meeting::{
-    MeetingAsrProvider, MeetingEvent, MeetingProviderError, MeetingSession, MeetingSessionConfig,
+    MeetingAsrProvider, MeetingEvent, MeetingSession, MeetingSessionConfig,
 };
 use crate::audio::is_valid_date_segment;
 use crate::db;
@@ -119,12 +119,14 @@ fn active_slot() -> &'static Mutex<Option<ActiveMeeting>> {
 const ERR_MEETING_PROVIDER_UNSUPPORTED: &str = "meeting_provider_unsupported";
 const ERR_MEETING_PROVIDER_NOT_CONFIGURED: &str = "meeting_provider_not_configured";
 
+// 直接返回 `<i18n_code>: <msg>` 字符串而不过 MeetingProviderError——
+// 后者 Display 会再加一层 "unsupported:" / "unauthenticated:" 前缀，导致前端
+// 按 `^[a-z_]+:` 解析时把分类名当成了 code，i18n 无法命中。
 fn build_provider(
     provider: &ProviderRef,
-) -> Result<Box<dyn MeetingAsrProvider>, MeetingProviderError> {
-    let backend = dispatch_dictation_backend(provider, DictationModality::Realtime).map_err(
-        |e| MeetingProviderError::Unauthenticated(format!("{ERR_MEETING_PROVIDER_NOT_CONFIGURED}: {e}")),
-    )?;
+) -> Result<Box<dyn MeetingAsrProvider>, String> {
+    let backend = dispatch_dictation_backend(provider, DictationModality::Realtime)
+        .map_err(|e| format!("{ERR_MEETING_PROVIDER_NOT_CONFIGURED}: {e}"))?;
     match backend {
         DictationBackend::TencentRealtime {
             app_id,
@@ -134,11 +136,10 @@ fn build_provider(
         } => Ok(Box::new(TencentSpeakerProvider::new(
             app_id, secret_id, secret_key,
         ))),
-        // SaaS / Aliyun / TencentFile 都不支持实时说话人分离，前端按错误码引导用户切到 Tencent BYOK。
-        other => Err(MeetingProviderError::Unsupported(format!(
+        other => Err(format!(
             "{ERR_MEETING_PROVIDER_UNSUPPORTED}: {}",
             crate::asr::byok::provider_kind_str(&other)
-        ))),
+        )),
     }
 }
 
@@ -185,7 +186,7 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         }
     }
 
-    let provider = build_provider(&args.provider).map_err(|e| e.to_string())?;
+    let provider = build_provider(&args.provider)?;
     let provider_id = provider.id().to_string();
     let mut session = provider
         .open(MeetingSessionConfig {
