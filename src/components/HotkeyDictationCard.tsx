@@ -108,35 +108,63 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
       )}
     >
       {!showPanel && (
-        <div className="mb-2 flex shrink-0 items-end justify-between md:mb-3">
-          <h2 className="font-mono text-base font-bold uppercase tracking-tighter text-te-fg md:text-lg">
-            {t(`pages:home.hotkey_title.${hotkeyTab}`)}
-          </h2>
-          <div
-            className="flex shrink-0 border border-te-gray/60 bg-te-surface font-mono text-[10px] uppercase tracking-widest"
-            role="tablist"
-          >
-            {(["translate", "dictate"] as const).map((tab) => {
-              const active = hotkeyTab === tab;
-              return (
-                <button
-                  key={tab}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setHotkeyTab(tab)}
-                  className={
-                    active
-                      ? "px-2.5 py-1 bg-te-accent text-te-bg"
-                      : "px-2.5 py-1 text-te-light-gray hover:text-te-fg"
-                  }
-                >
-                  {t(`pages:home.hotkey_tab.${tab}`)}
-                </button>
-              );
-            })}
+        <>
+          <div className="mb-2 flex shrink-0 items-end justify-between md:mb-3">
+            <h2 className="font-mono text-base font-bold uppercase tracking-tighter text-te-fg md:text-lg">
+              {t(`pages:home.hotkey_title.${hotkeyTab}`)}
+            </h2>
+            <div
+              className="flex shrink-0 border border-te-gray/60 bg-te-surface font-mono text-[10px] uppercase tracking-widest"
+              role="tablist"
+            >
+              {(["translate", "dictate"] as const).map((tab) => {
+                const active = hotkeyTab === tab;
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setHotkeyTab(tab)}
+                    className={
+                      active
+                        ? "px-2.5 py-1 bg-te-accent text-te-bg"
+                        : "px-2.5 py-1 text-te-light-gray hover:text-te-fg"
+                    }
+                  >
+                    {t(`pages:home.hotkey_tab.${tab}`)}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+          {hotkeyTab === "translate" ? (
+            <div className="mb-2 flex shrink-0 flex-wrap items-center gap-1.5 md:mb-3">
+              {TRANSLATE_LANGS.map((lang) => {
+                const active = translateTargetLang === lang;
+                return (
+                  <button
+                    key={lang}
+                    type="button"
+                    onClick={() =>
+                      void setGeneral("translateTargetLang", lang)
+                    }
+                    className={cn(
+                      "border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest transition-colors md:text-xs",
+                      active
+                        ? "border-te-accent bg-te-accent text-te-bg"
+                        : "border-te-gray/60 text-te-light-gray hover:border-te-accent hover:text-te-accent",
+                    )}
+                  >
+                    {t(`overlay:translate.lang.${lang}`, {
+                      defaultValue: lang,
+                    })}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </>
       )}
 
       <div
@@ -182,30 +210,6 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
               transition={{ duration: 0.18 }}
               className="flex min-h-0 flex-1 flex-col"
             >
-              {hotkeyTab === "translate" ? (
-                <div className="mb-6 flex shrink-0 flex-wrap items-center gap-1.5 md:mb-8">
-                  {TRANSLATE_LANGS.map((lang) => {
-                    const active = translateTargetLang === lang;
-                    return (
-                      <button
-                        key={lang}
-                        type="button"
-                        onClick={() => void setGeneral("translateTargetLang", lang)}
-                        className={cn(
-                          "border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest transition-colors md:text-xs",
-                          active
-                            ? "border-te-accent bg-te-accent text-te-bg"
-                            : "border-te-gray/60 text-te-light-gray hover:border-te-accent hover:text-te-accent",
-                        )}
-                      >
-                        {t(`overlay:translate.lang.${lang}`, {
-                          defaultValue: lang,
-                        })}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
               <HotkeyPreview
                 fillHeight
                 hideHeader
