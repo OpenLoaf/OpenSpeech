@@ -25,8 +25,10 @@ import type { StatsMetric } from "@/stores/ui";
 import { useHistoryStore } from "@/stores/history";
 import {
   aggregate,
-  type AppRow,
+  type AsrSourceRow,
+  type DurationDistBucket,
   type HeatCell,
+  type ProviderRow,
   type Range,
   type StatsBundle,
   type WpmByMode,
@@ -37,14 +39,6 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   focusMetric: StatsMetric;
-};
-
-const METRIC_INDEX: Record<StatsMetric, string> = {
-  duration: "01",
-  words: "02",
-  wpm: "03",
-  saved: "04",
-  sessions: "05",
 };
 
 const RANGE_ORDER: Range[] = ["today", "7d", "30d", "90d", "all"];
@@ -125,8 +119,8 @@ export function StatsDialog({ open, onOpenChange, focusMetric }: Props) {
           {/* KPI strip — clickable; the active cell drives main panel + facets */}
           <KpiStrip stats={stats} focused={metric} onSelect={setMetric} />
 
-          {/* Range only — metric switching now lives in the KPI strip */}
-          <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-te-gray/30 bg-te-bg/40 px-5 py-3">
+          {/* Range — 单独一行右对齐 */}
+          <div className="flex shrink-0 items-center justify-end border-b border-te-gray/30 bg-te-bg/40 px-5 py-3">
             <RangeSwitcher value={range} onChange={setRange} />
           </div>
 
@@ -308,7 +302,7 @@ function MainPanel({
     baseline: TYPING_BASELINE_WPM,
   });
   return (
-    <Section title={title} hint={hint} indexLabel={METRIC_INDEX[metric]}>
+    <Section title={title} hint={hint}>
       {metric === "duration" ? (
         <DailyBars stats={stats} field="duration" />
       ) : metric === "words" ? (
@@ -350,15 +344,15 @@ function FacetPanel({
     return (
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <FacetHeatmap heat={stats.heat} />
-        <FacetSessionDist dist={stats.sessionDist} />
+        <FacetDurationDist dist={stats.durationDist} />
       </div>
     );
   }
   if (metric === "words") {
     return (
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <FacetTopApps apps={stats.topApps} valueKey="words" />
         <FacetSessionDist dist={stats.sessionDist} />
+        <FacetTypeMix mix={stats.typeMix} />
       </div>
     );
   }
@@ -366,7 +360,7 @@ function FacetPanel({
     return (
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <FacetWpmByMode rows={stats.wpmByMode} />
-        <FacetTopApps apps={stats.topApps} valueKey="words" />
+        <FacetProviderDist rows={stats.providerDist} />
       </div>
     );
   }
@@ -374,15 +368,15 @@ function FacetPanel({
     return (
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <FacetSavedEquivalent savedMs={stats.totals.savedMs} />
-        <FacetTopApps apps={stats.topApps} valueKey="duration" />
+        <FacetAiRefineRate data={stats.aiRefineRate} />
       </div>
     );
   }
-  // sessions：用次数比例 + 活跃时段呈现"频次"主题
+  // sessions：用成功率 + ASR 通道呈现"频次"主题
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <FacetSessionDist dist={stats.sessionDist} />
-      <FacetHeatmap heat={stats.heat} />
+      <FacetStatusMix mix={stats.statusMix} />
+      <FacetAsrSourceDist rows={stats.asrSourceDist} />
     </div>
   );
 }
@@ -395,11 +389,14 @@ function Section({
   title,
   hint,
   indexLabel,
+  headerRight,
   children,
 }: {
   title: string;
   hint?: string;
   indexLabel?: string;
+  /** 优先级 > indexLabel；想放控件（如 RangeSwitcher）就用这个。 */
+  headerRight?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -415,7 +412,9 @@ function Section({
             </span>
           ) : null}
         </div>
-        {indexLabel ? (
+        {headerRight ? (
+          <div className="shrink-0">{headerRight}</div>
+        ) : indexLabel ? (
           <span className="font-mono text-[10px] tracking-widest text-te-light-gray">
             {indexLabel}
           </span>
@@ -498,7 +497,7 @@ function DailyBars({
               ),
   }));
   return (
-    <div className="h-44 w-full">
+    <div className="h-32 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={data}
@@ -544,7 +543,7 @@ function WpmLine({ stats }: { stats: StatsBundle }) {
       d.durationMs > 0 ? Math.round(d.words / (d.durationMs / 60_000)) : 0,
   }));
   return (
-    <div className="h-44 w-full">
+    <div className="h-32 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={data}
@@ -735,58 +734,6 @@ function FacetHeatmap({ heat }: { heat: HeatCell[] }) {
   );
 }
 
-function FacetTopApps({
-  apps,
-  valueKey,
-}: {
-  apps: AppRow[];
-  valueKey: "words" | "duration";
-}) {
-  const { t } = useTranslation();
-  const max = Math.max(
-    1,
-    ...apps.map((a) => (valueKey === "words" ? a.words : a.durationMs)),
-  );
-  return (
-    <Section
-      title={t("pages:home.stats_dialog.facet.top_apps.title")}
-      hint={t("pages:home.stats_dialog.facet.top_apps.hint")}
-    >
-      <div className="flex flex-col gap-1.5">
-        {apps.map((a, i) => {
-          const raw = valueKey === "words" ? a.words : a.durationMs;
-          const display =
-            valueKey === "words"
-              ? formatNumber(a.words)
-              : formatHoursLong(a.durationMs);
-          const pct = (raw / max) * 100;
-          const tip = `${a.name} · ${formatHoursLong(a.durationMs)} · ${formatNumber(a.words)} 字 · ${a.sessions} sessions`;
-          return (
-            <div
-              key={i}
-              className="grid grid-cols-[6rem_1fr_4.5rem] items-center gap-2"
-              title={tip}
-            >
-              <span className="truncate font-mono text-[11px] text-te-fg">
-                {a.name}
-              </span>
-              <div className="relative h-3 bg-te-surface">
-                <div
-                  className="absolute inset-y-0 left-0 bg-te-accent"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-              <span className="text-right font-mono text-[10px] tabular-nums text-te-light-gray">
-                {display}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </Section>
-  );
-}
-
 function FacetWpmByMode({ rows }: { rows: WpmByMode[] }) {
   const { t } = useTranslation();
   const totalSessions = rows.reduce((a, r) => a + r.sessions, 0) || 1;
@@ -921,6 +868,300 @@ function FacetSavedEquivalent({ savedMs }: { savedMs: number }) {
           );
         })}
       </ul>
+    </Section>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Facets — duration_dist / type_mix / provider_dist / ai_refine_rate
+//          status_mix / asr_source_dist
+// ────────────────────────────────────────────────────────────────
+
+function FacetDurationDist({ dist }: { dist: DurationDistBucket[] }) {
+  const { t } = useTranslation();
+  const total = dist.reduce((a, b) => a + b.sessions, 0);
+  const max = Math.max(1, ...dist.map((d) => d.sessions));
+  return (
+    <Section
+      title={t("pages:home.stats_dialog.facet.duration_dist.title")}
+      hint={t("pages:home.stats_dialog.facet.duration_dist.hint")}
+    >
+      <div className="flex flex-col gap-1.5">
+        {dist.map((b) => {
+          const pct = (b.sessions / max) * 100;
+          const totalPct =
+            total > 0 ? Math.round((b.sessions / total) * 100) : 0;
+          return (
+            <div
+              key={b.key}
+              className="grid grid-cols-[5.5rem_1fr_4rem] items-center gap-2"
+              title={`${b.sessions} sessions · ${totalPct}%`}
+            >
+              <span className="font-mono text-[11px] text-te-fg">
+                {t(`pages:home.stats_dialog.facet.duration_dist.buckets.${b.key}`)}
+              </span>
+              <div className="relative h-3 bg-te-surface">
+                <div
+                  className="absolute inset-y-0 left-0 bg-te-accent"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <span className="text-right font-mono text-[10px] tabular-nums text-te-light-gray">
+                {formatNumber(b.sessions)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+type SimpleSegment = {
+  key: string;
+  label: string;
+  value: number;
+  opacity: number;
+};
+
+function DonutFacet({
+  title,
+  hint,
+  segments,
+  centerHint,
+}: {
+  title: string;
+  hint: string;
+  segments: SimpleSegment[];
+  centerHint?: string;
+}) {
+  const total = segments.reduce((a, s) => a + s.value, 0);
+  return (
+    <Section title={title} hint={hint}>
+      <div className="grid grid-cols-[auto_1fr] items-center gap-5">
+        <Donut
+          segments={segments.map((s) => ({
+            value: s.value,
+            opacity: s.opacity,
+          }))}
+          centerLabel={formatNumber(total)}
+          centerHint={centerHint}
+        />
+        <div className="flex flex-col gap-2">
+          {segments.map((s) => {
+            const pct =
+              total > 0 ? Math.round((s.value / total) * 100) : 0;
+            return (
+              <div
+                key={s.key}
+                className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-widest text-te-light-gray"
+              >
+                <span className="flex items-center gap-2">
+                  <span
+                    className="size-2 bg-te-accent"
+                    style={{ opacity: s.opacity }}
+                    aria-hidden
+                  />
+                  {s.label}
+                </span>
+                <span className="tabular-nums text-te-fg">
+                  {formatNumber(s.value)}
+                  <span className="ml-1 text-te-light-gray">·{pct}%</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function FacetTypeMix({
+  mix,
+}: {
+  mix: { dictation: number; ask: number; translate: number };
+}) {
+  const { t } = useTranslation();
+  const segments: SimpleSegment[] = [
+    {
+      key: "dictation",
+      label: t("pages:home.stats_dialog.facet.type_mix.buckets.dictation"),
+      value: mix.dictation,
+      opacity: 1,
+    },
+    {
+      key: "ask",
+      label: t("pages:home.stats_dialog.facet.type_mix.buckets.ask"),
+      value: mix.ask,
+      opacity: 0.65,
+    },
+    {
+      key: "translate",
+      label: t("pages:home.stats_dialog.facet.type_mix.buckets.translate"),
+      value: mix.translate,
+      opacity: 0.35,
+    },
+  ];
+  return (
+    <DonutFacet
+      title={t("pages:home.stats_dialog.facet.type_mix.title")}
+      hint={t("pages:home.stats_dialog.facet.type_mix.hint")}
+      segments={segments}
+      centerHint={t("pages:home.stats_dialog.kpi.sessions")}
+    />
+  );
+}
+
+function FacetStatusMix({
+  mix,
+}: {
+  mix: { success: number; failed: number; cancelled: number };
+}) {
+  const { t } = useTranslation();
+  const segments: SimpleSegment[] = [
+    {
+      key: "success",
+      label: t("pages:home.stats_dialog.facet.status_mix.buckets.success"),
+      value: mix.success,
+      opacity: 1,
+    },
+    {
+      key: "failed",
+      label: t("pages:home.stats_dialog.facet.status_mix.buckets.failed"),
+      value: mix.failed,
+      opacity: 0.55,
+    },
+    {
+      key: "cancelled",
+      label: t("pages:home.stats_dialog.facet.status_mix.buckets.cancelled"),
+      value: mix.cancelled,
+      opacity: 0.3,
+    },
+  ];
+  return (
+    <DonutFacet
+      title={t("pages:home.stats_dialog.facet.status_mix.title")}
+      hint={t("pages:home.stats_dialog.facet.status_mix.hint")}
+      segments={segments}
+      centerHint={t("pages:home.stats_dialog.kpi.sessions")}
+    />
+  );
+}
+
+function FacetAsrSourceDist({ rows }: { rows: AsrSourceRow[] }) {
+  const { t } = useTranslation();
+  const opacities = [1, 0.65, 0.4, 0.25];
+  const segments: SimpleSegment[] = rows.map((r, i) => ({
+    key: r.source,
+    label: t(
+      `pages:home.stats_dialog.facet.asr_source_dist.buckets.${r.source}`,
+      {
+        defaultValue: r.source,
+      },
+    ),
+    value: r.sessions,
+    opacity: opacities[i] ?? 0.2,
+  }));
+  return (
+    <DonutFacet
+      title={t("pages:home.stats_dialog.facet.asr_source_dist.title")}
+      hint={t("pages:home.stats_dialog.facet.asr_source_dist.hint")}
+      segments={segments}
+      centerHint={t("pages:home.stats_dialog.kpi.sessions")}
+    />
+  );
+}
+
+function FacetProviderDist({ rows }: { rows: ProviderRow[] }) {
+  const { t } = useTranslation();
+  const max = Math.max(1, ...rows.map((r) => r.sessions));
+  const unknownLabel = t("pages:home.stats_dialog.facet.provider_dist.unknown");
+  return (
+    <Section
+      title={t("pages:home.stats_dialog.facet.provider_dist.title")}
+      hint={t("pages:home.stats_dialog.facet.provider_dist.hint")}
+    >
+      <div className="flex flex-col gap-1.5">
+        {rows.map((r) => {
+          const pct = (r.sessions / max) * 100;
+          const display = r.provider === "unknown" ? unknownLabel : r.provider;
+          const tip = `${display} · ${r.sessions} sessions · ${r.wpm} wpm`;
+          return (
+            <div
+              key={r.provider}
+              className="grid grid-cols-[7rem_1fr_4rem] items-center gap-2"
+              title={tip}
+            >
+              <span className="truncate font-mono text-[11px] text-te-fg">
+                {display}
+              </span>
+              <div className="relative h-3 bg-te-surface">
+                <div
+                  className="absolute inset-y-0 left-0 bg-te-accent"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <span className="text-right font-mono text-[10px] tabular-nums text-te-light-gray">
+                {r.wpm}
+                <span className="ml-1 text-te-light-gray/70">wpm</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+function FacetAiRefineRate({
+  data,
+}: {
+  data: { used: number; total: number; avgRefineMs: number };
+}) {
+  const { t } = useTranslation();
+  const pct =
+    data.total > 0 ? Math.round((data.used / data.total) * 100) : 0;
+  const remaining = Math.max(0, data.total - data.used);
+  const avgSec =
+    data.avgRefineMs > 0 ? (data.avgRefineMs / 1000).toFixed(1) : "—";
+  return (
+    <Section
+      title={t("pages:home.stats_dialog.facet.ai_refine_rate.title")}
+      hint={t("pages:home.stats_dialog.facet.ai_refine_rate.hint")}
+    >
+      <div className="grid grid-cols-[auto_1fr] items-center gap-5">
+        <Donut
+          segments={[
+            { value: data.used, opacity: 1 },
+            { value: remaining, opacity: 0.2 },
+          ]}
+          centerLabel={`${pct}%`}
+          centerHint={t("pages:home.stats_dialog.facet.ai_refine_rate.used_label")}
+        />
+        <div className="flex flex-col gap-3">
+          <div className="flex items-baseline justify-between font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+            <span>
+              {t("pages:home.stats_dialog.facet.ai_refine_rate.used_label")}
+            </span>
+            <span className="tabular-nums text-te-fg">
+              {formatNumber(data.used)}{" "}
+              <span className="text-te-light-gray">
+                /{formatNumber(data.total)}
+              </span>
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+            <span>
+              {t("pages:home.stats_dialog.facet.ai_refine_rate.avg_label")}
+            </span>
+            <span className="tabular-nums text-te-fg">
+              {avgSec}
+              <span className="ml-1 text-te-light-gray">s</span>
+            </span>
+          </div>
+        </div>
+      </div>
     </Section>
   );
 }

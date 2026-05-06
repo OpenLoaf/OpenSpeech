@@ -29,6 +29,24 @@ export interface WpmByMode {
   sessions: number;
 }
 
+export interface DurationDistBucket {
+  key: "lt10s" | "s10_30" | "s30_60" | "s60_120" | "gt120s";
+  sessions: number;
+}
+
+export interface ProviderRow {
+  provider: string;
+  sessions: number;
+  durationMs: number;
+  words: number;
+  wpm: number;
+}
+
+export interface AsrSourceRow {
+  source: string;
+  sessions: number;
+}
+
 export interface StatsBundle {
   daily: DailyPoint[];
   heat: HeatCell[];
@@ -42,6 +60,12 @@ export interface StatsBundle {
     wpm: number;
     savedMs: number;
   };
+  durationDist: DurationDistBucket[];
+  typeMix: { dictation: number; ask: number; translate: number };
+  providerDist: ProviderRow[];
+  aiRefineRate: { used: number; total: number; avgRefineMs: number };
+  statusMix: { success: number; failed: number; cancelled: number };
+  asrSourceDist: AsrSourceRow[];
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -90,6 +114,22 @@ interface ModeAcc {
   sessions: number;
 }
 
+interface ProviderAcc {
+  durationMs: number;
+  words: number;
+  sessions: number;
+}
+
+type DurationKey = DurationDistBucket["key"];
+
+function durationBucket(dur: number): DurationKey {
+  if (dur < 10_000) return "lt10s";
+  if (dur < 30_000) return "s10_30";
+  if (dur < 60_000) return "s30_60";
+  if (dur < 120_000) return "s60_120";
+  return "gt120s";
+}
+
 export function aggregate(
   items: HistoryItem[],
   range: Range,
@@ -102,6 +142,9 @@ export function aggregate(
   const heat = new Map<number, number>(); // key = weekday * 24 + hour
   const apps = new Map<string, AppAcc>();
   const modes = new Map<"REALTIME" | "UTTERANCE" | "UNKNOWN", ModeAcc>();
+  const providers = new Map<string, ProviderAcc>();
+  const durBuckets = new Map<DurationKey, number>();
+  const asrSources = new Map<string, number>();
 
   let totalDuration = 0;
   let totalWords = 0;
@@ -110,10 +153,36 @@ export function aggregate(
   let mediumCount = 0;
   let longCount = 0;
 
+  let typeDictation = 0;
+  let typeAsk = 0;
+  let typeTranslate = 0;
+
+  let statusSuccess = 0;
+  let statusFailed = 0;
+  let statusCancelled = 0;
+
+  let refineUsed = 0;
+  let refineMsSum = 0;
+  let refineMsCount = 0;
+
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    if (it.status !== "success") continue;
     if (it.created_at < cutoff) continue;
+
+    const status = it.status;
+    if (status === "success") statusSuccess += 1;
+    else if (status === "failed") statusFailed += 1;
+    else if (status === "cancelled") statusCancelled += 1;
+
+    const itemType = it.type;
+    if (itemType === "dictation") typeDictation += 1;
+    else if (itemType === "ask") typeAsk += 1;
+    else if (itemType === "translate") typeTranslate += 1;
+
+    const asrKey = it.asr_source ?? "unknown";
+    asrSources.set(asrKey, (asrSources.get(asrKey) ?? 0) + 1);
+
+    if (status !== "success") continue;
 
     const w = countWords(it.text);
     const dur = it.duration_ms;
@@ -126,6 +195,17 @@ export function aggregate(
     if (w <= 20) shortCount += 1;
     else if (w <= 100) mediumCount += 1;
     else longCount += 1;
+
+    const bKey = durationBucket(dur);
+    durBuckets.set(bKey, (durBuckets.get(bKey) ?? 0) + 1);
+
+    const refined = it.refined_text;
+    if (refined != null && refined.length > 0) refineUsed += 1;
+    const refineMs = it.refine_ms;
+    if (refineMs != null) {
+      refineMsSum += refineMs;
+      refineMsCount += 1;
+    }
 
     const d = new Date(ts);
     const hour = d.getHours();
@@ -162,6 +242,16 @@ export function aggregate(
     } else {
       modes.set(modeKey, { durationMs: dur, words: w, sessions: 1 });
     }
+
+    const provKey = it.provider_kind ?? "unknown";
+    const provAcc = providers.get(provKey);
+    if (provAcc) {
+      provAcc.durationMs += dur;
+      provAcc.words += w;
+      provAcc.sessions += 1;
+    } else {
+      providers.set(provKey, { durationMs: dur, words: w, sessions: 1 });
+    }
   }
 
   const dailyArr: DailyPoint[] = [];
@@ -193,6 +283,26 @@ export function aggregate(
     totalDuration > 0 ? Math.round(totalWords / (totalDuration / 60000)) : 0;
   const savedMs = Math.max(0, (totalWords / TYPING_BASELINE_WPM) * 60_000 - totalDuration);
 
+  const durationDistOrder: DurationKey[] = ["lt10s", "s10_30", "s30_60", "s60_120", "gt120s"];
+  const durationDist: DurationDistBucket[] = durationDistOrder.map((key) => ({
+    key,
+    sessions: durBuckets.get(key) ?? 0,
+  }));
+
+  const providerDist: ProviderRow[] = Array.from(providers.entries())
+    .map(([provider, v]) => ({
+      provider,
+      sessions: v.sessions,
+      durationMs: v.durationMs,
+      words: v.words,
+      wpm: v.durationMs > 0 ? Math.round(v.words / (v.durationMs / 60000)) : 0,
+    }))
+    .sort((a, b) => b.sessions - a.sessions);
+
+  const asrSourceDist: AsrSourceRow[] = Array.from(asrSources.entries())
+    .map(([source, sessions]) => ({ source, sessions }))
+    .sort((a, b) => b.sessions - a.sessions);
+
   return {
     daily: dailyArr,
     heat: heatArr,
@@ -206,5 +316,15 @@ export function aggregate(
       wpm: totalsWpm,
       savedMs,
     },
+    durationDist,
+    typeMix: { dictation: typeDictation, ask: typeAsk, translate: typeTranslate },
+    providerDist,
+    aiRefineRate: {
+      used: refineUsed,
+      total: totalSessions,
+      avgRefineMs: refineMsCount > 0 ? refineMsSum / refineMsCount : 0,
+    },
+    statusMix: { success: statusSuccess, failed: statusFailed, cancelled: statusCancelled },
+    asrSourceDist,
   };
 }
