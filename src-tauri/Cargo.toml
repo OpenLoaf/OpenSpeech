@@ -64,6 +64,7 @@ async-trait = "0.1"
 # 复用同一份 crate，不引入额外 WS 栈。BYOK 腾讯实时 ASR 走这条路径。
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 rodio = { version = "0.22.2", default-features = false, features = ["wav", "playback"] }
+active-win-pos-rs = "0.10.1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

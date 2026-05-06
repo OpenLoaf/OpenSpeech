@@ -42,6 +42,7 @@ import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { newId } from "@/lib/ids";
 import { cuePlay, cueSetActive } from "@/lib/cue";
+import { getActiveAppName } from "@/lib/activeApp";
 
 export type RecordingState =
   | "idle"
@@ -368,6 +369,10 @@ let resolvedProviderKindForCurrentSession:
   | "aliyun-file"
   | null = null;
 
+// 录音开始瞬间抓的前台应用名，best-effort：invoke 异步返回，结束时若已回填就写
+// history.target_app；超快录音 / 失败时 null，由 add() 接受 null。
+let currentSessionTargetApp: string | null = null;
+
 // 失败原因翻译：Rust 端 stt_start 失败典型文案：
 //   "not authenticated; login first"
 //   "audio stream not running; start mic first"
@@ -551,6 +556,12 @@ const startRecordingSession = (id: string) => {
   // 把上一次的 sessionId 误带给本次 refine。
   currentSttSessionId = null;
   resolvedProviderKindForCurrentSession = null;
+  // 全局快捷键不会改变前台焦点，此刻拿到的就是用户原本在用的 app。invoke 通常
+  // < 100ms 完成，录音持续 1s+，结束时大概率已回填；超短录音兜底为 null。
+  currentSessionTargetApp = null;
+  void getActiveAppName().then((name) => {
+    currentSessionTargetApp = name;
+  });
   void startRecordingToFile(id)
     .then(() => {
       // UTTERANCE 走"录音→文件转写"主路径，全程不开 WS——避免网络抖动半路截断，
@@ -604,6 +615,7 @@ const recordAbortFailureHistory = (errorMsg: string) => {
       status: "failed",
       error: errorMsg,
       duration_ms: 0,
+      target_app: currentSessionTargetApp,
       target_lang: wasTranslate
         ? useSettingsStore.getState().general.translateTargetLang
         : null,
@@ -1114,6 +1126,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       error: errorForHistory,
       duration_ms: rec.duration_ms,
       audio_path: rec.audio_path,
+      target_app: currentSessionTargetApp,
       asr_source: asrSource,
       ai_model: aiModelLabel,
       segment_mode: segmentMode,
@@ -1391,6 +1404,7 @@ const abortAndSaveHistory = async (): Promise<void> => {
         status: "cancelled",
         duration_ms: rec.duration_ms,
         audio_path: rec.audio_path,
+        target_app: currentSessionTargetApp,
         segment_mode: segmentMode,
         provider_kind: providerKind,
       });
