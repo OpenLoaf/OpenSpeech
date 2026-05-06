@@ -397,3 +397,53 @@
   animation: te-progress-slide 1.1s linear infinite;
   will-change: transform;
 }
+
+/* 会议纪要 markdown：手写极简 prose（不引 @tailwindcss/typography），跟 TE 配色对齐。 */
+.prose-meeting h1,
+.prose-meeting h2,
+.prose-meeting h3 {
+  font-family: "Space Mono", monospace;
+  font-weight: 700;
+  color: var(--te-fg);
+}
+.prose-meeting h1 { font-size: 1.05rem; margin: 0.6rem 0 0.4rem; }
+.prose-meeting h2 { font-size: 0.9rem;  margin: 1.1rem 0 0.4rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--te-accent); }
+.prose-meeting h3 { font-size: 0.82rem; margin: 0.9rem 0 0.3rem; color: var(--te-light-gray); }
+.prose-meeting p { margin: 0.4rem 0; }
+.prose-meeting ul,
+.prose-meeting ol { margin: 0.3rem 0 0.6rem; padding-left: 1.2rem; }
+.prose-meeting ul { list-style: disc; }
+.prose-meeting ol { list-style: decimal; }
+.prose-meeting li { margin: 0.2rem 0; }
+.prose-meeting li input[type="checkbox"] { margin-right: 0.4rem; vertical-align: middle; accent-color: var(--te-accent); }
+.prose-meeting strong { font-weight: 700; color: var(--te-fg); }
+.prose-meeting em { font-style: italic; color: var(--te-light-gray); }
+.prose-meeting code {
+  font-family: "Space Mono", monospace;
+  font-size: 0.85em;
+  padding: 0.05rem 0.3rem;
+  background-color: rgb(var(--te-gray-rgb) / 30%);
+  border-radius: 2px;
+}
+.prose-meeting pre {
+  margin: 0.6rem 0;
+  padding: 0.7rem 0.9rem;
+  background-color: var(--te-surface);
+  border: 1px solid rgb(var(--te-gray-rgb) / 40%);
+  font-family: "Space Mono", monospace;
+  font-size: 0.85em;
+  overflow-x: auto;
+}
+.prose-meeting pre code { padding: 0; background: transparent; }
+.prose-meeting blockquote {
+  margin: 0.6rem 0;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--te-accent);
+  color: var(--te-light-gray);
+}
+.prose-meeting hr {
+  margin: 1rem 0;
+  border: none;
+  border-top: 1px solid rgb(var(--te-gray-rgb) / 50%);
+}
+.prose-meeting a { color: var(--te-accent); text-decoration: underline; }

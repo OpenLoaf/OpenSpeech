@@ -149,6 +149,7 @@
     "prompt_tab_refine": "听写优化",
     "prompt_tab_translate": "翻译",
     "prompt_tab_polish": "润色",
+    "prompt_tab_meeting": "会议纪要",
     "polish_scenarios_title": "润色场景",
     "polish_scenarios_hint": "AI 工具箱「润色」页底部 chip 列表的来源；运行时会把所选场景的指令拼接到润色系统提示词后。",
     "polish_scenarios_empty": "尚未添加润色场景",

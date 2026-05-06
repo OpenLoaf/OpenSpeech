@@ -16,6 +16,7 @@ import {
   DEFAULT_AI_SYSTEM_PROMPTS,
   DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS,
   DEFAULT_AI_POLISH_SYSTEM_PROMPTS,
+  DEFAULT_AI_MEETING_SUMMARY_PROMPTS,
   DEFAULT_POLISH_SCENARIOS,
   hasUnverifiedActiveDictation,
   hasUnverifiedActiveAiRefine,
@@ -889,6 +890,9 @@ function AiTab() {
   const setAiPolishSystemPrompt = useSettingsStore(
     (s) => s.setAiPolishSystemPrompt,
   );
+  const setAiMeetingSummaryPrompt = useSettingsStore(
+    (s) => s.setAiMeetingSummaryPrompt,
+  );
   const setPolishScenarios = useSettingsStore((s) => s.setPolishScenarios);
   const setAiIncludeHistory = useSettingsStore((s) => s.setAiIncludeHistory);
 
@@ -968,6 +972,8 @@ function AiTab() {
         onPolishChange={(v) => void setAiPolishSystemPrompt(v)}
         polishScenarios={aiRefine.customPolishScenarios}
         onPolishScenariosChange={(v) => void setPolishScenarios(v)}
+        meetingSummaryCustom={aiRefine.customMeetingSummaryPrompt}
+        onMeetingSummaryChange={(v) => void setAiMeetingSummaryPrompt(v)}
       />
 
       <SectionTitle>{t("ai.section_history")}</SectionTitle>
@@ -984,7 +990,7 @@ function AiTab() {
   );
 }
 
-type PromptKind = "refine" | "translate" | "polish";
+type PromptKind = "refine" | "translate" | "polish" | "meeting";
 
 function AiSystemPromptSection({
   refineCustom,
@@ -995,6 +1001,8 @@ function AiSystemPromptSection({
   onPolishChange,
   polishScenarios,
   onPolishScenariosChange,
+  meetingSummaryCustom,
+  onMeetingSummaryChange,
 }: {
   refineCustom: string | null;
   onRefineChange: (value: string | null) => void;
@@ -1004,6 +1012,8 @@ function AiSystemPromptSection({
   onPolishChange: (value: string | null) => void;
   polishScenarios: PolishScenario[] | null;
   onPolishScenariosChange: (value: PolishScenario[] | null) => void;
+  meetingSummaryCustom: string | null;
+  onMeetingSummaryChange: (value: string | null) => void;
 }) {
   const { t } = useTranslation("settings");
   const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
@@ -1015,19 +1025,25 @@ function AiSystemPromptSection({
       ? refineCustom
       : kind === "translate"
         ? translationCustom
-        : polishCustom;
+        : kind === "polish"
+          ? polishCustom
+          : meetingSummaryCustom;
   const onChange =
     kind === "refine"
       ? onRefineChange
       : kind === "translate"
         ? onTranslationChange
-        : onPolishChange;
+        : kind === "polish"
+          ? onPolishChange
+          : onMeetingSummaryChange;
   const defaultValue =
     kind === "refine"
       ? DEFAULT_AI_SYSTEM_PROMPTS[lang]
       : kind === "translate"
         ? DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS[lang]
-        : DEFAULT_AI_POLISH_SYSTEM_PROMPTS[lang];
+        : kind === "polish"
+          ? DEFAULT_AI_POLISH_SYSTEM_PROMPTS[lang]
+          : DEFAULT_AI_MEETING_SUMMARY_PROMPTS[lang];
   const displayValue = custom ?? defaultValue;
   const isCustom = custom !== null;
 
@@ -1035,6 +1051,7 @@ function AiSystemPromptSection({
     { id: "refine", label: t("ai.prompt_tab_refine") },
     { id: "translate", label: t("ai.prompt_tab_translate") },
     { id: "polish", label: t("ai.prompt_tab_polish") },
+    { id: "meeting", label: t("ai.prompt_tab_meeting") },
   ];
 
   return (

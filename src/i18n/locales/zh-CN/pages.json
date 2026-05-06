@@ -116,6 +116,56 @@
             "medium": "中段 21–100 字",
             "long": "长稿 > 100 字"
           }
+        },
+        "duration_dist": {
+          "title": "单次时长分布",
+          "hint": "按一次录音的长度分桶，看你说短句多还是说长稿多",
+          "buckets": {
+            "lt10s": "< 10 秒",
+            "s10_30": "10–30 秒",
+            "s30_60": "30–60 秒",
+            "s60_120": "1–2 分钟",
+            "gt120s": "> 2 分钟"
+          }
+        },
+        "type_mix": {
+          "title": "类型分布",
+          "hint": "你都用 OpenSpeech 做什么——听写、问 AI 还是翻译",
+          "buckets": {
+            "dictation": "听写",
+            "ask": "问 AI",
+            "translate": "翻译"
+          }
+        },
+        "provider_dist": {
+          "title": "通道分布",
+          "hint": "不同 ASR 通道的次数与平均速度",
+          "unknown": "未知通道"
+        },
+        "ai_refine_rate": {
+          "title": "AI 优化使用率",
+          "hint": "多少次会话用了 AI 整理；以及平均整理耗时",
+          "used_label": "已使用",
+          "avg_label": "平均耗时"
+        },
+        "status_mix": {
+          "title": "成功率",
+          "hint": "成功 / 失败 / 取消 三态占比",
+          "buckets": {
+            "success": "成功",
+            "failed": "失败",
+            "cancelled": "已取消"
+          }
+        },
+        "asr_source_dist": {
+          "title": "ASR 通道分布",
+          "hint": "实时 / 文件转写 / 自定义端点 各占多少",
+          "buckets": {
+            "saas-realtime": "实时",
+            "saas-rest": "文件转写",
+            "byo": "自定义",
+            "unknown": "未知"
+          }
         }
       },
       "empty": "// 还没有听写记录，去主界面试试 //"
@@ -429,7 +479,9 @@
       "pause": "暂停",
       "resume": "继续",
       "stop": "结束",
-      "listening": "正在聆听..."
+      "listening": "正在聆听...",
+      "reconnecting": "网络异常，正在重连… ({{attempt}}/{{max}})",
+      "reconnect_gave_up": "重连失败，会议已断开"
     },
     "speaker": {
       "label": "用户 {{letter}}",
@@ -446,9 +498,22 @@
       "summary_speakers": "发言人",
       "summary_abstract": "会议摘要",
       "summary_section": "讨论要点",
-      "summary_loading": "正在生成纪要…",
-      "search": "搜索",
-      "edit": "编辑"
+      "summary_loading": "正在加载纪要…",
+      "summary_generate": "生成纪要",
+      "summary_regenerate": "重新生成",
+      "summary_failed": "纪要生成失败",
+      "summary_idle_hint": "点上方「生成纪要」按钮，按当前 AI 通道生成 Markdown 纪要（设置 → AI → 提示词 → 会议纪要 可改默认提示）。",
+      "summary_empty_transcript": "本次会议没有可总结的内容。",
+      "export": "导出",
+      "export_default_name": "会议-{{date}}-{{shortId}}",
+      "export_md_filter": "Markdown",
+      "export_doc_title": "会议记录",
+      "export_meta_created": "时间",
+      "export_meta_duration": "时长",
+      "export_meta_speakers": "说话人数",
+      "export_meta_segments": "段数",
+      "export_success": "已导出到 {{path}}",
+      "export_failed": "导出失败"
     }
   }
 }

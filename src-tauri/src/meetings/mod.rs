@@ -42,6 +42,13 @@ pub const EVENT_FINAL: &str = "meetings://segment-final";
 pub const EVENT_ERROR: &str = "meetings://error";
 pub const EVENT_END: &str = "meetings://ended";
 pub const EVENT_STATUS: &str = "meetings://status";
+pub const EVENT_RECONNECTING: &str = "meetings://reconnecting";
+
+/// 网络抖动时 vendor session 退出，worker 自动重连最多这么多次后放弃。
+const RECONNECT_MAX_ATTEMPTS: u32 = 5;
+/// 重连间隔的指数退避基准；实际延时 = base * 2^attempt，最大 RECONNECT_BACKOFF_CAP。
+const RECONNECT_BACKOFF_BASE: Duration = Duration::from_millis(500);
+const RECONNECT_BACKOFF_CAP: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -85,6 +92,30 @@ pub struct StatusPayload {
     pub elapsed_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconnectPhase {
+    /// vendor session 刚退出，worker 在等 backoff。
+    Backoff,
+    /// 正在尝试新一次握手。
+    Connecting,
+    /// 重连成功、新 session 已 Ready；UI 据此撤掉提示。
+    Recovered,
+    /// 达到上限放弃，worker 已退出（前端会同时收到 ended/error）。
+    GaveUp,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReconnectPayload {
+    pub meeting_id: String,
+    pub phase: ReconnectPhase,
+    /// 已尝试次数（首次 NetworkExit 后第一次重连为 1）。
+    pub attempt: u32,
+    pub max_attempts: u32,
+    /// 上次错误的可读消息——给 UI 选择性展示。
+    pub reason: String,
+}
+
 /// 全局活动会议状态。一次只允许一场会议——MVP 不做多会议并行。
 ///
 /// session 的所有权交给 worker 线程独占（详见 `event_pump`）：上一版让 worker
@@ -124,7 +155,7 @@ const ERR_MEETING_PROVIDER_NOT_CONFIGURED: &str = "meeting_provider_not_configur
 // 按 `^[a-z_]+:` 解析时把分类名当成了 code，i18n 无法命中。
 fn build_provider(
     provider: &ProviderRef,
-) -> Result<Box<dyn MeetingAsrProvider>, String> {
+) -> Result<Arc<dyn MeetingAsrProvider>, String> {
     let backend = dispatch_dictation_backend(provider, DictationModality::Realtime)
         .map_err(|e| format!("{ERR_MEETING_PROVIDER_NOT_CONFIGURED}: {e}"))?;
     match backend {
@@ -133,7 +164,7 @@ fn build_provider(
             secret_id,
             secret_key,
             ..
-        } => Ok(Box::new(TencentSpeakerProvider::new(
+        } => Ok(Arc::new(TencentSpeakerProvider::new(
             app_id, secret_id, secret_key,
         ))),
         other => Err(format!(
@@ -188,12 +219,13 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
 
     let provider = build_provider(&args.provider)?;
     let provider_id = provider.id().to_string();
+    let session_config = MeetingSessionConfig {
+        language: args.language.clone(),
+        sample_rate: 16_000,
+        enable_diarization: true,
+    };
     let mut session = provider
-        .open(MeetingSessionConfig {
-            language: args.language.clone(),
-            sample_rate: 16_000,
-            enable_diarization: true,
-        })
+        .open(session_config.clone())
         .map_err(|e| e.to_string())?;
 
     // 等握手 Ready 事件（最多 8 秒），握手失败直接返回错误，不开 worker。
@@ -234,6 +266,7 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
     let app_for_worker = app.clone();
     let meeting_id_for_worker = args.meeting_id.clone();
     let paused_for_worker = paused.clone();
+    let provider_for_worker = provider.clone();
     let handle = thread::Builder::new()
         .name("openspeech-meetings".into())
         .spawn(move || {
@@ -243,6 +276,8 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
                 session,
                 audio_rx,
                 paused_for_worker,
+                provider_for_worker,
+                session_config,
             )
         })
         .map_err(|e| format!("spawn meetings worker: {e}"))?;
@@ -365,13 +400,160 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
 //
 // 单线程独占 session：从 audio_rx 排空所有待发音频帧，再短超时拉一个事件 emit。
 // 不持全局锁——audio fanout 的 try_lock 现在永远拿得到。
+//
+// NetworkExit 时进入 reconnect 流程（最多 RECONNECT_MAX_ATTEMPTS 次）：
+//   1) 把当前 session drop 掉
+//   2) 累计 sentence_id_offset / time_offset_ms，避免新 session 时间戳与前段重叠
+//   3) backoff 指数退避 → provider.open() 重新握手
+//   4) 等到 Ready 后回到主循环，audio_rx 期间堆积的帧丢弃（追不上的时间，gap 也没识别价值）
+//
+// vendor 协议层 Error（鉴权 / 引擎未授权）一律不重连，它们大概率是配置错误。
 fn event_pump<R: Runtime>(
     app: AppHandle<R>,
     meeting_id: String,
     mut session: Box<dyn MeetingSession>,
     audio_rx: Receiver<Vec<u8>>,
     paused: Arc<AtomicBool>,
+    provider: Arc<dyn MeetingAsrProvider>,
+    config: MeetingSessionConfig,
 ) {
+    let mut sentence_id_offset: i64 = 0;
+    let mut time_offset_ms: u64 = 0;
+    // 当前 session 见过的最大 sentence_id / end_ms，用来在 reconnect 时累加 offset。
+    let mut max_sid_in_session: i64 = -1;
+    let mut max_end_ms_in_session: u64 = 0;
+    let mut reconnect_attempts: u32 = 0;
+
+    loop {
+        let exit = run_session(
+            &app,
+            &meeting_id,
+            &mut session,
+            &audio_rx,
+            &paused,
+            sentence_id_offset,
+            time_offset_ms,
+            &mut max_sid_in_session,
+            &mut max_end_ms_in_session,
+        );
+
+        match exit {
+            SessionExit::EndOfStream => {
+                let _ = app.emit(EVENT_END, meeting_id.clone());
+                return;
+            }
+            SessionExit::Error { code, message } => {
+                let _ = app.emit(
+                    EVENT_ERROR,
+                    ErrorPayload {
+                        meeting_id: meeting_id.clone(),
+                        code,
+                        message,
+                    },
+                );
+                return;
+            }
+            SessionExit::NetworkExit(reason) => {
+                if reconnect_attempts >= RECONNECT_MAX_ATTEMPTS {
+                    let _ = app.emit(
+                        EVENT_RECONNECTING,
+                        ReconnectPayload {
+                            meeting_id: meeting_id.clone(),
+                            phase: ReconnectPhase::GaveUp,
+                            attempt: reconnect_attempts,
+                            max_attempts: RECONNECT_MAX_ATTEMPTS,
+                            reason: reason.clone(),
+                        },
+                    );
+                    let _ = app.emit(
+                        EVENT_ERROR,
+                        ErrorPayload {
+                            meeting_id: meeting_id.clone(),
+                            code: "network_exit".into(),
+                            message: reason,
+                        },
+                    );
+                    return;
+                }
+                // 把上轮 session 的偏移量结转到 offset，新 session 时间戳从这里继续。
+                if max_sid_in_session >= 0 {
+                    sentence_id_offset += max_sid_in_session + 1;
+                }
+                time_offset_ms = time_offset_ms.saturating_add(max_end_ms_in_session);
+                max_sid_in_session = -1;
+                max_end_ms_in_session = 0;
+                reconnect_attempts += 1;
+
+                match attempt_reconnect(
+                    &app,
+                    &meeting_id,
+                    provider.as_ref(),
+                    &config,
+                    &paused,
+                    reconnect_attempts,
+                    &reason,
+                ) {
+                    Some(new_session) => {
+                        session = new_session;
+                        let _ = app.emit(
+                            EVENT_RECONNECTING,
+                            ReconnectPayload {
+                                meeting_id: meeting_id.clone(),
+                                phase: ReconnectPhase::Recovered,
+                                attempt: reconnect_attempts,
+                                max_attempts: RECONNECT_MAX_ATTEMPTS,
+                                reason: String::new(),
+                            },
+                        );
+                        // 排空 backoff 期间堆积的旧 PCM——前段时间已经 gap 过去了，
+                        // 灌进新 session 反而会让识别窗口跟时间戳错位。
+                        while audio_rx.try_recv().is_ok() {}
+                    }
+                    None => {
+                        let _ = app.emit(
+                            EVENT_RECONNECTING,
+                            ReconnectPayload {
+                                meeting_id: meeting_id.clone(),
+                                phase: ReconnectPhase::GaveUp,
+                                attempt: reconnect_attempts,
+                                max_attempts: RECONNECT_MAX_ATTEMPTS,
+                                reason: reason.clone(),
+                            },
+                        );
+                        let _ = app.emit(
+                            EVENT_ERROR,
+                            ErrorPayload {
+                                meeting_id: meeting_id.clone(),
+                                code: "network_exit".into(),
+                                message: reason,
+                            },
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum SessionExit {
+    EndOfStream,
+    Error { code: String, message: String },
+    NetworkExit(String),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_session<R: Runtime>(
+    app: &AppHandle<R>,
+    meeting_id: &str,
+    session: &mut Box<dyn MeetingSession>,
+    audio_rx: &Receiver<Vec<u8>>,
+    paused: &Arc<AtomicBool>,
+    sentence_id_offset: i64,
+    time_offset_ms: u64,
+    max_sid_in_session: &mut i64,
+    max_end_ms_in_session: &mut u64,
+) -> SessionExit {
     let mut finished = false;
     let mut finish_deadline: Option<Instant> = None;
     loop {
@@ -401,57 +583,48 @@ fn event_pump<R: Runtime>(
         let ev = session.next_event(Duration::from_millis(50));
         match ev {
             MeetingEvent::SegmentPartial(s) => {
+                if s.sentence_id > *max_sid_in_session {
+                    *max_sid_in_session = s.sentence_id;
+                }
+                if s.end_ms > *max_end_ms_in_session {
+                    *max_end_ms_in_session = s.end_ms;
+                }
                 let _ = app.emit(
                     EVENT_PARTIAL,
                     SegmentPayload {
-                        meeting_id: meeting_id.clone(),
-                        sentence_id: s.sentence_id,
+                        meeting_id: meeting_id.to_string(),
+                        sentence_id: s.sentence_id + sentence_id_offset,
                         speaker_id: s.speaker_id,
                         text: s.text,
-                        start_ms: s.start_ms,
-                        end_ms: s.end_ms,
+                        start_ms: s.start_ms.saturating_add(time_offset_ms),
+                        end_ms: s.end_ms.saturating_add(time_offset_ms),
                     },
                 );
             }
             MeetingEvent::SegmentFinal(s) => {
+                if s.sentence_id > *max_sid_in_session {
+                    *max_sid_in_session = s.sentence_id;
+                }
+                if s.end_ms > *max_end_ms_in_session {
+                    *max_end_ms_in_session = s.end_ms;
+                }
                 let _ = app.emit(
                     EVENT_FINAL,
                     SegmentPayload {
-                        meeting_id: meeting_id.clone(),
-                        sentence_id: s.sentence_id,
+                        meeting_id: meeting_id.to_string(),
+                        sentence_id: s.sentence_id + sentence_id_offset,
                         speaker_id: s.speaker_id,
                         text: s.text,
-                        start_ms: s.start_ms,
-                        end_ms: s.end_ms,
+                        start_ms: s.start_ms.saturating_add(time_offset_ms),
+                        end_ms: s.end_ms.saturating_add(time_offset_ms),
                     },
                 );
             }
             MeetingEvent::Error { code, message } => {
-                let _ = app.emit(
-                    EVENT_ERROR,
-                    ErrorPayload {
-                        meeting_id: meeting_id.clone(),
-                        code,
-                        message,
-                    },
-                );
-                return;
+                return SessionExit::Error { code, message };
             }
-            MeetingEvent::NetworkExit(m) => {
-                let _ = app.emit(
-                    EVENT_ERROR,
-                    ErrorPayload {
-                        meeting_id: meeting_id.clone(),
-                        code: "network_exit".into(),
-                        message: m,
-                    },
-                );
-                return;
-            }
-            MeetingEvent::EndOfStream => {
-                let _ = app.emit(EVENT_END, meeting_id.clone());
-                return;
-            }
+            MeetingEvent::NetworkExit(m) => return SessionExit::NetworkExit(m),
+            MeetingEvent::EndOfStream => return SessionExit::EndOfStream,
             MeetingEvent::Ready { .. } => {} // 二次 Ready 极少见，忽略
             MeetingEvent::DecodeRecoverable(m) => {
                 log::warn!("[meetings] decode recoverable: {m}");
@@ -463,10 +636,83 @@ fn event_pump<R: Runtime>(
         if let Some(d) = finish_deadline {
             if Instant::now() > d {
                 log::warn!("[meetings] finish timeout, exiting worker");
-                return;
+                return SessionExit::EndOfStream;
             }
         }
     }
+}
+
+/// 走完 backoff + 握手；返回 None 表示放弃（已耗尽尝试次数 / pause 中收到 stop / 握手内部 Error）。
+fn attempt_reconnect<R: Runtime>(
+    app: &AppHandle<R>,
+    meeting_id: &str,
+    provider: &dyn MeetingAsrProvider,
+    config: &MeetingSessionConfig,
+    paused: &Arc<AtomicBool>,
+    attempt: u32,
+    last_reason: &str,
+) -> Option<Box<dyn MeetingSession>> {
+    // 指数退避：base * 2^(attempt-1)，封顶 cap。attempt 从 1 开始。
+    let backoff_ms = (RECONNECT_BACKOFF_BASE.as_millis() as u64)
+        .saturating_mul(1u64 << (attempt - 1).min(20));
+    let backoff = Duration::from_millis(backoff_ms.min(RECONNECT_BACKOFF_CAP.as_millis() as u64));
+
+    let _ = app.emit(
+        EVENT_RECONNECTING,
+        ReconnectPayload {
+            meeting_id: meeting_id.to_string(),
+            phase: ReconnectPhase::Backoff,
+            attempt,
+            max_attempts: RECONNECT_MAX_ATTEMPTS,
+            reason: last_reason.to_string(),
+        },
+    );
+    log::warn!(
+        "[meetings] network exit (attempt {attempt}/{RECONNECT_MAX_ATTEMPTS}): {last_reason}; backoff {backoff:?}"
+    );
+    thread::sleep(backoff);
+
+    // pause 中也照常重连——pause 不应该让会话失活；但如果用户在此期间 stop，
+    // audio_tx 已 drop，下面新 session 起来后 run_session 立刻会看到 Disconnected，
+    // 走 finish() 收尾流程，不需要在这里特判。
+    let _ = paused;
+
+    let _ = app.emit(
+        EVENT_RECONNECTING,
+        ReconnectPayload {
+            meeting_id: meeting_id.to_string(),
+            phase: ReconnectPhase::Connecting,
+            attempt,
+            max_attempts: RECONNECT_MAX_ATTEMPTS,
+            reason: String::new(),
+        },
+    );
+
+    let mut session = match provider.open(config.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("[meetings] reconnect open failed: {e}");
+            return None;
+        }
+    };
+    // 等新一次 Ready，最多 8s——超时也算失败，外层会再试 backoff。
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        match session.next_event(Duration::from_millis(200)) {
+            MeetingEvent::Ready { .. } => return Some(session),
+            MeetingEvent::Error { code, message } => {
+                log::warn!("[meetings] reconnect handshake error: {code}: {message}");
+                return None;
+            }
+            MeetingEvent::NetworkExit(m) => {
+                log::warn!("[meetings] reconnect handshake network exit: {m}");
+                return None;
+            }
+            _ => continue,
+        }
+    }
+    log::warn!("[meetings] reconnect handshake timeout");
+    None
 }
 
 // ---------- 时间轴文件（jsonl）IO ----------
@@ -555,6 +801,96 @@ pub fn meeting_transcript_delete<R: Runtime>(
     transcript_path: String,
 ) -> Result<(), String> {
     let sub = validated_transcript_subpath(&transcript_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
+    match std::fs::remove_file(&abs) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("delete {}: {e}", abs.display())),
+    }
+}
+
+// dest_path 由前端 plugin-dialog::save() 给出（系统 Save 对话框选的绝对路径）；
+// content 已是拼好的 Markdown，Rust 不解析格式只负责落盘。
+#[tauri::command]
+pub fn meeting_export_markdown(content: String, dest_path: String) -> Result<(), String> {
+    if dest_path.is_empty() {
+        return Err("dest_path is empty".into());
+    }
+    std::fs::write(&dest_path, content).map_err(|e| format!("write {dest_path}: {e}"))
+}
+
+// AI 纪要落盘到 jsonl 旁边的 `<id>.summary.md`——结构跟 transcript 一致：跟音频
+// 同目录、跟 history 表关联（不进 SQLite，避免单行体积膨胀）。删除会议时由
+// frontend 协同清理（jsonl 配套删除）。
+fn validated_summary_subpath(p: &str) -> Result<PathBuf, String> {
+    let Some(rest) = p.strip_prefix("recordings/") else {
+        return Err("summary_path must start with recordings/".into());
+    };
+    if rest.is_empty() || rest.contains('\\') || rest.contains("..") {
+        return Err("invalid summary_path".into());
+    }
+    let segs: Vec<&str> = rest.split('/').collect();
+    let (date, filename) = match segs.as_slice() {
+        [filename] => (None, *filename),
+        [date, filename] => (Some(*date), *filename),
+        _ => return Err("invalid summary_path".into()),
+    };
+    if let Some(d) = date {
+        if !is_valid_date_segment(d) {
+            return Err("invalid date segment in summary_path".into());
+        }
+    }
+    let lower = filename.to_ascii_lowercase();
+    if !lower.ends_with(".summary.md") {
+        return Err("summary_path must end with .summary.md".into());
+    }
+    let mut out = PathBuf::new();
+    if let Some(d) = date {
+        out.push(d);
+    }
+    out.push(filename);
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn meeting_summary_write<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    date: String,
+    content: String,
+) -> Result<String, String> {
+    validated_meeting_id(&meeting_id)?;
+    if !is_valid_date_segment(&date) {
+        return Err("invalid date".into());
+    }
+    let day_dir = db::ensure_recordings_dir(&app)?.join(&date);
+    std::fs::create_dir_all(&day_dir)
+        .map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
+    let abs = day_dir.join(format!("{meeting_id}.summary.md"));
+    std::fs::write(&abs, content).map_err(|e| format!("write {}: {e}", abs.display()))?;
+    Ok(format!("recordings/{date}/{meeting_id}.summary.md"))
+}
+
+#[tauri::command]
+pub fn meeting_summary_load<R: Runtime>(
+    app: AppHandle<R>,
+    summary_path: String,
+) -> Result<String, String> {
+    let sub = validated_summary_subpath(&summary_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
+    match std::fs::read_to_string(&abs) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("read {}: {e}", abs.display())),
+    }
+}
+
+#[tauri::command]
+pub fn meeting_summary_delete<R: Runtime>(
+    app: AppHandle<R>,
+    summary_path: String,
+) -> Result<(), String> {
+    let sub = validated_summary_subpath(&summary_path)?;
     let abs = db::recordings_dir(&app)?.join(sub);
     match std::fs::remove_file(&abs) {
         Ok(()) => Ok(()),

@@ -23,6 +23,8 @@ export interface MeetingHistoryRow {
   created_at: number;
   audio_path: string | null;
   transcript_path: string | null;
+  /** AI 纪要落盘路径（v9 起）。null = 还没生成或生成失败 */
+  summary_path: string | null;
   /** 写库时填入的供应商通道，如 "tencent-realtime"。 */
   provider_kind: string | null;
 }
@@ -92,11 +94,33 @@ async function writeTranscriptFile(
 export async function listRecentMeetings(limit = 30): Promise<MeetingHistoryRow[]> {
   const d = await db();
   return await d.select<MeetingHistoryRow[]>(
-    `SELECT id, text, duration_ms, created_at, audio_path, transcript_path, provider_kind
+    `SELECT id, text, duration_ms, created_at, audio_path, transcript_path, summary_path, provider_kind
      FROM history WHERE type = 'meeting'
      ORDER BY created_at DESC LIMIT $1`,
     [limit],
   );
+}
+
+/** 写一条会议的 AI 纪要 markdown 到磁盘 + 把 summary_path 回写到 history。
+ *  幂等：调用方已确保 meetingId 是 history 表里现存的会议行。 */
+export async function persistMeetingSummary(meetingId: string, content: string): Promise<string> {
+  const summaryPath = await invoke<string>("meeting_summary_write", {
+    meetingId,
+    date: localDateYmd(),
+    content,
+  });
+  const d = await db();
+  await d.execute(
+    "UPDATE history SET summary_path = $1 WHERE id = $2 AND type = 'meeting'",
+    [summaryPath, meetingId],
+  );
+  return summaryPath;
+}
+
+/** 读一条会议的 AI 纪要 markdown 原文。文件不存在或路径为空时返回空字符串。 */
+export async function loadMeetingSummary(summaryPath: string | null): Promise<string> {
+  if (!summaryPath) return "";
+  return await invoke<string>("meeting_summary_load", { summaryPath });
 }
 
 /** 拉一场会议的全部子片段。读 jsonl 文件，按 sentenceId 升序返回。 */
@@ -116,11 +140,74 @@ export async function loadMeetingSegments(transcriptPath: string): Promise<Meeti
   return out;
 }
 
-/** 删除一场会议（联动删 audio + transcript 文件）。 */
+function formatHmsLabel(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function speakerName(speakerId: number, speakerLabel: string, pendingLabel: string): string {
+  if (speakerId < 0) return pendingLabel;
+  const letter = String.fromCharCode(65 + (Math.abs(speakerId) % 26));
+  return speakerLabel.replace("{{letter}}", letter);
+}
+
+export interface ExportMarkdownInput {
+  meeting: MeetingHistoryRow;
+  segments: MeetingSegmentJson[];
+  /** i18n 文案：标题 / 元数据 label / speaker 模板，由调用方在 React 树里 t() 后传入。 */
+  i18n: {
+    title: string;
+    metaCreated: string;
+    metaDuration: string;
+    metaSpeakers: string;
+    metaSegments: string;
+    speakerLabel: string;
+    speakerPending: string;
+  };
+}
+
+export function buildMeetingMarkdown(input: ExportMarkdownInput): string {
+  const { meeting, segments, i18n } = input;
+  const created = new Date(meeting.created_at);
+  const speakerSet = new Set<number>();
+  for (const s of segments) {
+    if (s.speakerId >= 0) speakerSet.add(s.speakerId);
+  }
+  const lines: string[] = [];
+  lines.push(`# ${i18n.title}`, "");
+  lines.push(`- ${i18n.metaCreated}: ${created.toLocaleString()}`);
+  lines.push(`- ${i18n.metaDuration}: ${formatHmsLabel(meeting.duration_ms)}`);
+  lines.push(`- ${i18n.metaSpeakers}: ${speakerSet.size}`);
+  lines.push(`- ${i18n.metaSegments}: ${segments.length}`);
+  lines.push("", "---", "");
+
+  const sorted = [...segments].sort((a, b) => a.startMs - b.startMs);
+  for (const seg of sorted) {
+    const name = speakerName(seg.speakerId, i18n.speakerLabel, i18n.speakerPending);
+    lines.push(`**${name}**  ·  ${formatHmsLabel(seg.startMs)}`, "", seg.text.trim(), "");
+  }
+  return lines.join("\n");
+}
+
+/** 把拼好的 Markdown 写到用户选的绝对路径（来自 plugin-dialog::save()）。 */
+export async function exportMeetingMarkdown(content: string, destPath: string): Promise<void> {
+  await invoke("meeting_export_markdown", { content, destPath });
+}
+
+/** 删除一场会议（联动删 audio + transcript + summary 文件）。 */
 export async function deleteMeeting(meetingId: string): Promise<void> {
   const d = await db();
-  const rows = await d.select<{ audio_path: string | null; transcript_path: string | null }[]>(
-    "SELECT audio_path, transcript_path FROM history WHERE id = $1 AND type = 'meeting'",
+  const rows = await d.select<
+    {
+      audio_path: string | null;
+      transcript_path: string | null;
+      summary_path: string | null;
+    }[]
+  >(
+    "SELECT audio_path, transcript_path, summary_path FROM history WHERE id = $1 AND type = 'meeting'",
     [meetingId],
   );
   await d.execute("DELETE FROM history WHERE id = $1 AND type = 'meeting'", [meetingId]);
@@ -134,6 +221,12 @@ export async function deleteMeeting(meetingId: string): Promise<void> {
   if (transcriptPath) {
     void invoke("meeting_transcript_delete", { transcriptPath }).catch((e) =>
       console.warn("[meetings] delete transcript failed:", transcriptPath, e),
+    );
+  }
+  const summaryPath = rows[0]?.summary_path;
+  if (summaryPath) {
+    void invoke("meeting_summary_delete", { summaryPath }).catch((e) =>
+      console.warn("[meetings] delete summary failed:", summaryPath, e),
     );
   }
 }

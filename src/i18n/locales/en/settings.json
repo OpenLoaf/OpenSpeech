@@ -149,6 +149,7 @@
     "prompt_tab_refine": "Dictation refine",
     "prompt_tab_translate": "Translate",
     "prompt_tab_polish": "Polish",
+    "prompt_tab_meeting": "Meeting summary",
     "polish_scenarios_title": "Polish scenarios",
     "polish_scenarios_hint": "Source for the chip list at the bottom of the AI Toolbox \"Polish\" tab; the selected scenario's instruction is appended to the polish system prompt at runtime.",
     "polish_scenarios_empty": "No polish scenarios yet",

@@ -1,22 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
+import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import {
   ArrowLeft,
+  Download,
   Loader2,
   Mic,
   Pause,
-  Pencil,
   Play,
-  Search,
+  RefreshCw,
+  Sparkles,
   Square,
   Trash2,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { cn } from "@/lib/utils";
 import { useMeetingsStore, type MeetingSegment } from "@/stores/meetings";
-import { usePlaybackStore } from "@/stores/playback";
-import type { MeetingHistoryRow } from "@/lib/meetings-history";
+import {
+  buildMeetingMarkdown,
+  exportMeetingMarkdown,
+  type MeetingHistoryRow,
+} from "@/lib/meetings-history";
 import { MeetingErrorDialog } from "@/components/MeetingErrorDialog";
+import {
+  AudioWavePlayer,
+  type AudioWavePlayerHandle,
+} from "@/components/AudioWavePlayer";
 
 const SPEAKER_COLORS = [
   "text-te-accent",
@@ -74,20 +86,8 @@ const BAR_WIDTH = 2;
 const BAR_GAP = 2;
 const BAR_STEP = BAR_WIDTH + BAR_GAP;
 
-function MockWaveform({
-  active,
-  height = 64,
-  variant = "live",
-}: {
-  active: boolean;
-  height?: number;
-  variant?: "live" | "preview";
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+function useResizeBarCount(containerRef: React.RefObject<HTMLDivElement | null>) {
   const [barCount, setBarCount] = useState(96);
-  const [tick, setTick] = useState(0);
-  const [amps, setAmps] = useState<number[]>([]);
-
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -98,50 +98,25 @@ function MockWaveform({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [containerRef]);
+  return barCount;
+}
 
-  const previewAmps = useMemo(() => {
-    if (variant !== "preview") return null;
-    return Array.from({ length: barCount }, (_, i) => {
-      const a = Math.sin(i * 0.21) * 0.5 + 0.5;
-      const b = Math.sin(i * 0.83 + 1.2) * 0.5 + 0.5;
-      const c = Math.sin(i * 1.7 + 2.3) * 0.5 + 0.5;
-      const env = 0.55 + 0.45 * Math.sin((i / Math.max(1, barCount - 1)) * Math.PI);
-      return Math.max(0.06, (a * 0.5 + b * 0.3 + c * 0.2) * env);
-    });
-  }, [variant, barCount]);
+function PreviewWaveform({ height = 48 }: { height?: number }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const barCount = useResizeBarCount(containerRef);
 
-  useEffect(() => {
-    if (variant !== "live") return;
-    setAmps((prev) => {
-      if (prev.length === barCount) return prev;
-      if (prev.length > barCount) return prev.slice(prev.length - barCount);
-      return Array(barCount - prev.length).fill(0).concat(prev);
-    });
-  }, [barCount, variant]);
-
-  useEffect(() => {
-    if (variant !== "live" || !active) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 90);
-    return () => window.clearInterval(id);
-  }, [variant, active]);
-
-  useEffect(() => {
-    if (variant !== "live" || !active) return;
-    const t = tick * 0.09;
-    const syll = Math.max(0, 0.55 + 0.45 * Math.sin(t * 1.6) * Math.sin(t * 0.55 + 0.4));
-    const burst = 0.35 + 0.65 * Math.abs(Math.sin(t * 8.7));
-    const jitter = 0.65 + 0.35 * Math.random();
-    const next = Math.min(1, syll * burst * jitter);
-    setAmps((prev) => {
-      if (prev.length === 0) return prev;
-      const out = prev.slice(1);
-      out.push(next);
-      return out;
-    });
-  }, [tick, variant, active]);
-
-  const bars = useMemo(() => Array.from({ length: barCount }, (_, i) => i), [barCount]);
+  const amps = useMemo(
+    () =>
+      Array.from({ length: barCount }, (_, i) => {
+        const a = Math.sin(i * 0.21) * 0.5 + 0.5;
+        const b = Math.sin(i * 0.83 + 1.2) * 0.5 + 0.5;
+        const c = Math.sin(i * 1.7 + 2.3) * 0.5 + 0.5;
+        const env = 0.55 + 0.45 * Math.sin((i / Math.max(1, barCount - 1)) * Math.PI);
+        return Math.max(0.06, (a * 0.5 + b * 0.3 + c * 0.2) * env);
+      }),
+    [barCount],
+  );
 
   return (
     <div
@@ -149,21 +124,78 @@ function MockWaveform({
       className="flex w-full items-center justify-between"
       style={{ height, gap: `${BAR_GAP}px` }}
     >
-      {bars.map((i) => {
-        let amp: number;
-        if (variant === "preview") {
-          amp = previewAmps?.[i] ?? 0;
-        } else {
-          amp = active ? (amps[i] ?? 0) : 0;
-        }
+      {amps.map((amp, i) => {
         const h = Math.max(2, amp * height);
         return (
           <span
             key={i}
+            className="shrink-0 rounded-[1px] bg-te-light-gray/50"
+            style={{ width: `${BAR_WIDTH}px`, height: `${h}px` }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// 实时波形：订阅 Rust 端 20Hz 推送的 `openspeech://audio-level`（值已归一化 0..1）。
+// active=false（pause）时不订阅；新 amp 入队右侧、左移老值，与 dictation Waveform 视觉一致。
+function LiveWaveform({ active, height = 64 }: { active: boolean; height?: number }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const barCount = useResizeBarCount(containerRef);
+  const [amps, setAmps] = useState<number[]>(() => Array(96).fill(0));
+
+  useEffect(() => {
+    setAmps((prev) => {
+      if (prev.length === barCount) return prev;
+      if (prev.length > barCount) return prev.slice(prev.length - barCount);
+      return Array(barCount - prev.length).fill(0).concat(prev);
+    });
+  }, [barCount]);
+
+  // pause 时只取消订阅、不清空 amps——保留最后一帧的波形冻结，让用户视觉上明确"暂停"
+  // 而不是"已结束"。resume 时直接接着推新的电平，左侧旧值会被自然滑出。
+  useEffect(() => {
+    if (!active) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<number>("openspeech://audio-level", (evt) => {
+      if (cancelled) return;
+      const v = Math.max(0, Math.min(1, Number(evt.payload) || 0));
+      setAmps((prev) => {
+        if (prev.length === 0) return prev;
+        const out = prev.slice(1);
+        out.push(v);
+        return out;
+      });
+    }).then((u) => {
+      if (cancelled) {
+        u();
+      } else {
+        unlisten = u;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [active]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="flex w-full items-center justify-between"
+      style={{ height, gap: `${BAR_GAP}px` }}
+    >
+      {amps.map((amp, i) => {
+        const eased = Math.pow(amp, 0.55);
+        const h = Math.max(2, eased * height);
+        return (
+          <span
+            key={i}
             className={cn(
-              "shrink-0 rounded-[1px] transition-[height] duration-90",
-              variant === "preview" ? "bg-te-light-gray/50" : "bg-te-accent",
-              variant === "live" && !active && "opacity-30",
+              "shrink-0 rounded-[1px] bg-te-accent transition-[height] duration-75 ease-out",
+              !active && "opacity-30",
             )}
             style={{ width: `${BAR_WIDTH}px`, height: `${h}px` }}
           />
@@ -309,7 +341,7 @@ function IdleView({ onStart, loading }: { onStart: () => void; loading: boolean 
           </div>
 
           <div className="w-full">
-            <MockWaveform active={false} variant="preview" height={48} />
+            <PreviewWaveform height={48} />
           </div>
 
           <div className="mt-1 max-w-md text-center font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/70">
@@ -419,6 +451,7 @@ function LiveView({
 }) {
   const { t } = useTranslation();
   const segments = useSortedSegments();
+  const reconnect = useMeetingsStore((s) => s.reconnect);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
   // 新片段进来时滚到底（用户主动上滑可中断）
@@ -431,6 +464,21 @@ function LiveView({
 
   return (
     <div className="flex h-full flex-col">
+      {reconnect ? (
+        <div className="border-b border-amber-500/40 bg-amber-500/10">
+          <div className="mx-auto flex max-w-5xl items-center gap-3 px-[4vw] py-2 font-mono text-[10px] uppercase tracking-[0.25em] text-amber-300">
+            <span className="size-2 animate-pulse rounded-full bg-amber-400" />
+            <span>
+              {reconnect.phase === "gave_up"
+                ? t("pages:meetings.live.reconnect_gave_up")
+                : t("pages:meetings.live.reconnecting", {
+                    attempt: reconnect.attempt,
+                    max: reconnect.maxAttempts,
+                  })}
+            </span>
+          </div>
+        </div>
+      ) : null}
       <div className="border-b border-te-gray/40 bg-te-surface">
         <div className="mx-auto flex max-w-5xl flex-col gap-3 px-[4vw] py-4">
           <div className="flex items-center justify-between gap-4">
@@ -456,7 +504,7 @@ function LiveView({
               </button>
             </div>
           </div>
-          <MockWaveform active={!paused} height={56} />
+          <LiveWaveform active={!paused} height={56} />
         </div>
       </div>
 
@@ -511,13 +559,8 @@ function ReviewView({ onBack }: { onBack: () => void }) {
   const lastRecording = useMeetingsStore((s) => s.lastRecording);
   const removeMeeting = useMeetingsStore((s) => s.removeMeeting);
 
-  const playbackId = usePlaybackStore((s) => s.playingId);
-  const isPlaying = usePlaybackStore((s) => s.isPlaying);
-  const playbackDuration = usePlaybackStore((s) => s.duration);
-  const playbackCurrent = usePlaybackStore((s) => s.currentTime);
-  const togglePlayback = usePlaybackStore((s) => s.toggle);
-  const seekPlayback = usePlaybackStore((s) => s.seek);
-  const stopPlayback = usePlaybackStore((s) => s.stop);
+  const playerRef = useRef<AudioWavePlayerHandle | null>(null);
+  const [currentSec, setCurrentSec] = useState(0);
 
   const speakerCount = useMemo(() => {
     const set = new Set<number>();
@@ -532,39 +575,12 @@ function ReviewView({ onBack }: { onBack: () => void }) {
 
   // 优先取 recent 列表里的 audio_path（历史进入），fallback 到刚停的 lastRecording（review 直进）。
   const audioPath = meta?.audio_path ?? lastRecording?.audio_path ?? null;
-  const isThisLoaded = !!reviewMeetingId && playbackId === reviewMeetingId;
-  const isThisPlaying = isThisLoaded && isPlaying;
-  // duration 优先用 audio 实际值（loaded 后），未加载则 fallback 到 db 元数据
-  const totalSec = isThisLoaded && playbackDuration > 0 ? playbackDuration : elapsedMs / 1000;
-  const currentSec = isThisLoaded ? playbackCurrent : 0;
-  const progressRatio = totalSec > 0 ? Math.min(1, currentSec / totalSec) : 0;
 
-  const handlePlayToggle = () => {
-    if (!reviewMeetingId || !audioPath) return;
-    void togglePlayback(reviewMeetingId, audioPath);
-  };
-
-  const handleSeekClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isThisLoaded || playbackDuration <= 0) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    seekPlayback(ratio * playbackDuration);
-  };
-
-  // 点 segment 跳到对应时间。未加载就先 toggle 触发加载，audio 元素 'play' 后会有
-  // currentTime 同步——这里立即调一次 seek，浏览器会等加载完后定位（startMs=0 时也安全）。
+  // 点 segment 跳到对应时间——直接调 wavesurfer，加载完成前调用会被忽略（getDuration=0）。
   const handleSegmentClick = (startMs: number) => {
-    if (!reviewMeetingId || !audioPath) return;
-    const sec = startMs / 1000;
-    if (!isThisLoaded) {
-      void togglePlayback(reviewMeetingId, audioPath).then(() => seekPlayback(sec));
-    } else {
-      seekPlayback(sec);
-    }
+    if (!audioPath) return;
+    playerRef.current?.seekToSec(startMs / 1000);
   };
-
-  // 离开 review（unmount / 切回 list）时停止播放，避免后台残留 audio 元素继续放。
-  useEffect(() => stopPlayback, [stopPlayback]);
 
   const handleDelete = async () => {
     if (!reviewMeetingId) return onBack();
@@ -574,6 +590,62 @@ function ReviewView({ onBack }: { onBack: () => void }) {
     if (!ok) return;
     await removeMeeting(reviewMeetingId);
     onBack();
+  };
+
+  // 导出 Markdown：拼字符串走系统 Save 对话框；用户取消视为正常退出。
+  const handleExport = async () => {
+    if (!reviewMeetingId || !meta || segments.length === 0) return;
+    const created = new Date(meta.created_at);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const dateLabel = `${created.getFullYear()}-${pad(created.getMonth() + 1)}-${pad(created.getDate())}`;
+    const shortId = reviewMeetingId.slice(0, 8);
+    const defaultName = `${t("pages:meetings.review.export_default_name", {
+      date: dateLabel,
+      shortId,
+    })}.md`;
+
+    let dest: string | null = null;
+    try {
+      dest = await saveFileDialog({
+        defaultPath: defaultName,
+        filters: [{ name: t("pages:meetings.review.export_md_filter"), extensions: ["md"] }],
+      });
+    } catch (e) {
+      console.error("[meetings] save dialog failed:", e);
+      toast.error(t("pages:meetings.review.export_failed"));
+      return;
+    }
+    if (!dest) return;
+
+    try {
+      const content = buildMeetingMarkdown({
+        meeting: meta,
+        segments: segments
+          .filter((s) => s.isFinal)
+          .map((s) => ({
+            sentenceId: s.sentenceId,
+            speakerId: s.speakerId,
+            text: s.text,
+            startMs: s.startMs,
+            endMs: s.endMs,
+          })),
+        i18n: {
+          title: t("pages:meetings.review.export_doc_title"),
+          metaCreated: t("pages:meetings.review.export_meta_created"),
+          metaDuration: t("pages:meetings.review.export_meta_duration"),
+          metaSpeakers: t("pages:meetings.review.export_meta_speakers"),
+          metaSegments: t("pages:meetings.review.export_meta_segments"),
+          speakerLabel: t("pages:meetings.speaker.label"),
+          speakerPending: t("pages:meetings.speaker.pending"),
+        },
+      });
+      await exportMeetingMarkdown(content, dest);
+      toast.success(t("pages:meetings.review.export_success", { path: dest }));
+    } catch (e) {
+      console.error("[meetings] export failed:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(t("pages:meetings.review.export_failed"), { description: msg });
+    }
   };
 
   return (
@@ -595,46 +667,37 @@ function ReviewView({ onBack }: { onBack: () => void }) {
               {formatHMS(elapsedMs)} · {speakerCount} {t("pages:meetings.review.speakers")}
             </span>
           </div>
-          <button
-            type="button"
-            data-tauri-drag-region="false"
-            onClick={handleDelete}
-            disabled={!reviewMeetingId}
-            className="flex shrink-0 items-center gap-2 border border-te-gray/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition hover:border-[#ff4d4d] hover:text-[#ff4d4d] disabled:opacity-40"
-          >
-            <Trash2 className="size-3" />
-            {t("pages:meetings.review.delete")}
-          </button>
+          <div data-tauri-drag-region="false" className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={!reviewMeetingId || segments.length === 0}
+              className="flex items-center gap-2 border border-te-gray/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition hover:border-te-accent hover:text-te-accent disabled:opacity-40"
+            >
+              <Download className="size-3" />
+              {t("pages:meetings.review.export")}
+            </button>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={!reviewMeetingId}
+              className="flex items-center gap-2 border border-te-gray/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition hover:border-[#ff4d4d] hover:text-[#ff4d4d] disabled:opacity-40"
+            >
+              <Trash2 className="size-3" />
+              {t("pages:meetings.review.delete")}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="border-b border-te-gray/40 bg-te-surface">
-        <div className="mx-auto flex max-w-5xl items-center gap-4 px-[4vw] py-4">
-          <button
-            type="button"
-            onClick={handlePlayToggle}
-            disabled={!audioPath}
-            className="flex size-9 shrink-0 items-center justify-center border border-te-gray/40 bg-te-bg text-te-fg transition hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {isThisPlaying ? <Pause className="size-4" /> : <Play className="size-4" />}
-          </button>
-          <div
-            onClick={handleSeekClick}
-            className={cn(
-              "relative h-1 flex-1 bg-te-gray/40",
-              isThisLoaded && playbackDuration > 0 ? "cursor-pointer" : "cursor-default",
-            )}
-          >
-            <div
-              className="absolute top-0 left-0 h-full bg-te-accent"
-              style={{ width: `${progressRatio * 100}%` }}
-            />
-          </div>
-          <span className="shrink-0 font-mono text-[10px] tabular-nums text-te-light-gray">
-            {formatHMS(currentSec * 1000)} / {formatHMS(totalSec * 1000)}
-          </span>
-        </div>
-      </div>
+      {audioPath ? (
+        <AudioWavePlayer
+          ref={playerRef}
+          audioPath={audioPath}
+          fallbackDurationMs={elapsedMs}
+          onTimeUpdate={setCurrentSec}
+        />
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-hidden">
         <div className="mx-auto grid h-full max-w-5xl grid-cols-2 divide-x divide-te-gray/40 px-[4vw]">
@@ -643,22 +706,6 @@ function ReviewView({ onBack }: { onBack: () => void }) {
               <span className="font-mono text-xs uppercase tracking-[0.25em] text-te-fg">
                 {t("pages:meetings.review.transcript")}
               </span>
-              <div className="flex items-center gap-1 text-te-light-gray">
-                <button
-                  type="button"
-                  title={t("pages:meetings.review.search")}
-                  className="flex size-6 items-center justify-center transition hover:text-te-fg"
-                >
-                  <Search className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  title={t("pages:meetings.review.edit")}
-                  className="flex size-6 items-center justify-center transition hover:text-te-fg"
-                >
-                  <Pencil className="size-3.5" />
-                </button>
-              </div>
             </div>
             <div className="flex-1 overflow-y-auto py-5">
               <div className="flex flex-col gap-5">
@@ -668,9 +715,10 @@ function ReviewView({ onBack }: { onBack: () => void }) {
                   </div>
                 ) : null}
                 {segments.map((seg) => {
-                  const isActive = isThisLoaded
-                    && currentSec * 1000 >= seg.startMs
-                    && currentSec * 1000 < seg.endMs;
+                  const isActive =
+                    !!audioPath &&
+                    currentSec * 1000 >= seg.startMs &&
+                    currentSec * 1000 < seg.endMs;
                   return (
                     <button
                       key={seg.sentenceId}
@@ -698,44 +746,107 @@ function ReviewView({ onBack }: { onBack: () => void }) {
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-col pl-4">
-            <div className="flex shrink-0 items-center justify-between border-b border-te-gray/40 py-3">
-              <span className="font-mono text-xs uppercase tracking-[0.25em] text-te-fg">
-                {t("pages:meetings.review.summary")}
-              </span>
-            </div>
-            <div className="flex-1 overflow-y-auto py-5">
-              {/* AI 纪要待接入：当前阶段先显示发言人 + 字数统计兜底。 */}
-              <ReviewSummary speakerCount={speakerCount} segmentCount={segments.length} />
-            </div>
-          </div>
+          <MeetingSummaryPanel
+            speakerCount={speakerCount}
+            segmentCount={segments.length}
+            hasSegments={segments.length > 0}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-function ReviewSummary({ speakerCount, segmentCount }: { speakerCount: number; segmentCount: number }) {
+// 右栏纪要面板：从 store 拉 summary 状态，按"未生成 / 生成中 / 已生成 / 失败"四态切换。
+// generating 时持续追加 chunk，react-markdown 实时重渲染。
+function MeetingSummaryPanel({
+  speakerCount,
+  segmentCount,
+  hasSegments,
+}: {
+  speakerCount: number;
+  segmentCount: number;
+  hasSegments: boolean;
+}) {
   const { t } = useTranslation();
-  return (
-    <div className="flex flex-col gap-4">
-      <dl className="flex flex-col gap-2 text-sm">
-        <div className="flex gap-2">
-          <dt className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-            {t("pages:meetings.review.summary_speakers")}：
-          </dt>
-          <dd className="text-te-fg">{speakerCount}</dd>
-        </div>
-        <div className="flex gap-2">
-          <dt className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-            {t("pages:meetings.review.summary_section")}：
-          </dt>
-          <dd className="text-te-fg">{segmentCount}</dd>
-        </div>
-      </dl>
+  const summary = useMeetingsStore((s) => s.summary);
+  const status = useMeetingsStore((s) => s.summaryStatus);
+  const summaryError = useMeetingsStore((s) => s.summaryError);
+  const generateSummary = useMeetingsStore((s) => s.generateSummary);
 
-      <div className="border-t border-te-gray/40 pt-3 font-mono text-[11px] text-te-light-gray/80">
-        {t("pages:meetings.review.summary_loading")}
+  const isBusy = status === "generating" || status === "loading";
+  const hasContent = !!summary && summary.length > 0;
+
+  return (
+    <div className="flex min-h-0 flex-col pl-4">
+      <div className="flex shrink-0 items-center justify-between border-b border-te-gray/40 py-3">
+        <span className="font-mono text-xs uppercase tracking-[0.25em] text-te-fg">
+          {t("pages:meetings.review.summary")}
+        </span>
+        <button
+          type="button"
+          onClick={() => void generateSummary()}
+          disabled={!hasSegments || isBusy}
+          className="flex items-center gap-2 border border-te-gray/40 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {status === "generating" ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : hasContent ? (
+            <RefreshCw className="size-3" />
+          ) : (
+            <Sparkles className="size-3" />
+          )}
+          {hasContent
+            ? t("pages:meetings.review.summary_regenerate")
+            : t("pages:meetings.review.summary_generate")}
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto py-5">
+        {hasContent ? (
+          <article className="prose-meeting font-sans text-sm leading-relaxed text-te-fg">
+            <ReactMarkdown>{summary ?? ""}</ReactMarkdown>
+            {status === "generating" ? (
+              <span className="ml-1 inline-block animate-pulse text-te-accent">▌</span>
+            ) : null}
+          </article>
+        ) : status === "loading" ? (
+          <div className="font-mono text-[11px] text-te-light-gray/80">
+            {t("pages:meetings.review.summary_loading")}
+          </div>
+        ) : status === "error" ? (
+          <div className="flex flex-col gap-3">
+            <div className="font-mono text-[11px] text-[#ff6b6b]">
+              {t("pages:meetings.review.summary_failed")}
+            </div>
+            {summaryError ? (
+              <div className="font-mono text-[10px] break-words text-te-light-gray/80">
+                {summaryError}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <dl className="flex flex-col gap-2 text-sm">
+              <div className="flex gap-2">
+                <dt className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
+                  {t("pages:meetings.review.summary_speakers")}：
+                </dt>
+                <dd className="text-te-fg">{speakerCount}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
+                  {t("pages:meetings.review.summary_section")}：
+                </dt>
+                <dd className="text-te-fg">{segmentCount}</dd>
+              </div>
+            </dl>
+            <div className="border-t border-te-gray/40 pt-3 font-mono text-[11px] text-te-light-gray/80">
+              {hasSegments
+                ? t("pages:meetings.review.summary_idle_hint")
+                : t("pages:meetings.review.summary_empty_transcript")}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -27,6 +27,7 @@ import {
   stopMeeting,
   subscribeMeetingEvents,
   type MeetingErrorPayload,
+  type MeetingReconnectPayload,
   type MeetingSegmentPayload,
 } from "@/lib/meetings";
 import {
@@ -34,9 +35,16 @@ import {
   insertMeetingHistory,
   listRecentMeetings,
   loadMeetingSegments,
+  loadMeetingSummary,
+  persistMeetingSummary,
   type MeetingHistoryRow,
+  type MeetingSegmentJson,
 } from "@/lib/meetings-history";
 import { newId } from "@/lib/ids";
+import { refineTextViaChatStream } from "@/lib/ai-refine";
+import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
+import { getEffectiveAiMeetingSummaryPrompt } from "@/lib/defaultAiPrompts";
+import { resolveLang } from "@/i18n";
 import { useSettingsStore } from "@/stores/settings";
 
 // "starting" 是 idle → live 的过渡态：cpal stream 拉起 + meeting_start
@@ -71,6 +79,17 @@ interface MeetingsState {
   recentMeetings: MeetingHistoryRow[];
   recentLoaded: boolean;
   error: { code: string; message: string } | null;
+  /** 后端 NetworkExit 后的重连状态——非 null 表示正在重连 / 已放弃。 */
+  reconnect: {
+    phase: "backoff" | "connecting" | "recovered" | "gave_up";
+    attempt: number;
+    maxAttempts: number;
+  } | null;
+  /** AI 纪要 markdown 文本；null = 还没生成 / 还没加载 */
+  summary: string | null;
+  /** AI 纪要状态：idle 没生成、loading 已生成只是加载中、generating 流式产生、error 失败 */
+  summaryStatus: "idle" | "loading" | "generating" | "error";
+  summaryError: string | null;
 
   start: () => Promise<void>;
   dismissError: () => void;
@@ -83,6 +102,8 @@ interface MeetingsState {
   loadRecent: () => Promise<void>;
   openMeeting: (meetingId: string) => Promise<void>;
   removeMeeting: (meetingId: string) => Promise<void>;
+  /** 走 AI refine chat stream 生成纪要并落盘到 `<id>.summary.md`。 */
+  generateSummary: () => Promise<void>;
   /** 在 App 启动时调一次：订阅 6 个事件，写入 store。 */
   initSubscriptions: () => Promise<() => void>;
 }
@@ -96,6 +117,10 @@ const initialState = {
   lastRecording: null,
   reviewMeetingId: null,
   error: null,
+  reconnect: null,
+  summary: null,
+  summaryStatus: "idle" as const,
+  summaryError: null,
 };
 
 let unsubscribe: (() => void) | null = null;
@@ -175,6 +200,20 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       },
       onEnded: () => {
         // worker 自然结束（EndOfStream / NetworkExit）；store.stop() 已或将处理 cleanup
+      },
+      onReconnecting: (p: MeetingReconnectPayload) => {
+        set((s) => {
+          if (p.meeting_id !== s.meetingId) return {};
+          // recovered 短暂保留作为 UI 提示，500ms 后由组件清除即可；这里直接置 null。
+          if (p.phase === "recovered") return { reconnect: null };
+          return {
+            reconnect: {
+              phase: p.phase,
+              attempt: p.attempt,
+              maxAttempts: p.max_attempts,
+            },
+          };
+        });
       },
     });
     unsubscribe = off;
@@ -337,6 +376,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
         elapsedMs: elapsedBaseline,
         activeStartedAt: null,
         reviewMeetingId: meetingId,
+        reconnect: null,
       });
     } finally {
       stopInFlight = false;
@@ -394,6 +434,19 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
           map.set(r.sentenceId, { ...r, isFinal: true });
         }
       }
+      // summary：有 path 就先把磁盘文本拉出来；没有就 null，UI 显示"生成纪要"按钮。
+      let summary: string | null = null;
+      let summaryStatus: "idle" | "loading" = "idle";
+      if (meta?.summary_path) {
+        summaryStatus = "loading";
+        try {
+          const md = await loadMeetingSummary(meta.summary_path);
+          summary = md.length > 0 ? md : null;
+        } catch (e) {
+          console.warn("[meetings] load summary failed:", e);
+        }
+        summaryStatus = "idle";
+      }
       const dur = meta?.duration_ms ?? 0;
       elapsedBaseline = dur;
       set({
@@ -405,9 +458,113 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
         meetingId: null,
         lastRecording: null,
         error: null,
+        summary,
+        summaryStatus,
+        summaryError: null,
       });
     } catch (e) {
       set({ error: { code: "history_open_failed", message: String(e) } });
+    }
+  },
+
+  async generateSummary() {
+    const s = get();
+    const meetingId = s.reviewMeetingId;
+    if (!meetingId || s.summaryStatus === "generating") return;
+
+    // 把 store 里的 segments 渲染成 buildMeetingMarkdown 用的 plain markdown，
+    // 给 LLM 做 user message body——跟导出时同款，少一种格式分支。
+    const segmentsArr: MeetingSegmentJson[] = Array.from(s.segments.values())
+      .filter((seg) => seg.isFinal)
+      .sort((a, b) => a.startMs - b.startMs)
+      .map((seg) => ({
+        sentenceId: seg.sentenceId,
+        speakerId: seg.speakerId,
+        text: seg.text,
+        startMs: seg.startMs,
+        endMs: seg.endMs,
+      }));
+    if (segmentsArr.length === 0) {
+      set({ summaryError: "empty_transcript", summaryStatus: "error" });
+      return;
+    }
+
+    const aiSettings = useSettingsStore.getState().aiRefine;
+    const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
+    const systemPrompt = getEffectiveAiMeetingSummaryPrompt(
+      aiSettings.customMeetingSummaryPrompt,
+      lang,
+    );
+
+    let activeProvider:
+      | { id: string; name: string; baseUrl: string; model: string }
+      | null = null;
+    if (aiSettings.mode === "custom") {
+      activeProvider =
+        aiSettings.customProviders.find(
+          (p) => p.id === aiSettings.activeCustomProviderId,
+        ) ?? null;
+      if (!activeProvider) {
+        set({ summaryError: "no_active_custom_provider", summaryStatus: "error" });
+        return;
+      }
+    }
+
+    // userText：speaker 标签按当前界面语言走（与 buildMeetingMarkdown 一致）。
+    const speakerLabelTpl =
+      lang === "zh-CN" ? "用户 {{letter}}" : lang === "zh-TW" ? "用戶 {{letter}}" : "Speaker {{letter}}";
+    const speakerPending =
+      lang === "zh-CN" ? "用户 …" : lang === "zh-TW" ? "用戶 …" : "Speaker …";
+    const fmt = (ms: number) => {
+      const total = Math.max(0, Math.floor(ms / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const sec = total % 60;
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+    };
+    const lines: string[] = [];
+    for (const seg of segmentsArr) {
+      const name =
+        seg.speakerId < 0
+          ? speakerPending
+          : speakerLabelTpl.replace("{{letter}}", String.fromCharCode(65 + (seg.speakerId % 26)));
+      lines.push(`**${name}**  ·  ${fmt(seg.startMs)}`, "", seg.text.trim(), "");
+    }
+    const userText = lines.join("\n");
+
+    set({ summary: "", summaryStatus: "generating", summaryError: null });
+    try {
+      const result = await refineTextViaChatStream(
+        {
+          mode: aiSettings.mode,
+          systemPrompt,
+          userText,
+          customBaseUrl: activeProvider?.baseUrl,
+          customModel: activeProvider?.model,
+          customKeyringId: activeProvider ? `ai_provider_${activeProvider.id}` : undefined,
+          taskId: `meeting_summary_${meetingId}`,
+        },
+        (chunk) => {
+          set((cur) => ({ summary: (cur.summary ?? "") + chunk }));
+        },
+      );
+      const finalText = result.refinedText.trim();
+      set({ summary: finalText, summaryStatus: "idle" });
+      try {
+        const summaryPath = await persistMeetingSummary(meetingId, finalText);
+        set((cur) => ({
+          recentMeetings: cur.recentMeetings.map((m) =>
+            m.id === meetingId ? { ...m, summary_path: summaryPath } : m,
+          ),
+        }));
+      } catch (e) {
+        console.warn("[meetings] persist summary failed:", e);
+      }
+    } catch (e) {
+      console.warn("[meetings] summary generation failed:", e);
+      const raw = e instanceof Error ? e.message : String(e);
+      await handleAiRefineCustomFailure(e);
+      set({ summaryStatus: "error", summaryError: raw });
     }
   },
 

@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -7,7 +6,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useWavesurfer } from "@wavesurfer/react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Trans, useTranslation } from "react-i18next";
@@ -34,7 +32,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { exportRecordingTo, loadRecordingBytes } from "@/lib/audio";
+import { exportRecordingTo } from "@/lib/audio";
+import { AudioWavePlayer } from "@/components/AudioWavePlayer";
 import {
   Dialog,
   DialogContent,
@@ -109,14 +108,6 @@ function formatFullDateTime(ts: number): string {
   const d = new Date(ts);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-function formatClockTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
-  const total = Math.floor(seconds);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 // 短时长用 0.8s / 12s，>=1min 用 m:ss，避免 0:03 这种看起来像分钟数的歧义。
@@ -500,119 +491,6 @@ function DetailActionButton({
   );
 }
 
-// 用 wavesurfer.js 渲染真实波形——用户可点击 / 拖动波形条任意位置 seek。
-// 颜色与项目工业风一致：底色 te-light-gray，已播部分 te-accent。
-function AudioWavePlayer({
-  audioPath,
-  fallbackDurationMs,
-}: {
-  audioPath: string;
-  fallbackDurationMs: number;
-}) {
-  const { t } = useTranslation();
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState(false);
-
-  // 用 Tauri 命令把录音字节读到内存，再做成 blob URL 喂给 wavesurfer——直接走
-  // 文件路径在 webview 里取不到，绕道 invoke 是必须的。
-  useEffect(() => {
-    let cancelled = false;
-    let url: string | null = null;
-    setLoadError(false);
-    setBlobUrl(null);
-    (async () => {
-      try {
-        const buf = await loadRecordingBytes(audioPath);
-        if (cancelled) return;
-        const mime = audioPath.toLowerCase().endsWith(".ogg")
-          ? "audio/ogg"
-          : "audio/wav";
-        url = URL.createObjectURL(new Blob([buf], { type: mime }));
-        if (!cancelled) setBlobUrl(url);
-      } catch (e) {
-        console.error("[wavesurfer] load failed:", e);
-        if (!cancelled) setLoadError(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [audioPath]);
-
-  const { wavesurfer, isReady, isPlaying, currentTime } = useWavesurfer({
-    container: containerRef,
-    url: blobUrl ?? undefined,
-    height: 56,
-    waveColor: "#6b6b6b",
-    progressColor: "#FFB200",
-    cursorColor: "#FFB200",
-    cursorWidth: 1,
-    barWidth: 2,
-    barGap: 2,
-    barRadius: 1,
-    normalize: true,
-    interact: true,
-    dragToSeek: true,
-  });
-
-  // dialog 里启播时，把全局 store 的播放停掉，避免两份音频同时响。
-  useEffect(() => {
-    if (isPlaying) usePlaybackStore.getState().stop();
-  }, [isPlaying]);
-
-  const onPlayPause = useCallback(() => {
-    if (wavesurfer) void wavesurfer.playPause();
-  }, [wavesurfer]);
-
-  const fallbackSec = Math.max(0, fallbackDurationMs / 1000);
-  const duration =
-    isReady && wavesurfer ? wavesurfer.getDuration() : fallbackSec;
-  const showPause = isPlaying;
-
-  return (
-    <div className="flex shrink-0 items-center gap-3 border-t border-te-gray/40 bg-te-bg px-4 py-3">
-      <button
-        type="button"
-        onClick={onPlayPause}
-        disabled={!isReady}
-        className="inline-flex size-9 shrink-0 items-center justify-center border border-te-gray/50 text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-te-gray/50 disabled:hover:text-te-fg"
-        title={
-          showPause ? t("pages:history.row.pause") : t("pages:history.row.play")
-        }
-        aria-label={
-          showPause ? t("pages:history.row.pause") : t("pages:history.row.play")
-        }
-      >
-        {!blobUrl && !loadError ? (
-          <Loader2 className="size-3.5 animate-spin" strokeWidth={2.5} />
-        ) : showPause ? (
-          <Pause className="size-3.5" strokeWidth={2.5} />
-        ) : (
-          <Play className="size-3.5" strokeWidth={2.5} />
-        )}
-      </button>
-
-      <span className="w-10 font-mono text-[11px] tabular-nums text-te-light-gray">
-        {formatClockTime(currentTime)}
-      </span>
-
-      <div className="relative min-w-0 flex-1">
-        <div ref={containerRef} className="w-full" />
-        {!isReady && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[10px] uppercase tracking-widest text-te-light-gray/60">
-            {loadError ? "// load failed //" : "// loading //"}
-          </div>
-        )}
-      </div>
-
-      <span className="w-10 text-right font-mono text-[11px] tabular-nums text-te-light-gray">
-        {formatClockTime(duration)}
-      </span>
-    </div>
-  );
-}
 
 type DebugMode = "simulate" | "refine" | "reinject";
 

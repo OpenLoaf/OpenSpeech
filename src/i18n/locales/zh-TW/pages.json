@@ -116,6 +116,56 @@
             "medium": "中段 21–100 字",
             "long": "長稿 > 100 字"
           }
+        },
+        "duration_dist": {
+          "title": "單次時長分布",
+          "hint": "按一次錄音的長度分桶，看你說短句多還是說長稿多",
+          "buckets": {
+            "lt10s": "< 10 秒",
+            "s10_30": "10–30 秒",
+            "s30_60": "30–60 秒",
+            "s60_120": "1–2 分鐘",
+            "gt120s": "> 2 分鐘"
+          }
+        },
+        "type_mix": {
+          "title": "類型分布",
+          "hint": "你都用 OpenSpeech 做什麼——聽寫、問 AI 還是翻譯",
+          "buckets": {
+            "dictation": "聽寫",
+            "ask": "問 AI",
+            "translate": "翻譯"
+          }
+        },
+        "provider_dist": {
+          "title": "通道分布",
+          "hint": "不同 ASR 通道的次數與平均速度",
+          "unknown": "未知通道"
+        },
+        "ai_refine_rate": {
+          "title": "AI 優化使用率",
+          "hint": "多少次工作階段用了 AI 整理；以及平均整理耗時",
+          "used_label": "已使用",
+          "avg_label": "平均耗時"
+        },
+        "status_mix": {
+          "title": "成功率",
+          "hint": "成功 / 失敗 / 取消 三態占比",
+          "buckets": {
+            "success": "成功",
+            "failed": "失敗",
+            "cancelled": "已取消"
+          }
+        },
+        "asr_source_dist": {
+          "title": "ASR 通道分布",
+          "hint": "即時 / 檔案轉寫 / 自訂端點 各占多少",
+          "buckets": {
+            "saas-realtime": "即時",
+            "saas-rest": "檔案轉寫",
+            "byo": "自訂",
+            "unknown": "未知"
+          }
         }
       },
       "empty": "// 尚無聽寫記錄，去主畫面試試 //"
@@ -429,7 +479,9 @@
       "pause": "暫停",
       "resume": "繼續",
       "stop": "結束",
-      "listening": "正在聆聽..."
+      "listening": "正在聆聽...",
+      "reconnecting": "網路異常，正在重連… ({{attempt}}/{{max}})",
+      "reconnect_gave_up": "重連失敗，會議已斷開"
     },
     "speaker": {
       "label": "用戶 {{letter}}",
@@ -446,9 +498,22 @@
       "summary_speakers": "發言人",
       "summary_abstract": "會議摘要",
       "summary_section": "討論要點",
-      "summary_loading": "正在生成紀要…",
-      "search": "搜尋",
-      "edit": "編輯"
+      "summary_loading": "正在載入紀要…",
+      "summary_generate": "生成紀要",
+      "summary_regenerate": "重新生成",
+      "summary_failed": "紀要生成失敗",
+      "summary_idle_hint": "點上方「生成紀要」按鈕，按目前 AI 通道生成 Markdown 紀要（設定 → AI → 提示詞 → 會議紀要 可改預設提示）。",
+      "summary_empty_transcript": "本次會議沒有可總結的內容。",
+      "export": "匯出",
+      "export_default_name": "會議-{{date}}-{{shortId}}",
+      "export_md_filter": "Markdown",
+      "export_doc_title": "會議記錄",
+      "export_meta_created": "時間",
+      "export_meta_duration": "時長",
+      "export_meta_speakers": "說話人數",
+      "export_meta_segments": "段數",
+      "export_success": "已匯出至 {{path}}",
+      "export_failed": "匯出失敗"
     }
   }
 }

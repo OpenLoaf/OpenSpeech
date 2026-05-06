@@ -149,6 +149,7 @@
     "prompt_tab_refine": "聽寫優化",
     "prompt_tab_translate": "翻譯",
     "prompt_tab_polish": "潤飾",
+    "prompt_tab_meeting": "會議紀要",
     "polish_scenarios_title": "潤飾場景",
     "polish_scenarios_hint": "AI 工具箱「潤飾」頁底部 chip 列表的來源；執行時會把所選場景的指示拼接到潤飾系統提示詞之後。",
     "polish_scenarios_empty": "尚未新增潤飾場景",

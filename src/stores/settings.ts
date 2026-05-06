@@ -14,10 +14,12 @@ export {
   DEFAULT_AI_SYSTEM_PROMPTS,
   DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS,
   DEFAULT_AI_POLISH_SYSTEM_PROMPTS,
+  DEFAULT_AI_MEETING_SUMMARY_PROMPTS,
   DEFAULT_POLISH_SCENARIOS,
   getEffectiveAiSystemPrompt,
   getEffectiveAiTranslationSystemPrompt,
   getEffectiveAiPolishSystemPrompt,
+  getEffectiveAiMeetingSummaryPrompt,
 } from "@/lib/defaultAiPrompts";
 export type { PolishScenario } from "@/lib/defaultAiPrompts";
 
@@ -117,6 +119,8 @@ export interface AiRefineSettings {
   customTranslationSystemPrompt: string | null;
   // 润色用的系统提示词；与 customSystemPrompt 同样的 null 语义。
   customPolishSystemPrompt: string | null;
+  // 会议纪要用的系统提示词；同样 null = 跟随当前 UI 语言取默认值。
+  customMeetingSummaryPrompt: string | null;
   // 润色场景（chip）。null = 跟随当前界面语言用 DEFAULT_POLISH_SCENARIOS；
   // 非 null = 用户自定义条目（可空数组表示"用户主动清空"）。
   customPolishScenarios: PolishScenario[] | null;
@@ -216,6 +220,7 @@ const DEFAULT_AI_REFINE: AiRefineSettings = {
   customSystemPrompt: null,
   customTranslationSystemPrompt: null,
   customPolishSystemPrompt: null,
+  customMeetingSummaryPrompt: null,
   customPolishScenarios: null,
   includeHistory: true,
 };
@@ -249,6 +254,7 @@ interface SettingsState {
   setAiSystemPrompt: (value: string | null) => Promise<void>;
   setAiTranslationSystemPrompt: (value: string | null) => Promise<void>;
   setAiPolishSystemPrompt: (value: string | null) => Promise<void>;
+  setAiMeetingSummaryPrompt: (value: string | null) => Promise<void>;
   setPolishScenarios: (value: PolishScenario[] | null) => Promise<void>;
   setAiIncludeHistory: (v: boolean) => Promise<void>;
   setDictationMode: (mode: DictationProviderMode) => Promise<void>;
@@ -423,6 +429,13 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
         ? null
         : null;
 
+  const customMeetingSummaryPrompt =
+    typeof r.customMeetingSummaryPrompt === "string"
+      ? r.customMeetingSummaryPrompt
+      : r.customMeetingSummaryPrompt === null
+        ? null
+        : null;
+
   let customPolishScenarios: PolishScenario[] | null;
   if (Array.isArray(r.customPolishScenarios)) {
     customPolishScenarios = r.customPolishScenarios.filter(
@@ -450,6 +463,7 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
     customSystemPrompt,
     customTranslationSystemPrompt,
     customPolishSystemPrompt,
+    customMeetingSummaryPrompt,
     customPolishScenarios,
     includeHistory: typeof r.includeHistory === "boolean" ? r.includeHistory : true,
   };
@@ -778,6 +792,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     setAiPolishSystemPrompt: async (value) => {
       const cur = get().aiRefine;
       const next = { ...cur, customPolishSystemPrompt: value };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setAiMeetingSummaryPrompt: async (value) => {
+      const cur = get().aiRefine;
+      const next = { ...cur, customMeetingSummaryPrompt: value };
       set({ aiRefine: next });
       await persist({ aiRefine: next });
     },

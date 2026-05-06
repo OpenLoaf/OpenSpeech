@@ -17,6 +17,7 @@ export const EVENT_FINAL = "meetings://segment-final";
 export const EVENT_ERROR = "meetings://error";
 export const EVENT_END = "meetings://ended";
 export const EVENT_STATUS = "meetings://status";
+export const EVENT_RECONNECTING = "meetings://reconnecting";
 
 export type MeetingStatus = "idle" | "active" | "paused" | "stopped";
 
@@ -45,6 +46,16 @@ export interface MeetingStatusPayload {
   meeting_id: string;
   status: MeetingStatus;
   elapsed_ms: number;
+}
+
+export type MeetingReconnectPhase = "backoff" | "connecting" | "recovered" | "gave_up";
+
+export interface MeetingReconnectPayload {
+  meeting_id: string;
+  phase: MeetingReconnectPhase;
+  attempt: number;
+  max_attempts: number;
+  reason: string;
 }
 
 export interface StartMeetingArgs {
@@ -83,6 +94,7 @@ export interface MeetingEventHandlers {
   onError?: (p: MeetingErrorPayload) => void;
   onEnded?: (meetingId: string) => void;
   onStatus?: (p: MeetingStatusPayload) => void;
+  onReconnecting?: (p: MeetingReconnectPayload) => void;
 }
 
 export async function subscribeMeetingEvents(
@@ -95,6 +107,7 @@ export async function subscribeMeetingEvents(
   if (handlers.onError) offs.push(await listen<MeetingErrorPayload>(EVENT_ERROR, (e) => handlers.onError!(e.payload)));
   if (handlers.onEnded) offs.push(await listen<string>(EVENT_END, (e) => handlers.onEnded!(e.payload)));
   if (handlers.onStatus) offs.push(await listen<MeetingStatusPayload>(EVENT_STATUS, (e) => handlers.onStatus!(e.payload)));
+  if (handlers.onReconnecting) offs.push(await listen<MeetingReconnectPayload>(EVENT_RECONNECTING, (e) => handlers.onReconnecting!(e.payload)));
   return () => {
     offs.forEach((off) => off());
   };

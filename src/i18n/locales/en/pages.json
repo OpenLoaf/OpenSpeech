@@ -116,6 +116,56 @@
             "medium": "Medium 21–100 words",
             "long": "Long > 100 words"
           }
+        },
+        "duration_dist": {
+          "title": "Session length distribution",
+          "hint": "How long each recording lasts — short bursts vs long takes",
+          "buckets": {
+            "lt10s": "< 10s",
+            "s10_30": "10–30s",
+            "s30_60": "30–60s",
+            "s60_120": "1–2 min",
+            "gt120s": "> 2 min"
+          }
+        },
+        "type_mix": {
+          "title": "Usage mix",
+          "hint": "Dictation vs ask vs translate",
+          "buckets": {
+            "dictation": "Dictation",
+            "ask": "Ask",
+            "translate": "Translate"
+          }
+        },
+        "provider_dist": {
+          "title": "Provider mix",
+          "hint": "Sessions and average speed by ASR channel",
+          "unknown": "Unknown"
+        },
+        "ai_refine_rate": {
+          "title": "AI refine usage",
+          "hint": "How often AI cleanup ran, and how long it took on average",
+          "used_label": "Used",
+          "avg_label": "Avg latency"
+        },
+        "status_mix": {
+          "title": "Status mix",
+          "hint": "Success / failed / cancelled ratio",
+          "buckets": {
+            "success": "Success",
+            "failed": "Failed",
+            "cancelled": "Cancelled"
+          }
+        },
+        "asr_source_dist": {
+          "title": "ASR source mix",
+          "hint": "Realtime vs file transcription vs custom endpoint",
+          "buckets": {
+            "saas-realtime": "Realtime",
+            "saas-rest": "File",
+            "byo": "Custom",
+            "unknown": "Unknown"
+          }
         }
       },
       "empty": "// No dictation records yet — give it a try //"
@@ -429,7 +479,9 @@
       "pause": "Pause",
       "resume": "Resume",
       "stop": "Stop",
-      "listening": "Listening..."
+      "listening": "Listening...",
+      "reconnecting": "Network hiccup, reconnecting… ({{attempt}}/{{max}})",
+      "reconnect_gave_up": "Reconnect failed, meeting disconnected"
     },
     "speaker": {
       "label": "Speaker {{letter}}",
@@ -446,9 +498,22 @@
       "summary_speakers": "Speakers",
       "summary_abstract": "Abstract",
       "summary_section": "Key points",
-      "summary_loading": "Generating summary…",
-      "search": "Search",
-      "edit": "Edit"
+      "summary_loading": "Loading summary…",
+      "summary_generate": "Generate",
+      "summary_regenerate": "Regenerate",
+      "summary_failed": "Summary failed",
+      "summary_idle_hint": "Click \"Generate\" above to draft a Markdown summary using the active AI channel (Settings → AI → Prompts → Meeting summary to tweak the default prompt).",
+      "summary_empty_transcript": "This meeting has no transcript to summarize.",
+      "export": "Export",
+      "export_default_name": "meeting-{{date}}-{{shortId}}",
+      "export_md_filter": "Markdown",
+      "export_doc_title": "Meeting Transcript",
+      "export_meta_created": "Created",
+      "export_meta_duration": "Duration",
+      "export_meta_speakers": "Speakers",
+      "export_meta_segments": "Segments",
+      "export_success": "Exported to {{path}}",
+      "export_failed": "Export failed"
     }
   }
 }

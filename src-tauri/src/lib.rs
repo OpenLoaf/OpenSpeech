@@ -20,6 +20,7 @@ use tauri_plugin_store::StoreExt;
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
 
+mod active_app;
 mod ai_refine;
 pub mod asr;
 mod audio;
@@ -158,6 +159,11 @@ fn relaunch_app(app: tauri::AppHandle) {
 #[tauri::command]
 fn hide_to_tray(app: tauri::AppHandle) {
     hide_main_window(&app);
+}
+
+#[tauri::command]
+fn get_active_app_name_cmd() -> Option<String> {
+    active_app::get_active_app_name()
 }
 
 #[tauri::command]
@@ -985,6 +991,7 @@ pub fn run() {
             app_emergency_reset,
             relaunch_app,
             hide_to_tray,
+            get_active_app_name_cmd,
             show_main_window_cmd,
             tray_refresh,
             update_tray_labels,
@@ -1037,6 +1044,10 @@ pub fn run() {
             meetings::meeting_transcript_write,
             meetings::meeting_transcript_load,
             meetings::meeting_transcript_delete,
+            meetings::meeting_export_markdown,
+            meetings::meeting_summary_write,
+            meetings::meeting_summary_load,
+            meetings::meeting_summary_delete,
             ai_refine::refine_text_via_chat_stream,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
