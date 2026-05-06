@@ -61,6 +61,10 @@
       "recording": "Recording",
       "response": "Response"
     },
+    "dictate_status": {
+      "ai_on": "AI refine on",
+      "ai_off": "AI refine off"
+    },
     "mode_action": {
       "dictate": "Dictate",
       "translate": "Translate"

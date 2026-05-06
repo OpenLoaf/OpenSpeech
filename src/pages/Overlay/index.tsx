@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, Check, Languages, X } from "lucide-react";
+import { AlertTriangle, Check, Languages, Mic, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
@@ -302,7 +302,6 @@ export default function OverlayPage() {
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             className="pointer-events-auto flex items-center justify-center gap-1.5 overflow-hidden border border-te-accent bg-te-bg px-2 leading-none"
           >
-            <Languages className="size-3 shrink-0 text-te-accent" />
             <AnimatePresence mode="wait" initial={false}>
               {state.modeSwitchHint !== null ? (
                 <motion.span
@@ -311,13 +310,20 @@ export default function OverlayPage() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent"
+                  className="flex items-center gap-1.5"
                 >
-                  {t(
-                    state.modeSwitchHint === "translate"
-                      ? "overlay:mode_switch.to_translate"
-                      : "overlay:mode_switch.to_dictation",
+                  {state.modeSwitchHint === "dictation" ? (
+                    <Mic className="size-3 shrink-0 text-te-accent" />
+                  ) : (
+                    <Languages className="size-3 shrink-0 text-te-accent" />
                   )}
+                  <span className="truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
+                    {t(
+                      state.modeSwitchHint === "translate"
+                        ? "overlay:mode_switch.to_translate"
+                        : "overlay:mode_switch.to_dictation",
+                    )}
+                  </span>
                 </motion.span>
               ) : (
                 <motion.span
@@ -328,6 +334,7 @@ export default function OverlayPage() {
                   transition={{ duration: 0.12 }}
                   className="flex items-center gap-1.5"
                 >
+                  <Languages className="size-3 shrink-0 text-te-accent" />
                   <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.15em] text-te-light-gray">
                     {t("overlay:translate.mode_label")}
                   </span>

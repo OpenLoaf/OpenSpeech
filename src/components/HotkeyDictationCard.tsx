@@ -39,6 +39,7 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
   const translateTargetLang = useSettingsStore(
     (s) => s.general.translateTargetLang,
   );
+  const aiRefineEnabled = useSettingsStore((s) => s.aiRefine.enabled);
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const segmentMode = segmentModeOverride ?? settingsSegmentMode;
   const isLive = recState !== "idle";
@@ -138,9 +139,9 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
               })}
             </div>
           </div>
-          {hotkeyTab === "translate" ? (
-            <div className="mb-2 flex shrink-0 flex-wrap items-center gap-1.5 md:mb-3">
-              {TRANSLATE_LANGS.map((lang) => {
+          <div className="mb-2 flex shrink-0 flex-wrap items-center gap-1.5 md:mb-3">
+            {hotkeyTab === "translate" ? (
+              TRANSLATE_LANGS.map((lang) => {
                 const active = translateTargetLang === lang;
                 return (
                   <button
@@ -161,9 +162,26 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
                     })}
                   </button>
                 );
-              })}
-            </div>
-          ) : null}
+              })
+            ) : (
+              <>
+                <span className="border border-te-gray/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
+                  {t(
+                    settingsSegmentMode === "UTTERANCE"
+                      ? "overlay:panel.mode_segment.utterance"
+                      : "overlay:panel.mode_segment.realtime",
+                  )}
+                </span>
+                <span className="border border-te-gray/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
+                  {t(
+                    aiRefineEnabled
+                      ? "overlay:panel.dictate_status.ai_on"
+                      : "overlay:panel.dictate_status.ai_off",
+                  )}
+                </span>
+              </>
+            )}
+          </div>
         </>
       )}
 

@@ -61,6 +61,10 @@
       "recording": "录音",
       "response": "响应"
     },
+    "dictate_status": {
+      "ai_on": "AI 优化已启用",
+      "ai_off": "AI 优化未启用"
+    },
     "mode_action": {
       "dictate": "听写",
       "translate": "翻译"
