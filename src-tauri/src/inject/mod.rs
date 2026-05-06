@@ -1,7 +1,7 @@
 // 文本注入：两条路径
 //   - inject_paste：剪贴板 + Cmd/Ctrl+V，整段一次贴入。用作末尾兜底 / 失败回退。
 //   - inject_type：enigo text() 直接键入 Unicode。流式逐字符输出走这条，
-//     不污染用户剪贴板、不被 IME 拦截。
+//     不污染用户剪贴板。
 //
 // 关于"静默失败"：
 //   enigo 在 Windows 上走 SendInput + KEYEVENTF_UNICODE，目标进程权限更高
@@ -17,6 +17,14 @@
 //   事件**。enigo 0.6.x 没有内置分块。这里 Windows 平台按 WIN_TYPE_CHUNK_CHARS
 //   把段拆成小块、块之间 sleep WIN_TYPE_CHUNK_SLEEP_MS，让 pump 有时间消化。
 //   实测中文 + 微信/浏览器/Office 输入框不再截断。其它平台无此问题，原速直发。
+//
+// 关于 Windows 中文 IME 把 ASCII 当拼音吃掉：
+//   KEYEVENTF_UNICODE 对中文 / 全角标点等高位 Unicode 字符 IME 直接放行，但
+//   ASCII 可见字符（A-Z a-z 0-9 ! ? . ,）会被搜狗 / 微软拼音 / QQ 拼音的
+//   keyboard hook 当作拼音输入接收，激活候选词框，最终落屏内容是"选词后的
+//   中文"。翻译模式英文段是重灾区。inject_type 入口检测到含 ASCII 可见字
+//   符就 ImmSetOpenStatus(FALSE) 临时关 IME，离开 scope 由 Drop 还原，纯
+//   中文段不动 IME（不闪图标）。
 
 use enigo::{Direction, Enigo, InputError, Key, Keyboard, Settings};
 
@@ -24,6 +32,61 @@ use enigo::{Direction, Enigo, InputError, Key, Keyboard, Settings};
 const WIN_TYPE_CHUNK_CHARS: usize = 4;
 #[cfg(target_os = "windows")]
 const WIN_TYPE_CHUNK_SLEEP_MS: u64 = 8;
+
+#[cfg(target_os = "windows")]
+mod win_ime {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::Input::Ime::{
+        HIMC, ImmGetContext, ImmGetOpenStatus, ImmReleaseContext, ImmSetOpenStatus,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    pub struct ImeGuard {
+        hwnd: HWND,
+        himc: HIMC,
+        was_open: bool,
+    }
+
+    impl ImeGuard {
+        pub fn disable() -> Option<Self> {
+            unsafe {
+                let hwnd = GetForegroundWindow();
+                if hwnd.is_null() {
+                    return None;
+                }
+                let himc = ImmGetContext(hwnd);
+                if himc.is_null() {
+                    return None;
+                }
+                let was_open = ImmGetOpenStatus(himc) != 0;
+                if was_open {
+                    ImmSetOpenStatus(himc, 0);
+                }
+                Some(Self {
+                    hwnd,
+                    himc,
+                    was_open,
+                })
+            }
+        }
+    }
+
+    impl Drop for ImeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if self.was_open {
+                    ImmSetOpenStatus(self.himc, 1);
+                }
+                ImmReleaseContext(self.hwnd, self.himc);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn text_has_ime_risk(s: &str) -> bool {
+    s.chars().any(|c| c.is_ascii_graphic())
+}
 
 /// 截取前 N 个 Unicode 标量，给日志做摘要——避免把整段转录原文打到日志里
 /// 泄露隐私，又能在排错时确认"Rust 真的拿到了文本"。
@@ -107,6 +170,18 @@ pub fn inject_type(text: String) -> Result<(), String> {
         log::error!("[inject] type enigo init failed: {e}");
         e.to_string()
     })?;
+
+    #[cfg(target_os = "windows")]
+    let _ime_guard = if text_has_ime_risk(&text) {
+        let g = win_ime::ImeGuard::disable();
+        log::info!(
+            "[inject] type ime guard {}",
+            if g.is_some() { "disabled" } else { "skipped" }
+        );
+        g
+    } else {
+        None
+    };
 
     // 按 \n 切段：段内走 text() 直接键入，段间发一次 Shift+Return 作为软换行——
     // Slack / Discord / Teams / WhatsApp / Telegram / iMessage / 飞书 / 钉钉 等
