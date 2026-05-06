@@ -25,6 +25,7 @@ const METRIC_INDEX: Record<StatsMetric, string> = {
   words: "02",
   wpm: "03",
   saved: "04",
+  sessions: "05",
 };
 
 type Range = "today" | "7d" | "30d" | "90d" | "all";
@@ -219,16 +220,17 @@ export function StatsDialog({ open, onOpenChange, focusMetric }: Props) {
         showCloseButton
         className="flex h-[82vh] w-[92vw] max-w-5xl flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 sm:max-w-5xl"
       >
-        <DialogHeader className="flex flex-row items-center gap-2 border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
-          <BarChart3 className="size-4 shrink-0 text-te-accent" aria-hidden />
-          <div className="flex flex-1 flex-col">
-            <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
-              {t("pages:home.stats_dialog.title")}
-            </DialogTitle>
-            <DialogDescription className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-              {t("pages:home.stats_dialog.subtitle")}
-            </DialogDescription>
-          </div>
+        <DialogHeader className="flex flex-row items-baseline gap-3 border-b border-te-dialog-border bg-te-surface-hover px-5 py-3">
+          <BarChart3
+            className="size-4 shrink-0 translate-y-0.5 self-center text-te-accent"
+            aria-hidden
+          />
+          <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
+            {t("pages:home.stats_dialog.title")}
+          </DialogTitle>
+          <DialogDescription className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
+            {t("pages:home.stats_dialog.subtitle")}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -236,12 +238,12 @@ export function StatsDialog({ open, onOpenChange, focusMetric }: Props) {
           <KpiStrip stats={stats} focused={metric} onSelect={setMetric} />
 
           {/* Range only — metric switching now lives in the KPI strip */}
-          <div className="flex flex-wrap items-center gap-3 border-b border-te-gray/30 bg-te-bg/40 px-5 py-3">
+          <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-te-gray/30 bg-te-bg/40 px-5 py-3">
             <RangeSwitcher value={range} onChange={setRange} />
           </div>
 
           {/* Main + facets */}
-          <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 py-5">
+          <div className="flex flex-col gap-4 px-5 py-5">
             <AnimatePresence mode="wait">
               <motion.div
                 key={metric}
@@ -256,13 +258,8 @@ export function StatsDialog({ open, onOpenChange, focusMetric }: Props) {
               </motion.div>
             </AnimatePresence>
           </div>
-
-          <div className="flex shrink-0 items-center justify-between gap-4 border-t border-te-gray/30 bg-te-surface-hover px-5 py-3">
-            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-              {t("pages:home.stats_dialog.footer.privacy")}
-            </span>
-          </div>
         </div>
+
       </DialogContent>
     </Dialog>
   );
@@ -282,56 +279,48 @@ function KpiStrip({
   onSelect: (m: StatsMetric) => void;
 }) {
   const { t } = useTranslation();
-  const cells: Array<{
-    key: StatsMetric | "sessions";
-    value: string;
-    unit: string;
-    selectable: boolean;
-  }> = [
+  const cells: Array<{ key: StatsMetric; value: string; unit: string }> = [
     {
       key: "duration",
       value: formatHHMM(stats.totals.durationMs),
       unit: t("pages:home.stats.duration_unit"),
-      selectable: true,
     },
     {
       key: "words",
       value: formatNumber(stats.totals.words),
       unit: t("pages:home.stats.words_unit"),
-      selectable: true,
     },
     {
       key: "wpm",
       value: stats.totals.wpm > 0 ? String(stats.totals.wpm) : "—",
       unit: t("pages:home.stats.wpm_unit"),
-      selectable: true,
     },
     {
       key: "saved",
       value: formatHHMM(stats.totals.savedMs),
       unit: t("pages:home.stats.saved_unit"),
-      selectable: true,
     },
     {
       key: "sessions",
       value: formatNumber(stats.totals.sessions),
       unit: "",
-      selectable: false,
     },
   ];
   return (
     <div className="grid shrink-0 grid-cols-5 gap-px bg-te-gray/40">
       {cells.map((cell) => {
         const active = cell.key === focused;
-        const baseCls =
-          "relative flex flex-col gap-1.5 px-4 py-3 text-left transition-colors";
-        const stateCls = active
-          ? "bg-te-bg"
-          : cell.selectable
-            ? "bg-te-surface hover:bg-te-surface-hover"
-            : "bg-te-surface";
-        const inner = (
-          <>
+        return (
+          <button
+            key={cell.key}
+            type="button"
+            onClick={() => onSelect(cell.key)}
+            aria-pressed={active}
+            className={cn(
+              "relative flex cursor-pointer flex-col gap-1.5 px-4 py-3 text-left transition-colors focus:outline-none",
+              active ? "bg-te-bg" : "bg-te-surface hover:bg-te-surface-hover",
+            )}
+          >
             {active ? (
               <span
                 aria-hidden
@@ -356,28 +345,6 @@ function KpiStrip({
                 </span>
               ) : null}
             </div>
-          </>
-        );
-        if (!cell.selectable) {
-          return (
-            <div key={cell.key} className={cn(baseCls, stateCls)}>
-              {inner}
-            </div>
-          );
-        }
-        return (
-          <button
-            key={cell.key}
-            type="button"
-            onClick={() => onSelect(cell.key as StatsMetric)}
-            aria-pressed={active}
-            className={cn(
-              baseCls,
-              stateCls,
-              "cursor-pointer focus:outline-none",
-            )}
-          >
-            {inner}
           </button>
         );
       })}
@@ -452,8 +419,10 @@ function MainPanel({
         <DailyBars stats={stats} field="words" />
       ) : metric === "wpm" ? (
         <WpmLine stats={stats} />
-      ) : (
+      ) : metric === "saved" ? (
         <DailyBars stats={stats} field="saved" />
+      ) : (
+        <DailyBars stats={stats} field="sessions" />
       )}
       <RangeBaseline range={range} />
     </Section>
@@ -505,10 +474,19 @@ function FacetPanel({
       </div>
     );
   }
+  if (metric === "saved") {
+    return (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <FacetSavedEquivalent savedMs={stats.totals.savedMs} />
+        <FacetTopApps apps={stats.topApps} valueKey="duration" />
+      </div>
+    );
+  }
+  // sessions：用次数比例 + 活跃时段呈现"频次"主题
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <FacetSavedEquivalent savedMs={stats.totals.savedMs} />
-      <FacetTopApps apps={stats.topApps} valueKey="duration" />
+      <FacetSessionDist dist={stats.sessionDist} />
+      <FacetHeatmap heat={stats.heat} />
     </div>
   );
 }
@@ -581,12 +559,13 @@ function DailyBars({
   field,
 }: {
   stats: MockStats;
-  field: "duration" | "words" | "saved";
+  field: "duration" | "words" | "saved" | "sessions";
 }) {
   const data = stats.daily;
   const series = data.map((d) => {
     if (field === "duration") return d.durationMs;
     if (field === "words") return d.words;
+    if (field === "sessions") return d.sessions;
     const typingNeed = (d.words / TYPING_BASELINE_WPM) * 60_000;
     return Math.max(0, typingNeed - d.durationMs);
   });

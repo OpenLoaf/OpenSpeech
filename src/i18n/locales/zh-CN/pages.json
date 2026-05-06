@@ -22,8 +22,8 @@
       "translate": "翻译"
     },
     "hotkey_title": {
-      "dictate": "听写快捷键 / PUSH-TO-TALK",
-      "translate": "翻译快捷键 / TRANSLATE"
+      "dictate": "听写 / PUSH-TO-TALK",
+      "translate": "翻译 / TRANSLATE"
     },
     "stats": {
       "section_title": "今日 / 本次会话",
@@ -43,7 +43,7 @@
       "open_dialog_aria": "查看 {{label}} 详细统计"
     },
     "stats_dialog": {
-      "title": "听写统计",
+      "title": "数据统计",
       "subtitle": "本机数据 · 未上传任何服务器",
       "close": "关闭",
       "range": {
@@ -77,6 +77,10 @@
         "saved": {
           "title": "节省累计",
           "hint": "相对 {{baseline}} WPM 打字基线累计省下的时间"
+        },
+        "sessions": {
+          "title": "次数走势",
+          "hint": "每日听写会话数"
         }
       },
       "facet": {
@@ -113,10 +117,6 @@
             "long": "长稿 > 100 字"
           }
         }
-      },
-      "footer": {
-        "open_history": "在历史中查看 →",
-        "privacy": "所有统计在本机计算，无网络传输"
       },
       "empty": "// 还没有听写记录，去主界面试试 //"
     }

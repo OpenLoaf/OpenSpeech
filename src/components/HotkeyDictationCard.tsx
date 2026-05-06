@@ -183,7 +183,7 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
               className="flex min-h-0 flex-1 flex-col"
             >
               {hotkeyTab === "translate" ? (
-                <div className="mb-3 flex shrink-0 flex-wrap items-center gap-1.5">
+                <div className="mb-6 flex shrink-0 flex-wrap items-center gap-1.5 md:mb-8">
                   {TRANSLATE_LANGS.map((lang) => {
                     const active = translateTargetLang === lang;
                     return (

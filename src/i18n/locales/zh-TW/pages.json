@@ -22,8 +22,8 @@
       "translate": "翻譯"
     },
     "hotkey_title": {
-      "dictate": "聽寫快捷鍵 / PUSH-TO-TALK",
-      "translate": "翻譯快捷鍵 / TRANSLATE"
+      "dictate": "聽寫 / PUSH-TO-TALK",
+      "translate": "翻譯 / TRANSLATE"
     },
     "stats": {
       "section_title": "今日 / 本次工作階段",
@@ -43,7 +43,7 @@
       "open_dialog_aria": "查看 {{label}} 詳細統計"
     },
     "stats_dialog": {
-      "title": "聽寫統計",
+      "title": "數據統計",
       "subtitle": "本機資料 · 未上傳任何伺服器",
       "close": "關閉",
       "range": {
@@ -77,6 +77,10 @@
         "saved": {
           "title": "節省累計",
           "hint": "相對 {{baseline}} WPM 打字基線累計省下的時間"
+        },
+        "sessions": {
+          "title": "次數走勢",
+          "hint": "每日聽寫工作階段數"
         }
       },
       "facet": {
@@ -113,10 +117,6 @@
             "long": "長稿 > 100 字"
           }
         }
-      },
-      "footer": {
-        "open_history": "在歷史中查看 →",
-        "privacy": "所有統計皆在本機計算，無任何網路傳輸"
       },
       "empty": "// 尚無聽寫記錄，去主畫面試試 //"
     }

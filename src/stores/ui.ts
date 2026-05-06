@@ -17,7 +17,12 @@ export type SettingsTabId =
   | "ABOUT";
 
 /** 统计 Dialog 打开时聚焦的指标；null 表示无侧重，默认走 duration。 */
-export type StatsMetric = "duration" | "words" | "wpm" | "saved";
+export type StatsMetric =
+  | "duration"
+  | "words"
+  | "wpm"
+  | "saved"
+  | "sessions";
 
 export interface HotkeyConflict {
   id: string;

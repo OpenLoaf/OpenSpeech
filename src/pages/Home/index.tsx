@@ -95,13 +95,14 @@ export default function HomePage() {
   const openStats = useUIStore((s) => s.openStats);
   const [view, setView] = useState<StatsView>("all");
 
-  const cardLabels: Record<StatsMetric, string> = {
+  type CardMetric = Exclude<StatsMetric, "sessions">;
+  const cardLabels: Record<CardMetric, string> = {
     duration: t("pages:home.stats.duration_label"),
     words: t("pages:home.stats.words_label"),
     wpm: t("pages:home.stats.wpm_label"),
     saved: t("pages:home.stats.saved_label"),
   };
-  const aria = (m: StatsMetric) =>
+  const aria = (m: CardMetric) =>
     t("pages:home.stats.open_dialog_aria", { label: cardLabels[m] });
 
   // "今日"实时扫 historyItems；"历史"= stats 缓存 + 今日实时增量
@@ -155,7 +156,7 @@ export default function HomePage() {
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.5 }}
-            className="flex min-h-0 flex-[4_1_0%] flex-col justify-between"
+            className="flex min-h-0 flex-[3_1_0%] flex-col gap-4 pb-[clamp(1rem,3vh,2rem)]"
           >
             <h1 className="font-mono text-[clamp(1.75rem,5.5vw,4.5rem)] font-bold leading-[0.95] tracking-tighter text-te-fg">
               {t("pages:home.hero.title_line1")}
@@ -168,22 +169,10 @@ export default function HomePage() {
             <p className="max-w-xl font-sans text-sm leading-relaxed text-te-light-gray md:text-base">
               {t("pages:home.hero.description")}
             </p>
-
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
-              <img
-                src="/logo-write.png"
-                alt=""
-                aria-hidden
-                draggable={false}
-                className="size-5 shrink-0 select-none"
-              />
-              <span>{t("pages:home.hero.feature_push_to_talk")}</span>
-              <span>{t("pages:home.hero.feature_cross_platform")}</span>
-            </div>
           </motion.div>
 
           {/* HOTKEY CARD */}
-          <div className="flex min-h-0 flex-[3_1_0%] items-stretch overflow-hidden">
+          <div className="flex min-h-0 flex-[4_1_0%] items-stretch overflow-hidden">
             <HotkeyDictationCard />
           </div>
 

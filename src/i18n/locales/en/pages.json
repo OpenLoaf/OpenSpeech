@@ -22,8 +22,8 @@
       "translate": "Translate"
     },
     "hotkey_title": {
-      "dictate": "Dictation hotkey / PUSH-TO-TALK",
-      "translate": "Translate hotkey / TRANSLATE"
+      "dictate": "Dictation / PUSH-TO-TALK",
+      "translate": "Translate / TRANSLATE"
     },
     "stats": {
       "section_title": "Today / This session",
@@ -43,7 +43,7 @@
       "open_dialog_aria": "Open detailed stats for {{label}}"
     },
     "stats_dialog": {
-      "title": "Dictation stats",
+      "title": "Statistics",
       "subtitle": "Local data · nothing leaves this device",
       "close": "Close",
       "range": {
@@ -77,6 +77,10 @@
         "saved": {
           "title": "Time saved cumulative",
           "hint": "Saved versus a {{baseline}} WPM typing baseline"
+        },
+        "sessions": {
+          "title": "Sessions trend",
+          "hint": "Daily dictation session count"
         }
       },
       "facet": {
@@ -113,10 +117,6 @@
             "long": "Long > 100 words"
           }
         }
-      },
-      "footer": {
-        "open_history": "Open in history →",
-        "privacy": "All numbers computed on this device — no network calls"
       },
       "empty": "// No dictation records yet — give it a try //"
     }
