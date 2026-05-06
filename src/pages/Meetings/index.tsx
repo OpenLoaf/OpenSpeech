@@ -651,7 +651,7 @@ function ReviewView({ onBack }: { onBack: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <div data-tauri-drag-region className="border-b border-te-gray/40 bg-te-bg">
-        <div data-tauri-drag-region className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-[4vw] py-3">
+        <div data-tauri-drag-region className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-2">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
