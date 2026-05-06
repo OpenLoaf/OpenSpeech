@@ -528,6 +528,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 if let Err(e) = crate::overlay::show(&app_clone) {
                     log::warn!("[overlay] show failed: {e:?}");
                 }
+                crate::cue::play_start();
                 let payload = HotkeyEventPayload {
                     id,
                     phase: "pressed",

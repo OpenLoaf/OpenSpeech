@@ -47,10 +47,11 @@
 Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idle 时悬浮条直接消失，但 Home 面板**必须保留最近一次结果**，挂到屏幕上等用户主动处置。
 
 - 触发条件：FSM 经历 `recording/transcribing/injecting/translating → idle` 且本次拿到了非空 transcript（partial 或 final 任一）。
-- 关闭路径仅两条：
+- 关闭路径：
   1. 用户点结果面板右上角 `✕`
   2. 用户再次按下听写快捷键开启新一轮录音（新一轮的 live 内容会替换掉上一次的 result）
-- 不会自动淡出、不会因焦点切换消失、不会因点击其他位置消失。
+  3. **10 秒自动淡出**——给用户够时间核对刚说的话，但不让结果永久占位
+- 不会因焦点切换或点击其他位置消失。
 - 视觉差异：Live 阶段使用 accent 色边框 + tag (READY/LISTENING/TRANSCRIBING/INJECTING)；Result 阶段恢复默认灰边框 + tag `// RESULT` + 副文案"已写入输入框 · 按快捷键开始下一次"。
 
 理由：录音结束 → injecting 200ms → idle 太快，用户根本看不清自己刚说了什么；保留结果让用户可以核对、复制（未来扩展），与"按快捷键继续下一句"的连续工作流一致。OS 悬浮条不做同样保留，因为它在主窗失焦时才显示，逻辑场景就是"立刻消失让位给目标应用"。
@@ -79,6 +80,28 @@ Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idl
 6. **松开事件丢失兜底**：PTT 模式下若用户按下后立即 Cmd+Tab 切走应用，`tauri-plugin-global-shortcut` 的 Released 事件可能丢失。应用在进入 Recording 时，全局键事件监听线程（`rdev`）同时订阅所有已注册快捷键的修饰键 keystate；每 200 ms 查询一次当前物理键状态，若检测到原组合已全部释放则主动触发"松开"逻辑。无客户端时长硬上限，松开事件兜底只靠 keystate 轮询 + 服务端 2h max-duration。
 7. **录音设备变更**：录音中若系统默认输入设备切换（拔耳机 / 切蓝牙），cpal 会发出 device change 事件；静默 rebind 到新默认设备，悬浮条闪一下 `DEVICE SWITCHED` 提示，录音不中断；若 rebind 失败则进入 Error。
 8. **麦克风被其他应用抢占**：cpal stream error → 立即进入 Error，错误文案"麦克风被其他应用占用"。
+
+### 录音中切换模式（听写 ↔ 翻译）
+
+录音过程中可以**互切听写与翻译模式**，仅在 **UTTERANCE（整句模式）** 下生效。
+
+1. **触发方式**：录音中（`state ∈ {preparing, recording}`）按"另一种"激活键。
+   - 听写录音中按翻译快捷键 → 切到翻译模式
+   - 翻译录音中按听写快捷键 → 切到听写模式
+   - 反复按可来回切换；切换不结束本次录音
+2. **副作用**：仅切 `activeId`，不停 cpal、不动 PCM 缓冲、不影响录音时长。`lastPressAt` 同时被重置——避免下一次"同 id toggle off"被错误判定为 too-short discard。
+3. **REALTIME 模式不支持切换**：边录边出字已经把听写阶段的 partial 流式注入到光标，半道切翻译会让"已注入听写文本 + 后续翻译输出"拼接成乱码。该路径下"另一种激活键"按下被忽略（仍回 hotkey listener 默认分支处理）。
+4. **finalize 时决定路径**：UTTERANCE 模式录音过程纯采集 PCM，松手后才根据 **当前 `activeId`** 决定走 `translate=true` 走翻译 chat stream 还是普通听写注入（`finalizeAndWriteHistory` 686 行 `translateMode = activeId === "translate"`）。所以"切换"在录音流程内永远 cheap，最终走哪条只看松手那一瞬的 activeId。
+5. **悬浮条 UI 反馈**：
+   - **pill 中心**保持 wave 连续——录音波形不被切换提示打断，避免"断一拍"的体感。
+   - **TranslateIndicator**（pill 上方独立 motion 元素）承载所有切换过渡 + 稳态显示：
+     - **切到翻译**：indicator 出现 → 内层文字 crossfade 显示"切换为翻译模式"~1.8s → 切回稳态"翻译模式 · <目标语言>"持续到录音结束
+     - **切到听写**：indicator（如果是从翻译切来则已存在）→ 内层文字 crossfade 显示"切换为听写模式"~1.8s → 因 `translate.active=false` 自动退场
+     - 显示条件：`state.translate.active || state.modeSwitchHint !== null`，过渡 hint 让 indicator 在 active=false 路径下仍有"壳子"挂提示文字
+6. **事件契约**：
+   - 主窗 `recording.ts` 切换分支：先 emit `openspeech://translate-active { active, lang }` 同步 active 稳态，再 emit `openspeech://mode-switch-hint { kind: "translate" | "dictation" }` 触发过渡文字
+   - overlay 端 `useOverlayMachine.showModeSwitchHint(kind)` 启 1.8s timer 自动 clear `modeSwitchHint`；切换期间连按会 reset timer + 替换 kind
+   - 首次进入翻译模式（按 translate 快捷键直接开始录音）只 emit `translate-active`，不 emit `mode-switch-hint`，indicator 直接显示稳态"翻译模式 · <目标语言>"
 
 ### 转写（通过 OpenLoaf SaaS realtime ASR）
 1. **走 `openloaf-saas` Rust SDK 的 `client.realtime().connect("realtimeASR")` WebSocket 通道**，不是传统 REST 批量上传。cpal 回调边录边把 PCM16 帧喂给 session，服务端边识别边下发 Partial/Final/Credits 事件。实现见 `src-tauri/src/stt/mod.rs`；SDK 用法见 skill `.claude/skills/openloaf-saas-sdk-rust/`。

@@ -1,17 +1,21 @@
-// 腾讯实时语音识别 + 说话人分离（`16k_zh_en_speaker` 引擎）。
+// 腾讯「实时说话人分离」WebSocket 接口（独立产品，不是普通实时识别套件）。
 //
-// 协议参考：docs/tencent-asr/websocket-realtime-speaker-diarization.md
-// 与普通实时识别的差异：
-//   - engine_model_type 仅有 "16k_zh_en_speaker"（中英 + 部分方言）
-//   - 服务端结果在 `sentences` 字段（对象，含 speaker_id / start_time / end_time），
-//     而不是普通实时的 `result`
-//   - speaker_id 起始 -1，声纹聚类稳定后变正整数
-//   - 推荐 40ms / 1280B 一帧（vs 普通 200ms）
+// 协议来源：https://cloud.tencent.com/document/product/1093/131127
+//   - endpoint: wss://asr.cloud.tencent.com/asr/v2/<appid>
+//   - engine_model_type: **必填且仅支持** `16k_zh_en_speaker`
+//     （中英粤+7 方言大模型，整接口本身就是为说话人分离设计的）
+//   - 不需要 `speaker_diarization` 参数——那是普通实时识别的额外开关，本接口
+//     已经内置说话人分离能力，传 speaker_diarization 反而会被拒
+//   - 返回 `sentences` 对象（含 speaker_id / start_time / end_time），
+//     speaker_id 起始 -1 → 声纹聚类稳定后转正整数
+//   - 推荐 40ms / 1280B 一帧
 //
-// 复用：
-//   - signature::build_realtime_url （HMAC-SHA1 一致）
-//   - tencent/realtime_session.rs 的 worker 框架（Outbound/SessionEvent 同 shape，
-//     但解析器不一样 —— 这里独立实现 parser，避免污染 dictation 主路径）
+// 该 engine 在腾讯云属于**独立 SKU**「实时说话人分离」资源包，账号必须单独
+// 开通（购买"实时语音识别大模型"等其它 SKU 都不覆盖）。未开通时服务端返
+// 4001 "Not support [engine_model_type: 16k_zh_en_speaker]" —— 用 classify_code
+// 转成 engine_not_authorized，前端引导跳腾讯云控制台资源包页。
+//
+// 签名沿用普通实时识别同一套 (HMAC-SHA1)。
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind as IoErrorKind;
@@ -25,7 +29,9 @@ use tungstenite::Message;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
 
-use crate::asr::tencent::signature::build_realtime_url;
+use crate::asr::tencent::signature::{
+    build_canonical_query, build_realtime_signing_string, sign_realtime, urlencode_signature,
+};
 
 use super::provider::{
     MeetingAsrProvider, MeetingEvent, MeetingProviderCapabilities, MeetingProviderError,
@@ -33,12 +39,13 @@ use super::provider::{
 };
 
 const HOST: &str = "asr.cloud.tencent.com";
+// 文档强制：必填且仅支持这个值（独立 SKU 的专用 engine，不是普通 ASR engine）。
 const ENGINE_MODEL_TYPE: &str = "16k_zh_en_speaker";
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const WS_LOG_TARGET: &str = "openspeech::asr::meeting::tencent";
 
-/// 腾讯说话人分离引擎原生支持的语种 / 方言代码。
-/// UI 用这个数组渲染语言选择器。
+/// 16k_zh_en 大模型引擎自带多语种判别（中英粤+9 方言）。
+/// language 字段不会传给腾讯——只用作前端 UI 的合法性预检。
 pub const SUPPORTED_LANGUAGES: &[&str] = &[
     "zh",  // 中文
     "en",  // 英语
@@ -163,6 +170,8 @@ impl TencentSpeakerSession {
         let voice_id = uuid::Uuid::new_v4().to_string();
         let nonce = (now & 0x7FFF_FFFF) as i64;
 
+        // 严格按文档 #131127 的请求参数表填，**不**加普通实时识别的额外开关
+        // （speaker_diarization / result_mod 等），否则服务端会以"参数不合法"拒。
         let mut q: BTreeMap<&str, String> = BTreeMap::new();
         q.insert("secretid", provider.secret_id.clone());
         q.insert("timestamp", now.to_string());
@@ -175,12 +184,31 @@ impl TencentSpeakerSession {
         // 会议长录音可能有较长静默：开 vad 让服务端自行切句，避免一句话太长被截
         q.insert("needvad", "1".into());
 
-        let url = build_realtime_url(
-            HOST,
-            &format!("/asr/v2/{}", provider.app_id),
-            &q,
-            &provider.secret_key,
-        );
+        let path = format!("/asr/v2/{}", provider.app_id);
+
+        // 全量诊断：参数、签名原文、签名值、URL-encoded 签名、最终 URL，逐项打印。
+        // 让现场可以肉眼对照腾讯文档逐字段排查（如本次 4001 是否真的因 engine 名拼错）。
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] >>> connect begin");
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] host={HOST}");
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] path={path}");
+        for (k, v) in &q {
+            log::info!(target: WS_LOG_TARGET, "[ws-debug] query[{k}] = {v}");
+        }
+
+        let canonical_query = build_canonical_query(&q);
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] canonical_query = {canonical_query}");
+
+        let signing_string = build_realtime_signing_string(HOST, &path, &canonical_query);
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] signing_string = {signing_string}");
+
+        let sig = sign_realtime(&provider.secret_key, &signing_string);
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] signature_b64 = {sig}");
+
+        let sig_enc = urlencode_signature(&sig);
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] signature_url_encoded = {sig_enc}");
+
+        let url = format!("wss://{HOST}{path}?{canonical_query}&signature={sig_enc}");
+        log::info!(target: WS_LOG_TARGET, "[ws-debug] final_url = {url}");
 
         log::info!(
             target: WS_LOG_TARGET,
@@ -194,9 +222,24 @@ impl TencentSpeakerSession {
             .as_str()
             .into_client_request()
             .map_err(|e| MeetingProviderError::BadConfig(e.to_string()))?;
+        log::info!(
+            target: WS_LOG_TARGET,
+            "[ws-debug] http_upgrade_request method={} uri={} headers={:?}",
+            request.method(),
+            request.uri(),
+            request.headers(),
+        );
 
-        let (mut ws, _resp) = tungstenite::connect(request)
-            .map_err(|e| MeetingProviderError::Network(e.to_string()))?;
+        let (mut ws, resp) = tungstenite::connect(request).map_err(|e| {
+            log::warn!(target: WS_LOG_TARGET, "[ws-debug] tungstenite::connect failed: {e}");
+            MeetingProviderError::Network(e.to_string())
+        })?;
+        log::info!(
+            target: WS_LOG_TARGET,
+            "[ws-debug] http_upgrade_response status={} headers={:?}",
+            resp.status(),
+            resp.headers(),
+        );
 
         match ws.get_mut() {
             MaybeTlsStream::Plain(s) => s
@@ -272,7 +315,7 @@ fn run_worker(
         loop {
             match outbox_rx.try_recv() {
                 Ok(Outbound::Binary(bytes)) => {
-                    log::debug!(
+                    log::trace!(
                         target: WS_LOG_TARGET,
                         "[ws-out] tencent_speaker audio binary {}B",
                         bytes.len(),
@@ -324,20 +367,24 @@ fn run_worker(
 
         match ws.read() {
             Ok(Message::Text(s)) => {
-                log::debug!(target: WS_LOG_TARGET, "[ws-in] tencent_speaker text: {s}");
+                // 入站文本一律 INFO 打印，不预先解析——故障期可以在日志里直接读
+                // 服务端原文（这次 4001 就是靠它发现 engine 字段被腾讯拒）。
+                log::info!(target: WS_LOG_TARGET, "[ws-in] tencent_speaker text raw: {s}");
                 match parse_frame(&s) {
-                    Ok(ev) => {
-                        let terminal = matches!(
-                            ev,
-                            MeetingEvent::Error { .. } | MeetingEvent::EndOfStream
-                        );
-                        if inbox_tx.send(SessionRaw::Event(ev)).is_err() {
-                            return;
-                        }
-                        if terminal {
-                            let _ = ws.close(None);
-                            let _ = ws.flush();
-                            return;
+                    Ok(events) => {
+                        for ev in events {
+                            let terminal = matches!(
+                                ev,
+                                MeetingEvent::Error { .. } | MeetingEvent::EndOfStream
+                            );
+                            if inbox_tx.send(SessionRaw::Event(ev)).is_err() {
+                                return;
+                            }
+                            if terminal {
+                                let _ = ws.close(None);
+                                let _ = ws.flush();
+                                return;
+                            }
                         }
                     }
                     Err(e) => {
@@ -347,14 +394,24 @@ fn run_worker(
                 }
             }
             Ok(Message::Binary(b)) => {
-                log::debug!(
+                log::info!(
                     target: WS_LOG_TARGET,
-                    "[ws-in] tencent_speaker binary {}B",
+                    "[ws-in] tencent_speaker binary {}B (first 32B hex: {:02x?})",
                     b.len(),
+                    &b[..b.len().min(32)],
                 );
             }
-            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
-            Ok(Message::Close(_)) | Ok(Message::Frame(_)) => return,
+            Ok(Message::Ping(p)) => {
+                log::info!(target: WS_LOG_TARGET, "[ws-in] tencent_speaker ping {}B", p.len());
+            }
+            Ok(Message::Pong(p)) => {
+                log::info!(target: WS_LOG_TARGET, "[ws-in] tencent_speaker pong {}B", p.len());
+            }
+            Ok(Message::Close(frame)) => {
+                log::info!(target: WS_LOG_TARGET, "[ws-in] tencent_speaker close frame: {frame:?}");
+                return;
+            }
+            Ok(Message::Frame(_)) => return,
             Err(e) if is_would_block(&e) => {
                 thread::sleep(READ_POLL_INTERVAL);
             }
@@ -402,6 +459,12 @@ fn default_speaker_id() -> i32 {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+struct SpeakerSentences {
+    #[serde(default)]
+    pub sentence_list: Vec<SpeakerSentence>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 struct SpeakerFrame {
     pub code: i32,
     #[serde(default)]
@@ -411,51 +474,65 @@ struct SpeakerFrame {
     #[serde(default)]
     pub message_id: String,
     #[serde(default)]
-    pub sentences: Option<SpeakerSentence>,
+    pub sentences: Option<SpeakerSentences>,
     #[serde(default, rename = "final")]
     pub final_flag: Option<i32>,
 }
 
-/// 把一帧服务端 JSON 解析成 MeetingEvent。
-pub fn parse_frame(raw: &str) -> Result<MeetingEvent, String> {
+/// 把一帧服务端 JSON 解析成一组 MeetingEvent。
+///
+/// 腾讯 16k_zh_en_speaker 协议 `sentences` 字段是 `{"sentence_list": [{...}, ...]}`
+/// 包了一层数组——典型情况下数组只有 1 条，但偶尔会一帧推多句，必须按数组迭代。
+/// 上一版误把 `sentences` 当成单个 sentence 对象，serde 用 default 静默吞掉真实
+/// 内容，前端永远只看到空文本。
+pub fn parse_frame(raw: &str) -> Result<Vec<MeetingEvent>, String> {
     let frame: SpeakerFrame = serde_json::from_str(raw).map_err(|e| e.to_string())?;
     if frame.code != 0 {
-        return Ok(MeetingEvent::Error {
-            code: classify_code(frame.code),
+        return Ok(vec![MeetingEvent::Error {
+            code: classify_code(frame.code, &frame.message),
             message: frame.message,
-        });
+        }]);
     }
     if frame.final_flag == Some(1) {
-        return Ok(MeetingEvent::EndOfStream);
+        return Ok(vec![MeetingEvent::EndOfStream]);
     }
     match frame.sentences {
-        Some(s) => {
-            let segment = MeetingSegment {
-                sentence_id: s.sentence_id,
-                speaker_id: s.speaker_id,
-                text: s.sentence,
-                start_ms: s.start_time,
-                end_ms: s.end_time,
-            };
-            if s.sentence_type == 1 {
-                Ok(MeetingEvent::SegmentFinal(segment))
-            } else {
-                Ok(MeetingEvent::SegmentPartial(segment))
-            }
-        }
-        None => Ok(MeetingEvent::Ready {
+        Some(s) if !s.sentence_list.is_empty() => Ok(s
+            .sentence_list
+            .into_iter()
+            .map(|x| {
+                let segment = MeetingSegment {
+                    sentence_id: x.sentence_id,
+                    speaker_id: x.speaker_id,
+                    text: x.sentence,
+                    start_ms: x.start_time,
+                    end_ms: x.end_time,
+                };
+                if x.sentence_type == 1 {
+                    MeetingEvent::SegmentFinal(segment)
+                } else {
+                    MeetingEvent::SegmentPartial(segment)
+                }
+            })
+            .collect()),
+        _ => Ok(vec![MeetingEvent::Ready {
             session_id: if frame.voice_id.is_empty() {
                 None
             } else {
                 Some(frame.voice_id)
             },
-        }),
+        }]),
     }
 }
 
 /// 把腾讯错误码归一到稳定字符串，前端按串路由文案。
-fn classify_code(code: i32) -> String {
+/// 4001 message 含 `engine_model_type` → engine_not_authorized：
+///   现在 engine 已固定 `16k_zh_en` 走通，理论上只在用户的 AppID 完全没买"实时
+///   语音识别大模型" SKU 时才命中（否则普通 16k_zh_en 也会被拒）。前端文案据此
+///   引导用户去资源包页购买 SKU。
+fn classify_code(code: i32, message: &str) -> String {
     match code {
+        4001 if message.contains("engine_model_type") => "engine_not_authorized".into(),
         4002 | 4003 => "unauthenticated_byok".into(),
         4004 | 4005 => "insufficient_funds".into(),
         4008 => "idle_timeout".into(),

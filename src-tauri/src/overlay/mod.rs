@@ -6,13 +6,16 @@
 // 加载路径 /overlay；前端按 window label 分流渲染 OverlayPage。
 
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, Runtime, WebviewUrl,
-    WebviewWindowBuilder,
+    AppHandle, LogicalPosition, Manager, Monitor, Runtime, WebviewUrl, WebviewWindowBuilder,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
 const WIDTH: f64 = 200.0;
-const HEIGHT: f64 = 36.0;
+// 窗口固定为"最大可能高度"——pill 36 + toast 42 + gap 4 + debug strip 28 + gap 4
+// 还留 16 px 缓冲。固定窗口尺寸可以避免 toast 出现 / debug 切换那一瞬调
+// NSWindow setContentSize 引起的整窗同步重绘（pill 看起来"闪一下刷新"）。
+// pill 在 webview 内 flex justify-end 贴底，视觉位置与 36 高度时一致。
+const HEIGHT: f64 = 130.0;
 // macOS 的 visibleFrame 在 Dock 上方多让出一段缓冲（约 10–20px），负值吃掉这段
 // 让胶囊真正贴近 Dock 顶边；Windows / Linux 的 work_area 已经精确排除任务栏，
 // 再压负值会盖在任务栏之上，所以保留几像素留白即可。
@@ -140,14 +143,6 @@ fn enable_accepts_first_mouse<R: Runtime>(window: &tauri::WebviewWindow<R>) {
 }
 
 fn position_to_bottom_center<R: Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
-    position_to_bottom_center_with_height(window, HEIGHT)
-}
-
-// 让 height 参数控制纵向扩展（错误条 ~96），上沿向上长，胶囊本体位置不动。
-fn position_to_bottom_center_with_height<R: Runtime>(
-    window: &tauri::WebviewWindow<R>,
-    height: f64,
-) -> tauri::Result<()> {
     let app = window.app_handle();
     let Some(monitor) = active_monitor(app)? else {
         return Ok(());
@@ -159,7 +154,7 @@ fn position_to_bottom_center_with_height<R: Runtime>(
     let origin_x = work_area.position.x as f64 / scale;
     let origin_y = work_area.position.y as f64 / scale;
     let x = origin_x + (logical_w - WIDTH) / 2.0;
-    let y = origin_y + logical_h - height - BOTTOM_MARGIN;
+    let y = origin_y + logical_h - HEIGHT - BOTTOM_MARGIN;
     log::warn!(
         "[overlay] target monitor name={:?} work_area_origin=({},{}) work_area_size=({}x{}) scale={} → logical_pos=({:.1},{:.1})",
         monitor.name(),
@@ -206,9 +201,8 @@ fn active_monitor<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Option<Monito
 pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     ensure_overlay(app)?;
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
-        // hide 路径已做尺寸复位，这里是兜底——首次创建后 ensure_overlay 直接出来时
-        // 也能保证 200×36 一致状态。
-        w.set_size(LogicalSize::new(WIDTH, HEIGHT))?;
+        // 窗口尺寸固定（HEIGHT），show 只重定位（cursor 跨屏 / 工作区切换后底部锚点
+        // 可能变化），不再 set_size——避免 NSWindow setContentSize 引起的整窗重绘。
         position_to_bottom_center(&w)?;
         w.show()?;
         log::warn!("[overlay] show");
@@ -216,12 +210,11 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-// hide 单 command：同一函数内串行完成"先移屏外 → 复位尺寸 → hide"，
-// 避免多条 IPC 顺序错乱导致下次 show 卡尺寸或残留矩形。
+// hide 单 command：先移屏外再 hide，避免 hide 完成前的最后一帧露馅。
+// 不再 set_size——窗口尺寸固定。
 pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         let _ = w.set_position(LogicalPosition::new(OFFSCREEN_POSITION, OFFSCREEN_POSITION));
-        let _ = w.set_size(LogicalSize::new(WIDTH, HEIGHT));
         w.hide()?;
         log::warn!("[overlay] hide");
     }
@@ -238,16 +231,10 @@ pub fn overlay_hide<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     hide(&app).map_err(|e| e.to_string())
 }
 
-// 错误条出现/消失时由前端调一次：传入新的窗口高度（默认 36；展开时 ~96）。
-// 重新设置 inner_size 后立即重新定位，使底部胶囊保持原位，错误条向上扩展。
+// 历史接口：曾经按 toast / debug strip 是否出现动态调窗口高度。改用固定窗口
+// 尺寸 + 内部 motion 动画后，本命令是 noop——保留只为兼容前端 invoke，下一版
+// 把前端调用点也清掉后可以彻底删除。
 #[tauri::command]
-pub fn overlay_set_height<R: Runtime>(app: AppHandle<R>, height: f64) -> Result<(), String> {
-    let Some(w) = app.get_webview_window(OVERLAY_LABEL) else {
-        return Ok(());
-    };
-    let h = height.clamp(HEIGHT, 240.0);
-    w.set_size(LogicalSize::new(WIDTH, h))
-        .map_err(|e| e.to_string())?;
-    position_to_bottom_center_with_height(&w, h).map_err(|e| e.to_string())?;
+pub fn overlay_set_height<R: Runtime>(_app: AppHandle<R>, _height: f64) -> Result<(), String> {
     Ok(())
 }

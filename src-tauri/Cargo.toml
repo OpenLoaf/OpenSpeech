@@ -63,6 +63,7 @@ async-trait = "0.1"
 # 与 openloaf-saas 0.3.16 内部完全对齐（同步 tungstenite + rustls + webpki-roots），
 # 复用同一份 crate，不引入额外 WS 栈。BYOK 腾讯实时 ASR 走这条路径。
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+rodio = { version = "0.22.2", default-features = false, features = ["wav", "playback"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
@@ -84,6 +85,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # 解成 PCM16 LE 喂上游。不进 release（cpal 直接给裸 PCM）。
 ogg = "0.9"
 opus = "0.3"
+# 让 examples（test_meeting_speaker_realtime 等）能把 lib 里 log::info!/debug!
+# 输出到 stderr，方便诊断 ws 握手 / 入站帧。release 走 tauri_plugin_log，不走它。
+env_logger = "0.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"

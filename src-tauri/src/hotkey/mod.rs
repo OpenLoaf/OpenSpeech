@@ -294,6 +294,10 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
         if let Err(e) = crate::overlay::show(app) {
             log::warn!("[overlay] show failed: {e:?}");
         }
+        // 与 overlay::show 同帧触发 start cue。cue 模块自己判 ENABLED + ACTIVE，
+        // 录音中再按一次（toggle off）不会重复播 start。stop / cancel 由前端
+        // 在 state 过渡时通过 cue_play 命令补播。
+        crate::cue::play_start();
     }
 
     let payload = HotkeyEventPayload { id, phase };

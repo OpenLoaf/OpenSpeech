@@ -12,7 +12,7 @@
 | type | 类型：`dictation`（听写） / `ask`（问 AI） / `translate`（翻译） |
 | text | 转写/生成的最终文字 |
 | status | `success` / `failed` / `cancelled` |
-| error | 失败原因（仅 failed 时有值） |
+| error | 失败 / 异常原因（人话，已 i18n）。`failed` 时**必有**值；`success` 时也可能有值——AI 整理 / 翻译 phase2 等"主流程已成功但有副作用错误"会写一条备注，UI 用黄色 NOTE 标出。`cancelled` 始终为 NULL。 |
 | duration_ms | 录音时长 |
 | created_at | Unix 时间戳（毫秒） |
 | target_app | 注入目标应用的可识别名称（如 "VSCode"、"Chrome"）；若无法获取则为空 |

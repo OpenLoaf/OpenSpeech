@@ -23,6 +23,7 @@ use tauri::ActivationPolicy;
 mod ai_refine;
 pub mod asr;
 mod audio;
+mod cue;
 mod db;
 mod hotkey;
 mod http;
@@ -32,7 +33,7 @@ mod meetings;
 mod openloaf;
 mod overlay;
 mod permissions;
-mod secrets;
+pub mod secrets;
 mod stt;
 mod transcribe;
 mod update_channel;
@@ -219,6 +220,113 @@ fn resolved_log_dir() -> std::path::PathBuf {
     let dir = base.join(IDENTIFIER).join("logs");
     std::fs::create_dir_all(&dir).ok();
     dir
+}
+
+// dev 日志文件名（debug 构建用，覆盖式写入）。
+// 不依赖 tauri.dev.conf.json 的 productName——`pnpm tauri dev` 走默认 conf
+// 时 productName 仍是 "OpenSpeech"，会和正式版日志混写。
+const DEV_LOG_FILE_NAME: &str = "OpenSpeech_dev";
+
+// debug 构建启动时把上一轮 dev 日志删掉，实现"每次启动覆盖"。
+// 必须在 tauri_plugin_log 注册之前调用——plugin 注册即打开文件句柄，
+// 之后再 remove，macOS 下 fd 仍可写入幽灵 inode。
+fn truncate_dev_log_on_start() {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let path = resolved_log_dir().join(format!("{DEV_LOG_FILE_NAME}.log"));
+    if path.exists() {
+        if let Err(e) = std::fs::remove_file(&path) {
+            eprintln!("[log] truncate dev log failed: {e:?}");
+        }
+    }
+}
+
+// RotationStrategy::KeepAll 不会自删历史，配合 max_file_size=10MB 长期会无限堆。
+// 启动时清掉 mtime 超过 7 天的滚动归档（OpenSpeech_<timestamp>.log）；
+// 当前正在写的 OpenSpeech.log 文件名不带下划线时间戳，不会被命中。
+fn purge_old_log_files() {
+    use std::time::{Duration, SystemTime};
+    const RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+    let dir = resolved_log_dir();
+    let Some(cutoff) = SystemTime::now().checked_sub(RETENTION) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // 仅滚动归档：OpenSpeech_<YYYY-MM-DD_HH-MM-SS>.log，剥前缀后首字符是数字。
+        // 排除 OpenSpeech_dev.log 这类自定义名字。
+        let Some(rest) = name
+            .strip_prefix("OpenSpeech_")
+            .and_then(|r| r.strip_suffix(".log"))
+        else {
+            continue;
+        };
+        if !rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        if modified < cutoff {
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("[log] purge {name} failed: {e:?}");
+            } else {
+                log::info!("[log] purged old log {name}");
+            }
+        }
+    }
+}
+
+// Bug 反馈附带日志：读当前正在写的日志文件尾部，避免反馈 payload 爆掉。
+// 200KB 上限够覆盖近一两小时活动，又不会让公开 feedback 端点超时。
+const FEEDBACK_LOG_TAIL_BYTES: u64 = 200 * 1024;
+
+#[tauri::command]
+fn read_recent_log_tail() -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let dir = resolved_log_dir();
+    // debug 构建写到 OpenSpeech_dev.log；正式包写到 OpenSpeech.log。
+    let file_name = if cfg!(debug_assertions) {
+        format!("{DEV_LOG_FILE_NAME}.log")
+    } else {
+        "OpenSpeech.log".to_string()
+    };
+    let path = dir.join(&file_name);
+
+    let mut file = std::fs::File::open(&path)
+        .map_err(|e| format!("open log file failed ({}): {e}", path.display()))?;
+    let len = file
+        .metadata()
+        .map_err(|e| format!("stat log failed: {e}"))?
+        .len();
+
+    let start = len.saturating_sub(FEEDBACK_LOG_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| format!("seek log failed: {e}"))?;
+
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    file.read_to_end(&mut buf)
+        .map_err(|e| format!("read log failed: {e}"))?;
+
+    // 从中间字节切下来的可能不是合法 UTF-8 起点，丢掉第一行残片。
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let trimmed = if start > 0 {
+        match text.find('\n') {
+            Some(idx) => text[idx + 1..].to_string(),
+            None => text,
+        }
+    } else {
+        text
+    };
+    Ok(trimmed)
 }
 
 #[tauri::command]
@@ -511,6 +619,8 @@ fn disable_macos_fullscreen(window: &tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    truncate_dev_log_on_start();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -552,7 +662,13 @@ pub fn run() {
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Folder {
                         path: resolved_log_dir(),
-                        file_name: None,
+                        // debug 构建固定 "OpenSpeech Dev" 文件名，避免 `pnpm tauri dev`
+                        // 走默认 conf 时和正式版日志（OpenSpeech.log）混写。
+                        file_name: if cfg!(debug_assertions) {
+                            Some(DEV_LOG_FILE_NAME.to_string())
+                        } else {
+                            None
+                        },
                     },
                 ))
                 .max_file_size(10_000_000)
@@ -597,6 +713,9 @@ pub fn run() {
         .manage(hotkey::SharedHotkeyState::default())
         .manage::<openloaf::SharedOpenLoaf>(std::sync::Arc::new(openloaf::OpenLoafState::new()))
         .setup(|app| {
+            // ---- 清理超过保留期的滚动日志 ------------------------------------
+            purge_old_log_files();
+
             // ---- 主窗口尺寸自适应屏幕 ----------------------------------------
             // 初始尺寸（tauri.conf.json）是上限值；小屏 / 高 DPI 时按主显示器
             // work area 缩小，留出任务栏和边距。只影响首次启动，用户手动调大小后
@@ -637,6 +756,11 @@ pub fn run() {
             if let Err(e) = overlay::ensure_overlay(&app.handle()) {
                 log::warn!("[overlay] ensure failed: {e:?}");
             }
+
+            // ---- 预热听写提示音子系统 -----------------------------------------
+            // spawn cue 线程并打开 cpal 默认输出 stream。冷启动 cpal 设备
+            // ~50ms，预热后首次按激活键 mixer.add 就是同步入队，零延迟。
+            cue::warm_up();
 
             // ---- modifier-only state 注册（rdev::listen 暂不启动）----
             // 负责 Fn / Ctrl+Win / Right Alt 等"按住即触发"绑定——
@@ -830,6 +954,7 @@ pub fn run() {
             sync_dock_icon,
             open_network_settings,
             open_log_dir,
+            read_recent_log_tail,
             open_recordings_dir,
             hotkey::apply_hotkey_config,
             hotkey::set_hotkey_recording,
@@ -862,6 +987,9 @@ pub fn run() {
             audio::audio_recording_load,
             audio::audio_recording_export,
             audio::audio_recording_delete,
+            cue::cue_set_enabled,
+            cue::cue_set_active,
+            cue::cue_play,
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,

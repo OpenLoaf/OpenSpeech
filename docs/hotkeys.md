@@ -37,11 +37,14 @@
 | 行为 | 规则 |
 |---|---|
 | 第一次按下 | 进入 Recording（前 300 ms 仅显示"准备中"悬浮态） |
-| 第二次按下 | 结束录音，进入 Transcribing |
+| 第二次按下（**同 id**） | 结束录音，进入 Transcribing |
+| 录音中按"另一种"激活键（**dictate_ptt ↔ translate**） | 仅 UTTERANCE 模式：切 `activeId` 不结束录音；REALTIME 模式：忽略 |
 | 录音持续超过 SaaS realtime 会话 2 小时硬上限 | 服务端发 `closed{reason:"max_duration"}`，视为录音异常结束，history 标 failed |
 | 第一次按下 < 300 ms 内立即再按一次 | 视为误触，悬浮条淡出，不调用大模型，不计入历史 |
 | 录音期间 `Esc` | 立即取消录音，见下"Esc 处理" |
 | 快捷键被其他应用占用 | 字段右侧显示冲突提示；仍尝试注册（见"冲突检测"）|
+
+> 跨模式切换（dictate_ptt ↔ translate）的状态机细节、UI 反馈、REALTIME 不支持的原因见 [voice-input-flow.md §录音中切换模式](./voice-input-flow.md#录音中切换模式听写--翻译)。
 
 ## Esc 处理（状态化）
 
