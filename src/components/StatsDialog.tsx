@@ -3,6 +3,17 @@ import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import { BarChart3, Hourglass, Sparkles } from "lucide-react";
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -416,25 +427,51 @@ function Section({
 }
 
 // ────────────────────────────────────────────────────────────────
-// Charts — pure SVG
+// Charts — recharts (BarChart / LineChart) with TE-themed tooltip
 // ────────────────────────────────────────────────────────────────
 
-function ChartFrame({
-  children,
+type DailyField = "duration" | "words" | "saved" | "sessions" | "wpm";
+
+function tooltipDisplay(value: number, field: DailyField): { value: string; unit: string } {
+  if (field === "duration" || field === "saved") {
+    return { value: formatHoursLong(value), unit: "" };
+  }
+  if (field === "wpm") {
+    return { value: String(Math.round(value)), unit: "wpm" };
+  }
+  if (field === "sessions") {
+    return { value: formatNumber(value), unit: "" };
+  }
+  return { value: formatNumber(value), unit: "" };
+}
+
+interface RechartsTooltipPayloadEntry {
+  value?: number | string;
+  payload?: { value?: number | string };
+}
+
+function ChartTooltip({
+  active,
+  payload,
+  label,
+  field,
 }: {
-  children: (w: number, h: number) => React.ReactNode;
+  active?: boolean;
+  payload?: RechartsTooltipPayloadEntry[];
+  label?: string | number;
+  field: DailyField;
 }) {
-  const W = 800;
-  const H = 180;
+  if (!active || !payload || payload.length === 0) return null;
+  const raw = payload[0]?.value ?? payload[0]?.payload?.value ?? 0;
+  const v = typeof raw === "number" ? raw : Number(raw) || 0;
+  const { value: display, unit } = tooltipDisplay(v, field);
   return (
-    <div className="w-full">
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="block h-44 w-full"
-      >
-        {children(W, H)}
-      </svg>
+    <div className="border border-te-gray bg-te-bg px-3 py-2 font-mono text-[10px] uppercase tracking-widest shadow-lg">
+      <div className="text-te-light-gray">{String(label ?? "")}</div>
+      <div className="mt-0.5 flex items-baseline gap-1 text-te-fg">
+        <span className="font-bold tabular-nums">{display}</span>
+        {unit ? <span className="text-te-light-gray">{unit}</span> : null}
+      </div>
     </div>
   );
 }
@@ -446,119 +483,115 @@ function DailyBars({
   stats: StatsBundle;
   field: "duration" | "words" | "saved" | "sessions";
 }) {
-  const data = stats.daily;
-  const series = data.map((d) => {
-    if (field === "duration") return d.durationMs;
-    if (field === "words") return d.words;
-    if (field === "sessions") return d.sessions;
-    const typingNeed = (d.words / TYPING_BASELINE_WPM) * 60_000;
-    return Math.max(0, typingNeed - d.durationMs);
-  });
-  const maxV = Math.max(1, ...series);
+  const data = stats.daily.map((d) => ({
+    bucket: d.bucket,
+    value:
+      field === "duration"
+        ? d.durationMs
+        : field === "words"
+          ? d.words
+          : field === "sessions"
+            ? d.sessions
+            : Math.max(
+                0,
+                (d.words / TYPING_BASELINE_WPM) * 60_000 - d.durationMs,
+              ),
+  }));
   return (
-    <ChartFrame>
-      {(w, h) => {
-        const innerH = h - 14;
-        const gap = data.length > 60 ? 1 : 2;
-        const bw = Math.max(1, (w - gap * (data.length - 1)) / data.length);
-        return (
-          <>
-            {[0.25, 0.5, 0.75].map((p) => (
-              <line
-                key={p}
-                x1={0}
-                y1={innerH * (1 - p)}
-                x2={w}
-                y2={innerH * (1 - p)}
-                stroke="var(--te-gray)"
-                strokeWidth={0.5}
-                strokeDasharray="2 3"
-                opacity={0.3}
+    <div className="h-44 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={data}
+          margin={{ top: 4, right: 4, bottom: 4, left: 4 }}
+        >
+          <CartesianGrid
+            stroke="var(--te-gray)"
+            strokeOpacity={0.4}
+            strokeDasharray="2 3"
+            vertical={false}
+          />
+          <XAxis dataKey="bucket" hide />
+          <YAxis hide domain={[0, "dataMax"]} />
+          <Tooltip
+            cursor={{ fill: "var(--te-accent)", fillOpacity: 0.12 }}
+            content={(props) => (
+              <ChartTooltip
+                active={props.active}
+                payload={
+                  props.payload as unknown as RechartsTooltipPayloadEntry[]
+                }
+                label={props.label as string | number | undefined}
+                field={field}
               />
-            ))}
-            {series.map((v, i) => {
-              const bh = (v / maxV) * innerH;
-              const x = i * (bw + gap);
-              const y = innerH - bh;
-              return (
-                <rect
-                  key={i}
-                  x={x}
-                  y={y}
-                  width={bw}
-                  height={Math.max(0.5, bh)}
-                  fill="var(--te-accent)"
-                  opacity={0.85}
-                />
-              );
-            })}
-            <line
-              x1={0}
-              y1={innerH + 0.5}
-              x2={w}
-              y2={innerH + 0.5}
-              stroke="var(--te-gray)"
-              strokeWidth={1}
-            />
-          </>
-        );
-      }}
-    </ChartFrame>
+            )}
+            wrapperStyle={{ outline: "none" }}
+          />
+          <Bar
+            dataKey="value"
+            fill="var(--te-accent)"
+            isAnimationActive={false}
+          />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
 function WpmLine({ stats }: { stats: StatsBundle }) {
-  const data = stats.daily;
-  const wpms = data.map((d) =>
-    d.durationMs > 0 ? d.words / (d.durationMs / 60_000) : 0,
-  );
-  const maxV = Math.max(120, ...wpms);
+  const data = stats.daily.map((d) => ({
+    bucket: d.bucket,
+    value:
+      d.durationMs > 0 ? Math.round(d.words / (d.durationMs / 60_000)) : 0,
+  }));
   return (
-    <ChartFrame>
-      {(w, h) => {
-        const innerH = h - 14;
-        const stepX = data.length > 1 ? w / (data.length - 1) : w;
-        const points = wpms.map((v, i) => {
-          const x = i * stepX;
-          const y = innerH - (v / maxV) * innerH;
-          return [x, y] as [number, number];
-        });
-        const path = points
-          .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`)
-          .join(" ");
-        return (
-          <>
-            {[0.25, 0.5, 0.75].map((p) => (
-              <line
-                key={p}
-                x1={0}
-                y1={innerH * p}
-                x2={w}
-                y2={innerH * p}
-                stroke="var(--te-gray)"
-                strokeWidth={0.5}
-                strokeDasharray="2 3"
-                opacity={0.4}
+    <div className="h-44 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart
+          data={data}
+          margin={{ top: 8, right: 4, bottom: 4, left: 4 }}
+        >
+          <CartesianGrid
+            stroke="var(--te-gray)"
+            strokeOpacity={0.4}
+            strokeDasharray="2 3"
+            vertical={false}
+          />
+          <XAxis dataKey="bucket" hide />
+          <YAxis hide domain={[0, "dataMax"]} />
+          <Tooltip
+            cursor={{
+              stroke: "var(--te-accent)",
+              strokeOpacity: 0.5,
+              strokeDasharray: "2 2",
+            }}
+            content={(props) => (
+              <ChartTooltip
+                active={props.active}
+                payload={
+                  props.payload as unknown as RechartsTooltipPayloadEntry[]
+                }
+                label={props.label as string | number | undefined}
+                field="wpm"
               />
-            ))}
-            <path d={path} fill="none" stroke="var(--te-accent)" strokeWidth={1.5} />
-            {points.length <= 60
-              ? points.map(([x, y], i) => (
-                  <circle key={i} cx={x} cy={y} r={1.5} fill="var(--te-accent)" />
-                ))
-              : null}
-            <line
-              x1={0}
-              y1={innerH + 0.5}
-              x2={w}
-              y2={innerH + 0.5}
-              stroke="var(--te-gray)"
-              strokeWidth={1}
-            />
-          </>
-        );
-      }}
-    </ChartFrame>
+            )}
+            wrapperStyle={{ outline: "none" }}
+          />
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke="var(--te-accent)"
+            strokeWidth={1.5}
+            dot={
+              data.length <= 60
+                ? { r: 1.5, fill: "var(--te-accent)", stroke: "none" }
+                : false
+            }
+            activeDot={{ r: 3, fill: "var(--te-accent)", stroke: "none" }}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -687,7 +720,9 @@ function FacetHeatmap({ heat }: { heat: HeatCell[] }) {
                                 v * 100,
                               )}%, var(--te-surface))`,
                       }}
-                      title={`${weekdays[w]} ${String(h).padStart(2, "0")}:00`}
+                      title={`${weekdays[w]} ${String(h).padStart(2, "0")}:00 · ${
+                        cell?.value ?? 0
+                      } sessions`}
                     />
                   );
                 })}
@@ -725,10 +760,12 @@ function FacetTopApps({
               ? formatNumber(a.words)
               : formatHoursLong(a.durationMs);
           const pct = (raw / max) * 100;
+          const tip = `${a.name} · ${formatHoursLong(a.durationMs)} · ${formatNumber(a.words)} 字 · ${a.sessions} sessions`;
           return (
             <div
               key={i}
               className="grid grid-cols-[6rem_1fr_4.5rem] items-center gap-2"
+              title={tip}
             >
               <span className="truncate font-mono text-[11px] text-te-fg">
                 {a.name}
