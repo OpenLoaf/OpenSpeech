@@ -25,6 +25,14 @@
 //   中文"。翻译模式英文段是重灾区。inject_type 入口检测到含 ASCII 可见字
 //   符就 ImmSetOpenStatus(FALSE) 临时关 IME，离开 scope 由 Drop 还原，纯
 //   中文段不动 IME（不闪图标）。
+//
+// 关于"纯中文段开头首字符被吞 / 双标点"：
+//   即使段里全是中文，IME 在多段连续 inject 之间可能还停留在 composition
+//   边缘态——上一段 commit 完候选窗未彻底关闭，下一段第一个 KEYEVENTF_UNICODE
+//   字符会被当作 composition 续写吃掉，紧跟的全角标点触发智能标点策略再补
+//   一个标点，屏幕上就是"首字消失 + 双逗号"。每个 segment 注入前发一次
+//   ImmNotifyIME(NI_COMPOSITIONSTR, CPS_CANCEL) 强制清空 composition 缓冲，
+//   IME 没在 composition 时是 no-op，开关状态 / 候选窗都不动，不闪图标。
 
 use enigo::{Direction, Enigo, InputError, Key, Keyboard, Settings};
 
@@ -37,7 +45,8 @@ const WIN_TYPE_CHUNK_SLEEP_MS: u64 = 8;
 mod win_ime {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::Input::Ime::{
-        HIMC, ImmGetContext, ImmGetOpenStatus, ImmReleaseContext, ImmSetOpenStatus,
+        CPS_CANCEL, HIMC, ImmGetContext, ImmGetOpenStatus, ImmNotifyIME, ImmReleaseContext,
+        ImmSetOpenStatus, NI_COMPOSITIONSTR,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -81,6 +90,21 @@ mod win_ime {
             }
         }
     }
+
+    pub fn cancel_composition() {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                return;
+            }
+            let himc = ImmGetContext(hwnd);
+            if himc.is_null() {
+                return;
+            }
+            ImmNotifyIME(himc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+            ImmReleaseContext(hwnd, himc);
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -104,6 +128,7 @@ fn log_excerpt(s: &str, n: usize) -> String {
 fn type_segment(enigo: &mut Enigo, segment: &str) -> Result<(), InputError> {
     #[cfg(target_os = "windows")]
     {
+        win_ime::cancel_composition();
         let chars: Vec<char> = segment.chars().collect();
         for chunk in chars.chunks(WIN_TYPE_CHUNK_CHARS) {
             let s: String = chunk.iter().collect();
