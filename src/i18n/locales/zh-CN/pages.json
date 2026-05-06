@@ -326,7 +326,8 @@
     "idle": {
       "hint": "点击开始记录",
       "recent": "最近会议",
-      "items": "项"
+      "items": "项",
+      "language_support": "// 当前仅支持 中文 / 英语 / 粤语 / 多种方言（川、陕、豫、沪、湘、鄂、皖）"
     },
     "live": {
       "recording": "录音中",

@@ -41,8 +41,11 @@ if [ ! -f dist/index.html ]; then
 fi
 
 # ─── 2. cargo build --profile profiling ─────────────────────
-ylw "→ cargo build --profile profiling (dev 风格 + opt-level=1 + frame pointer)"
-( cd src-tauri && cargo build --profile profiling )
+ylw "→ cargo build --profile profiling --features custom-protocol"
+# 通过本 crate 的 custom-protocol feature 把 tauri/custom-protocol 透传给 tauri：
+# 让 Tauri 走 production 分支 (cfg(dev)=false)，加载嵌入的 dist/ 而非连 localhost:1420。
+# 直接 --features tauri/custom-protocol 不行——cargo 不会让透传给 openspeech_lib 自己的 tauri 依赖。
+( cd src-tauri && cargo build --profile profiling --features custom-protocol )
 
 [ -x "$TARGET_BIN" ] || { red "✗ 编译产物不存在：$TARGET_BIN"; exit 1; }
 

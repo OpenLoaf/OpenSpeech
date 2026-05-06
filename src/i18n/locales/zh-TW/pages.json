@@ -326,7 +326,8 @@
     "idle": {
       "hint": "點擊開始記錄",
       "recent": "最近會議",
-      "items": "項"
+      "items": "項",
+      "language_support": "// 目前僅支援 中文 / 英語 / 粵語 / 多種方言（川、陝、豫、滬、湘、鄂、皖）"
     },
     "live": {
       "recording": "錄音中",

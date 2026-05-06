@@ -18,6 +18,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 default = []
 # dev 时让 OpenLoaf base/web URL 指向线上 openloaf.hexems.com，便于联调线上后端。
 staging = []
+# samply profiling 时启用：让 tauri 走 production 路径 (cfg(dev)=false)，
+# webview 加载嵌入的 dist/ 而非连 localhost:1420。pnpm tauri build 自动启用这个 feature，
+# scripts/profile-rust.sh 在 cargo build 时也要带上 --features custom-protocol。
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -75,6 +79,11 @@ rdev = { package = "openloaf-rdev", version = "0.5.1" }
 # 显式 install，否则 tungstenite 升级 TLS 时直接 panic。
 [dev-dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# OGG/Opus 解码——asr/meeting 单测 + examples 烟雾测试用，把现成的
+# .claude/skills/openspeech-prompt-eval/cases/*/audio.ogg（Ogg/Opus, 16k mono）
+# 解成 PCM16 LE 喂上游。不进 release（cpal 直接给裸 PCM）。
+ogg = "0.9"
+opus = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
@@ -89,13 +98,15 @@ objc = "0.2.7"
 tauri-plugin-macos-permissions = "2.3.0"
 
 [profile.profiling]
-# dev 风格 (no opt + 完整 debug + FP 默认存在)，但仍走 release-equivalent codepath
-# (debug_assertions=false → Tauri 嵌入 frontendDist 而非连 devUrl)
+# dev 风格 (默认保留 frame pointer，samply unwind 才稳)，但 opt-level=1 避免 timing 失真。
+# 注意：让 Tauri webview 加载嵌入的 dist/ 而非连 localhost:1420，
+# 关键是 cargo build 时加 --features tauri/custom-protocol（见 scripts/profile-rust.sh），
+# 与本 profile 的 debug-assertions 无关——Tauri 用 cfg(dev) 而非 cfg(debug_assertions)。
 inherits = "dev"
-opt-level = 1                  # 0 太慢以致音频/ASR 实际行为变形；1 是性能与 unwind 准确性的折中
+opt-level = 1
 debug = true
 strip = false
-debug-assertions = false       # 关键：让 Tauri 走"production"分支，嵌入 dist/ 而非连 localhost:1420
+debug-assertions = false
 overflow-checks = false
 incremental = false
-codegen-units = 16             # 编译快
+codegen-units = 16

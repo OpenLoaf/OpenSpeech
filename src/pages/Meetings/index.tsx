@@ -10,28 +10,13 @@ import {
   Search,
   Square,
   Trash2,
-  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-type View = "idle" | "live" | "paused" | "review";
-
-type Segment = {
-  id: string;
-  speakerId: string;
-  speakerName?: string;
-  startMs: number;
-  text: string;
-  isFinal: boolean;
-};
-
-type SessionRow = {
-  id: string;
-  title: string;
-  durationMs: number;
-  speakerCount: number;
-  startedAt: number;
-};
+import {
+  selectSortedSegments,
+  useMeetingsStore,
+  type MeetingSegment,
+} from "@/stores/meetings";
 
 const SPEAKER_COLORS = [
   "text-te-accent",
@@ -42,53 +27,9 @@ const SPEAKER_COLORS = [
   "text-amber-400",
 ];
 
-const MOCK_SESSIONS: SessionRow[] = [
-  {
-    id: "m_001",
-    title: "周会 · 05-04",
-    durationMs: 45 * 60_000 + 21_000,
-    speakerCount: 3,
-    startedAt: Date.now() - 2 * 86_400_000,
-  },
-  {
-    id: "m_002",
-    title: "客户访谈 · 05-02",
-    durationMs: 72 * 60_000 + 8_000,
-    speakerCount: 2,
-    startedAt: Date.now() - 4 * 86_400_000,
-  },
-  {
-    id: "m_003",
-    title: "技术评审 · 04-28",
-    durationMs: 31 * 60_000,
-    speakerCount: 4,
-    startedAt: Date.now() - 8 * 86_400_000,
-  },
-];
-
-const MOCK_SEGMENTS: Segment[] = [
-  {
-    id: "s1",
-    speakerId: "A",
-    startMs: 12_000,
-    text: "今天的议程主要有三个，第一个是上周遗留任务的复盘。",
-    isFinal: true,
-  },
-  {
-    id: "s2",
-    speakerId: "B",
-    startMs: 38_000,
-    text: "补充一下数据，上周的转化率比预期高了 12%。",
-    isFinal: true,
-  },
-  {
-    id: "s3",
-    speakerId: "A",
-    startMs: 56_000,
-    text: "嗯，那我们接下来重点看第二项",
-    isFinal: false,
-  },
-];
+// MVP：历史列表暂未接 SQLite（meeting 类型 history 行 + history_segments 已建表，
+// 但写入与读取走 DB layer 是下个 PR）。先空着，等接入后从 history.ts 拉。
+const RECENT_SESSIONS: never[] = [];
 
 function formatHMS(ms: number): string {
   const total = Math.floor(ms / 1000);
@@ -98,16 +39,21 @@ function formatHMS(ms: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function speakerColor(speakerId: string): string {
-  const idx = speakerId.charCodeAt(0) - 65;
-  return SPEAKER_COLORS[((idx % SPEAKER_COLORS.length) + SPEAKER_COLORS.length) % SPEAKER_COLORS.length];
+/** speakerId=-1（待识别）走灰；正整数按 mod 取色。 */
+function speakerColor(speakerId: number): string {
+  if (speakerId < 0) return "text-te-light-gray";
+  return SPEAKER_COLORS[speakerId % SPEAKER_COLORS.length];
+}
+
+function speakerLabel(speakerId: number): string {
+  if (speakerId < 0) return "?";
+  return String.fromCharCode(65 + (speakerId % 26));
 }
 
 /* ─────────────────────────────────────────────── */
 /*  Waveform                                        */
 /* ─────────────────────────────────────────────── */
 
-// 与 History wavesurfer 配置对齐：barWidth=2 / barGap=2 / barRadius=1 / 中心对称
 const BAR_WIDTH = 2;
 const BAR_GAP = 2;
 const BAR_STEP = BAR_WIDTH + BAR_GAP;
@@ -138,7 +84,6 @@ function MockWaveform({
     return () => ro.disconnect();
   }, []);
 
-  // preview：固定的"已录音 clip"形态，无动画（多 sin 叠加 + 两端轻微衰减）
   const previewAmps = useMemo(() => {
     if (variant !== "preview") return null;
     return Array.from({ length: barCount }, (_, i) => {
@@ -218,27 +163,27 @@ function MockWaveform({
 
 export default function MeetingsPage() {
   const { t } = useTranslation();
-  const [view, setView] = useState<View>("idle");
-  const [elapsedMs, setElapsedMs] = useState(0);
+  const view = useMeetingsStore((s) => s.view);
+  const elapsedMs = useMeetingsStore((s) => s.elapsedMs);
+  const error = useMeetingsStore((s) => s.error);
+  const initSubscriptions = useMeetingsStore((s) => s.initSubscriptions);
+  const startMeeting = useMeetingsStore((s) => s.start);
+  const pauseMeeting = useMeetingsStore((s) => s.pause);
+  const resumeMeeting = useMeetingsStore((s) => s.resume);
+  const stopMeeting = useMeetingsStore((s) => s.stop);
+  const back = useMeetingsStore((s) => s.back);
 
   useEffect(() => {
-    if (view !== "live") return;
-    const start = Date.now() - elapsedMs;
-    const id = window.setInterval(() => setElapsedMs(Date.now() - start), 250);
-    return () => window.clearInterval(id);
-  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+    let off: (() => void) | undefined;
+    initSubscriptions().then((u) => { off = u; });
+    return () => { off?.(); };
+  }, [initSubscriptions]);
 
   return (
     <section className="relative flex h-full flex-col bg-te-bg">
       {view !== "review" ? (
-        <div
-          data-tauri-drag-region
-          className="shrink-0 border-b border-te-gray/30 bg-te-bg"
-        >
-          <div
-            data-tauri-drag-region
-            className="mx-auto max-w-5xl px-[4vw] pt-3 pb-[clamp(1rem,2vw,2rem)]"
-          >
+        <div data-tauri-drag-region className="shrink-0 border-b border-te-gray/30 bg-te-bg">
+          <div data-tauri-drag-region className="mx-auto max-w-5xl px-[4vw] pt-3 pb-[clamp(1rem,2vw,2rem)]">
             <motion.div
               data-tauri-drag-region
               className="flex items-start justify-between gap-4"
@@ -256,16 +201,8 @@ export default function MeetingsPage() {
               </div>
 
               {view === "live" || view === "paused" ? (
-                <div
-                  data-tauri-drag-region="false"
-                  className="flex shrink-0 items-center gap-3"
-                >
-                  <span
-                    className={cn(
-                      "size-2.5 rounded-full",
-                      view === "paused" ? "bg-te-light-gray" : "animate-pulse bg-[#ff4d4d]",
-                    )}
-                  />
+                <div data-tauri-drag-region="false" className="flex shrink-0 items-center gap-3">
+                  <span className={cn("size-2.5 rounded-full", view === "paused" ? "bg-te-light-gray" : "animate-pulse bg-[#ff4d4d]")} />
                   <span className="font-mono text-2xl font-bold tabular-nums text-te-fg">
                     {formatHMS(elapsedMs)}
                   </span>
@@ -276,32 +213,19 @@ export default function MeetingsPage() {
         </div>
       ) : null}
 
+      {error ? (
+        <div className="border-b border-[#ff4d4d]/40 bg-[#ff4d4d]/10 px-[4vw] py-2 font-mono text-[11px] text-[#ff4d4d]">
+          [{error.code}] {error.message}
+        </div>
+      ) : null}
+
       <div className="min-h-0 flex-1 overflow-hidden">
-        {view === "idle" ? (
-          <IdleView
-            onStart={() => {
-              setElapsedMs(0);
-              setView("live");
-            }}
-            onOpenSession={() => setView("review")}
-          />
-        ) : null}
-
+        {view === "idle" ? <IdleView onStart={startMeeting} /> : null}
         {view === "live" || view === "paused" ? (
-          <LiveView
-            paused={view === "paused"}
-            onPauseToggle={() => setView(view === "paused" ? "live" : "paused")}
-            onStop={() => {
-              setView("idle");
-              setElapsedMs(0);
-            }}
-          />
+          <LiveView paused={view === "paused"} onPauseToggle={view === "paused" ? resumeMeeting : pauseMeeting} onStop={stopMeeting} />
         ) : null}
-
-        {view === "review" ? <ReviewView onBack={() => setView("idle")} /> : null}
+        {view === "review" ? <ReviewView onBack={back} /> : null}
       </div>
-
-      <DevStateSwitcher view={view} setView={setView} />
     </section>
   );
 }
@@ -310,13 +234,7 @@ export default function MeetingsPage() {
 /*  Idle view                                       */
 /* ─────────────────────────────────────────────── */
 
-function IdleView({
-  onStart,
-  onOpenSession,
-}: {
-  onStart: () => void;
-  onOpenSession: (id: string) => void;
-}) {
+function IdleView({ onStart }: { onStart: () => void }) {
   const { t } = useTranslation();
   return (
     <div className="flex h-full flex-col">
@@ -355,6 +273,10 @@ function IdleView({
           <div className="w-full">
             <MockWaveform active={false} variant="preview" height={48} />
           </div>
+
+          <div className="mt-1 max-w-md text-center font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/70">
+            {t("pages:meetings.idle.language_support")}
+          </div>
         </motion.div>
       </div>
 
@@ -365,41 +287,12 @@ function IdleView({
               {t("pages:meetings.idle.recent")}
             </span>
             <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/60">
-              {MOCK_SESSIONS.length} {t("pages:meetings.idle.items")}
+              {RECENT_SESSIONS.length} {t("pages:meetings.idle.items")}
             </span>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <ul className="mx-auto max-w-5xl divide-y divide-te-gray/40 px-[4vw]">
-            {MOCK_SESSIONS.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  onClick={() => onOpenSession(s.id)}
-                  className="flex w-full items-center gap-4 py-4 text-left transition hover:bg-te-surface-hover"
-                >
-                  <div className="flex size-10 shrink-0 items-center justify-center border border-te-gray/40 bg-te-surface">
-                    <Mic className="size-4 text-te-light-gray" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-sm text-te-fg">{s.title}</div>
-                    <div className="mt-1 flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-                      <span className="tabular-nums">{formatHMS(s.durationMs)}</span>
-                      <span className="inline-flex items-center gap-1">
-                        <Users className="size-3" />
-                        {s.speakerCount}
-                      </span>
-                    </div>
-                  </div>
-                  <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/60">
-                    {new Date(s.startedAt).toLocaleDateString()}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto" />
       </div>
     </div>
   );
@@ -419,6 +312,17 @@ function LiveView({
   onStop: () => void;
 }) {
   const { t } = useTranslation();
+  const segments = useMeetingsStore(selectSortedSegments);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  // 新片段进来时滚到底（用户主动上滑可中断）
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [segments.length]);
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-te-gray/40 bg-te-surface">
@@ -450,12 +354,12 @@ function LiveView({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-5xl flex-col gap-6 px-[4vw] py-[clamp(1rem,2vw,2rem)]">
-          {MOCK_SEGMENTS.map((seg) => (
-            <SegmentBlock key={seg.id} seg={seg} />
+          {segments.map((seg) => (
+            <SegmentBlock key={seg.sentenceId} seg={seg} />
           ))}
-          {!paused ? (
+          {!paused && segments.length === 0 ? (
             <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
               {t("pages:meetings.live.listening")}
             </div>
@@ -466,7 +370,7 @@ function LiveView({
   );
 }
 
-function SegmentBlock({ seg }: { seg: Segment }) {
+function SegmentBlock({ seg }: { seg: MeetingSegment }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline gap-3">
@@ -476,7 +380,7 @@ function SegmentBlock({ seg }: { seg: Segment }) {
             speakerColor(seg.speakerId),
           )}
         >
-          [{seg.speakerName ?? `${seg.speakerId}`}]
+          [{speakerLabel(seg.speakerId)}]
         </span>
         <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
           {formatHMS(seg.startMs)}
@@ -501,15 +405,22 @@ function SegmentBlock({ seg }: { seg: Segment }) {
 
 function ReviewView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
-  const session = MOCK_SESSIONS[0];
+  const segments = useMeetingsStore(selectSortedSegments);
+  const elapsedMs = useMeetingsStore((s) => s.elapsedMs);
+
+  const speakerCount = useMemo(() => {
+    const set = new Set<number>();
+    segments.forEach((s) => { if (s.speakerId >= 0) set.add(s.speakerId); });
+    return set.size;
+  }, [segments]);
+
+  const titleDate = new Date().toLocaleDateString();
+  const title = `${t("pages:meetings.title")} · ${titleDate}`;
 
   return (
     <div className="flex h-full flex-col">
       <div data-tauri-drag-region className="border-b border-te-gray/40 bg-te-bg">
-        <div
-          data-tauri-drag-region
-          className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-[4vw] py-3"
-        >
+        <div data-tauri-drag-region className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-[4vw] py-3">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -520,14 +431,15 @@ function ReviewView({ onBack }: { onBack: () => void }) {
               <ArrowLeft className="size-3.5" />
               {t("pages:meetings.review.back")}
             </button>
-            <span className="truncate font-mono text-sm text-te-fg">{session.title}</span>
+            <span className="truncate font-mono text-sm text-te-fg">{title}</span>
             <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] tabular-nums text-te-light-gray">
-              {formatHMS(session.durationMs)} · {session.speakerCount} {t("pages:meetings.review.speakers")}
+              {formatHMS(elapsedMs)} · {speakerCount} {t("pages:meetings.review.speakers")}
             </span>
           </div>
           <button
             type="button"
             data-tauri-drag-region="false"
+            onClick={onBack}
             className="flex shrink-0 items-center gap-2 border border-te-gray/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray transition hover:border-[#ff4d4d] hover:text-[#ff4d4d]"
           >
             <Trash2 className="size-3" />
@@ -545,11 +457,10 @@ function ReviewView({ onBack }: { onBack: () => void }) {
             <Play className="size-4" />
           </button>
           <div className="relative h-1 flex-1 bg-te-gray/40">
-            <div className="absolute top-0 left-0 h-full w-1/4 bg-te-accent" />
-            <div className="absolute top-1/2 left-1/4 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-te-accent" />
+            <div className="absolute top-0 left-0 h-full w-0 bg-te-accent" />
           </div>
           <span className="shrink-0 font-mono text-[10px] tabular-nums text-te-light-gray">
-            12:34 / {formatHMS(session.durationMs)}
+            00:00 / {formatHMS(elapsedMs)}
           </span>
         </div>
       </div>
@@ -580,32 +491,26 @@ function ReviewView({ onBack }: { onBack: () => void }) {
             </div>
             <div className="flex-1 overflow-y-auto py-5">
               <div className="flex flex-col gap-5">
-                {MOCK_SEGMENTS.map((seg, i) => (
-                  <button
-                    key={seg.id}
-                    type="button"
-                    className={cn(
-                      "flex flex-col gap-2 border-l-2 px-3 py-1 text-left transition",
-                      i === 1
-                        ? "border-te-accent bg-te-surface-hover"
-                        : "border-transparent hover:border-te-gray/40 hover:bg-te-surface-hover/50",
-                    )}
+                {segments.length === 0 ? (
+                  <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/60">
+                    {t("pages:meetings.review.transcript")} —
+                  </div>
+                ) : null}
+                {segments.map((seg) => (
+                  <div
+                    key={seg.sentenceId}
+                    className="flex flex-col gap-2 border-l-2 border-transparent px-3 py-1 text-left transition hover:border-te-gray/40 hover:bg-te-surface-hover/50"
                   >
                     <div className="flex items-baseline gap-3">
-                      <span
-                        className={cn(
-                          "font-mono text-xs uppercase tracking-[0.25em]",
-                          speakerColor(seg.speakerId),
-                        )}
-                      >
-                        [{seg.speakerName ?? `${seg.speakerId}`}]
+                      <span className={cn("font-mono text-xs uppercase tracking-[0.25em]", speakerColor(seg.speakerId))}>
+                        [{speakerLabel(seg.speakerId)}]
                       </span>
                       <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
                         {formatHMS(seg.startMs)}
                       </span>
                     </div>
                     <p className="text-sm leading-relaxed text-te-fg">{seg.text}</p>
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -618,7 +523,8 @@ function ReviewView({ onBack }: { onBack: () => void }) {
               </span>
             </div>
             <div className="flex-1 overflow-y-auto py-5">
-              <ReviewSummary />
+              {/* AI 纪要待接入：当前阶段先显示发言人 + 字数统计兜底。 */}
+              <ReviewSummary speakerCount={speakerCount} segmentCount={segments.length} />
             </div>
           </div>
         </div>
@@ -627,82 +533,28 @@ function ReviewView({ onBack }: { onBack: () => void }) {
   );
 }
 
-function ReviewSummary() {
+function ReviewSummary({ speakerCount, segmentCount }: { speakerCount: number; segmentCount: number }) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-4">
       <dl className="flex flex-col gap-2 text-sm">
         <div className="flex gap-2">
           <dt className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-            {t("pages:meetings.review.summary_topic")}：
+            {t("pages:meetings.review.summary_speakers")}：
           </dt>
-          <dd className="text-te-fg">AI 代码生成规范与技能管理研讨会</dd>
+          <dd className="text-te-fg">{speakerCount}</dd>
         </div>
         <div className="flex gap-2">
           <dt className="shrink-0 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-            {t("pages:meetings.review.summary_speakers")}：
+            {t("pages:meetings.review.summary_section")}：
           </dt>
-          <dd className="text-te-fg">A / B</dd>
+          <dd className="text-te-fg">{segmentCount}</dd>
         </div>
       </dl>
 
-      <div>
-        <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray">
-          {t("pages:meetings.review.summary_abstract")}
-        </div>
-        <p className="text-sm leading-relaxed text-te-fg">
-          本次会议重点讨论了 AI 代码生成中模板代码的规范性问题，确立了基于"最小化依赖"的模板优化策略，并明确了技能（Skills）的动态加载机制与 Token 管理原则，同时制定了后续需求文档生成与源码分析的执行计划。
-        </p>
+      <div className="border-t border-te-gray/40 pt-3 font-mono text-[11px] text-te-light-gray/80">
+        {t("pages:meetings.review.summary_loading")}
       </div>
-
-      <div className="border-t border-te-gray/40 pt-3">
-        <h4 className="mb-2 text-sm font-bold text-te-fg">一、模板代码规范与重构策略</h4>
-        <p className="mb-2 text-sm leading-relaxed text-te-fg">
-          针对当前模板代码中存在的不规范问题，会议确立了"最小化依赖"与"分层治理"的优化方向：
-        </p>
-        <ul className="ml-4 list-disc space-y-1.5 text-sm text-te-fg marker:text-te-accent">
-          <li>
-            <span className="font-bold">领域层纯化：</span>
-            明确领域层（Domain Layer）不应直接依赖基础设施层（Infrastructure）的框架。
-          </li>
-          <li>
-            <span className="font-bold">最小化引入原则：</span>
-            鉴于 Java 生态对 Spring 的强依赖，允许在领域层引入部分常用 Spring 框架组件。
-          </li>
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────── */
-/*  Dev state switcher                              */
-/* ─────────────────────────────────────────────── */
-
-function DevStateSwitcher({
-  view,
-  setView,
-}: {
-  view: View;
-  setView: (v: View) => void;
-}) {
-  const states: View[] = ["idle", "live", "paused", "review"];
-  return (
-    <div className="pointer-events-auto absolute right-4 bottom-4 flex items-center gap-1 border border-te-gray/40 bg-te-surface/90 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray backdrop-blur">
-      <span className="pr-2 text-te-light-gray/60">DEV</span>
-      {states.map((s) => (
-        <button
-          key={s}
-          type="button"
-          onClick={() => setView(s)}
-          className={cn(
-            "px-2 py-0.5 transition",
-            view === s ? "bg-te-accent text-te-accent-fg" : "hover:text-te-fg",
-          )}
-        >
-          {s}
-        </button>
-      ))}
     </div>
   );
 }

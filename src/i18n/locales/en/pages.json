@@ -326,7 +326,8 @@
     "idle": {
       "hint": "Click to start recording",
       "recent": "Recent meetings",
-      "items": "items"
+      "items": "items",
+      "language_support": "// Currently supports Chinese, English, Cantonese & several Mandarin dialects"
     },
     "live": {
       "recording": "Recording",
