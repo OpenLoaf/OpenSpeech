@@ -89,6 +89,17 @@ opus = "0.3"
 # 输出到 stderr，方便诊断 ws 握手 / 入站帧。release 走 tauri_plugin_log，不走它。
 env_logger = "0.11"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# inject_type 临时关 IME 用：搜狗 / 微软拼音 / QQ 拼音等中文 IME 会把
+# SendInput + KEYEVENTF_UNICODE 注入的 ASCII 当作拼音输入，激活候选词框，
+# 导致翻译模式英文段落地乱码。注入前 ImmSetOpenStatus(FALSE) 关 IME，
+# 离开 scope 通过 RAII guard 恢复。
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
 # 社区维护的 macOS 权限 plugin（ayangweb/tauri-plugin-macos-permissions）。

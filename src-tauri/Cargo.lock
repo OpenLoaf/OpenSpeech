@@ -4114,7 +4114,7 @@ dependencies = [
 
 [[package]]
 name = "openspeech"
-version = "0.2.30-beta.9"
+version = "0.2.30-beta.10"
 dependencies = [
  "async-openai",
  "async-trait",
@@ -4160,6 +4160,7 @@ dependencies = [
  "uuid",
  "vorbis_rs",
  "webrtc-vad",
+ "windows-sys 0.59.0",
  "zeroize",
 ]
 
