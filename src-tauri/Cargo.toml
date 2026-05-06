@@ -1,6 +1,6 @@
 [package]
 name = "openspeech"
-version = "0.2.30-beta.13"
+version = "0.2.30-beta.14"
 description = "OpenSpeech - AI voice input desktop app"
 authors = ["OpenSpeech"]
 edition = "2024"
