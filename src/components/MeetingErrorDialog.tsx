@@ -57,9 +57,9 @@ export function MeetingErrorDialog({ error, onClose }: Props) {
         showCloseButton
         className="flex w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 sm:max-w-md"
       >
-        <DialogHeader className="flex flex-row items-center gap-2 border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
-          <AlertTriangle className="size-4 shrink-0 text-[#ff4d4d]" aria-hidden />
-          <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
+        <DialogHeader className="flex flex-row items-start gap-2 border-b border-te-dialog-border bg-te-surface-hover py-4 pr-12 pl-5">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[#ff4d4d]" aria-hidden />
+          <DialogTitle className="min-w-0 flex-1 font-mono text-base font-bold tracking-tighter break-words text-te-fg">
             {title}
           </DialogTitle>
           <DialogDescription className="sr-only">
