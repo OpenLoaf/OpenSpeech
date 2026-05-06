@@ -1902,7 +1902,7 @@ function AboutTab() {
         <span className="font-mono text-sm text-te-fg">{platformLabel}</span>
       </Row>
       <Row label={t("about.license")}>
-        <span className="font-mono text-sm text-te-fg">MIT</span>
+        <span className="font-mono text-sm text-te-fg">PolyForm Noncommercial 1.0.0</span>
       </Row>
       <Row label={t("about.source")}>
         <a

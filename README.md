@@ -9,7 +9,7 @@
 
   <p>
     <a href="https://github.com/OpenLoaf/OpenSpeech/releases/latest"><img src="https://img.shields.io/github/v/release/OpenLoaf/OpenSpeech?include_prereleases&style=flat-square" alt="Release" /></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/OpenLoaf/OpenSpeech?style=flat-square" alt="License" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange?style=flat-square" alt="License" /></a>
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square" alt="Platform" />
   </p>
 
@@ -111,4 +111,6 @@ pnpm tauri dev
 
 ## 许可证
 
-[MIT](./LICENSE) © OpenLoaf
+[PolyForm Noncommercial 1.0.0](./LICENSE) © OpenLoaf
+
+个人、研究、教育、非营利组织等**非商业用途**可自由使用、修改和分发。如需商业授权（包括但不限于将本项目用于商业产品、SaaS 服务或闭源分发），请联系作者获取单独授权。

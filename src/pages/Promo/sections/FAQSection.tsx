@@ -5,7 +5,7 @@ const FAQS: { question: string; answer: string }[] = [
   {
     question: "OpenSpeech 是免费的吗？",
     answer:
-      "是。客户端开源免费，你只需自备一个 ASR 服务（OpenAI Whisper API、自部署 whisper、第三方实时 ASR 等都行）。",
+      "客户端源码公开、个人非商业使用免费，你只需自备一个 ASR 服务（OpenAI Whisper API、自部署 whisper、第三方实时 ASR 等都行）。商业用途请联系作者获取授权。",
   },
   {
     question: "支持哪些操作系统？",

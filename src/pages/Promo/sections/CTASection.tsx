@@ -301,7 +301,7 @@ export default function CTASection() {
           viewport={{ once: true }}
           transition={{ duration: 0.6, delay: 0.5 }}
         >
-          开源 · MIT License · 永久免费
+          源码公开 · 非商业可用 · 个人永久免费
         </motion.div>
       </div>
     </section>

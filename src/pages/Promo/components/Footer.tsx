@@ -10,7 +10,7 @@ export default function Footer() {
             alt="OpenSpeech"
             className="h-5 w-5 opacity-70"
           />
-          <span>© 2026 OpenSpeech · 开源软件</span>
+          <span>© 2026 OpenSpeech · 源码公开（PolyForm Noncommercial）</span>
         </div>
 
         <nav className="flex items-center gap-6 font-mono text-xs uppercase tracking-[0.15em] text-te-light-gray/60">
