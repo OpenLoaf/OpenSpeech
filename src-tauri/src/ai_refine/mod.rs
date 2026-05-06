@@ -94,18 +94,23 @@ fn join_base_endpoint(base_url: &str, endpoint: &str) -> String {
 }
 
 async fn resolve_saas<R: Runtime>(app: &AppHandle<R>) -> Result<ResolvedEndpoint, String> {
-    let (client, token) = {
-        let ol = app.state::<SharedOpenLoaf>();
-        let client = ol.authenticated_client().ok_or_else(|| {
-            handle_session_expired(app, &ol);
-            ERR_NOT_AUTHENTICATED.to_string()
-        })?;
-        let token = client.access_token().ok_or_else(|| {
-            handle_session_expired(app, &ol);
-            ERR_NOT_AUTHENTICATED.to_string()
-        })?;
-        (client, token)
-    };
+    let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
+    // 请求前预检：JWT 距离过期 ≤ 30s 时主动 refresh，避免拿过期 token 起飞导致 401。
+    // 唤醒场景特别关键：电脑睡眠期间 refresh 定时器没机会跑，醒来第一次调用如果不预检
+    // 就一定 401，前端会把它当登录失效踢用户。
+    if !ol.ensure_access_token_fresh().await {
+        log::warn!("[ai_refine] saas preflight refresh failed; signaling auth-lost");
+        handle_session_expired(app, &ol);
+        return Err(ERR_NOT_AUTHENTICATED.to_string());
+    }
+    let client = ol.authenticated_client().ok_or_else(|| {
+        handle_session_expired(app, &ol);
+        ERR_NOT_AUTHENTICATED.to_string()
+    })?;
+    let token = client.access_token().ok_or_else(|| {
+        handle_session_expired(app, &ol);
+        ERR_NOT_AUTHENTICATED.to_string()
+    })?;
     let variant = tokio::task::spawn_blocking(move || client.ai().fast_chat_variant())
         .await
         .map_err(|e| format!("join: {e}"))?
@@ -295,34 +300,65 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         log::debug!("[ai_refine] request body:\n{}", pretty);
     }
 
-    let resp = match crate::http::client()
-        .post(&resolved.full_url)
-        .bearer_auth(&resolved.api_key)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let raw = e.to_string();
-            let code = classify_reqwest_error(&raw);
-            emit_error(&app, task_id.as_deref(), code, &raw);
-            return Err(format!("ai_refine_send: {raw}"));
-        }
-    };
+    let mut current_key = resolved.api_key.clone();
+    let mut attempt: u32 = 0;
+    let resp = loop {
+        attempt += 1;
+        let send_result = crate::http::client()
+            .post(&resolved.full_url)
+            .bearer_auth(&current_key)
+            .json(&body)
+            .send()
+            .await;
+        let resp = match send_result {
+            Ok(r) => r,
+            Err(e) => {
+                let raw = e.to_string();
+                let code = classify_reqwest_error(&raw);
+                emit_error(&app, task_id.as_deref(), code, &raw);
+                return Err(format!("ai_refine_send: {raw}"));
+            }
+        };
 
-    let status = resp.status();
-    if !status.is_success() {
+        let status = resp.status();
+        if status.is_success() {
+            break resp;
+        }
+
         let txt = resp.text().await.unwrap_or_default();
         let raw = format!("HTTP {status}: {txt}");
         let code = classify_status(status.as_u16());
-        emit_error(&app, task_id.as_deref(), code, &raw);
-        // SaaS 路径 401：access_token 已过期，主动清场让前端 auth store 切到未登录态。
+
+        // SaaS 路径 401：先尝试 refresh + retry 一次；refresh 失败 / retry 仍 401 才清场。
         // BYOK custom 路径 401：是用户自己的 provider key 错，与 OpenLoaf 登录无关，不清场。
         // 错误返回值用稳定串前缀 `unauthorized:`/`saas_unauthorized:`，前端按 mode 路由。
+        if status.as_u16() == 401 && input.mode == "saas" && attempt == 1 {
+            log::warn!(
+                "[ai_refine] saas chat got 401 on attempt 1, attempting refresh + retry. raw={raw}"
+            );
+            let ol = app.state::<SharedOpenLoaf>().inner().clone();
+            if ol.ensure_fresh_token().await {
+                if let Some(new_token) = ol.client_clone().access_token() {
+                    current_key = new_token;
+                    log::info!("[ai_refine] refresh succeeded, retrying chat completion once");
+                    continue;
+                }
+                log::warn!("[ai_refine] refresh succeeded but access_token gone; clearing session");
+            } else {
+                log::warn!("[ai_refine] refresh failed; clearing session");
+            }
+            handle_session_expired(&app, &ol);
+            emit_error(&app, task_id.as_deref(), code, &raw);
+            return Err(format!("saas_unauthorized: {raw}"));
+        }
+
+        emit_error(&app, task_id.as_deref(), code, &raw);
         if status.as_u16() == 401 {
             return if input.mode == "saas" {
-                let ol = app.state::<SharedOpenLoaf>();
+                let ol = app.state::<SharedOpenLoaf>().inner().clone();
+                log::warn!(
+                    "[ai_refine] saas chat retry still 401 after refresh; clearing session. raw={raw}"
+                );
                 handle_session_expired(&app, &ol);
                 Err(format!("saas_unauthorized: {raw}"))
             } else {
@@ -330,7 +366,7 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
             };
         }
         return Err(raw);
-    }
+    };
 
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
