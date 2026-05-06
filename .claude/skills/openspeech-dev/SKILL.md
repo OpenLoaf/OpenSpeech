@@ -73,11 +73,11 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 - **Tailwind v4**（不再走 PostCSS，入口 `src/App.css` 用 `@import "tailwindcss"`）
 - **React Router v7**（API 与 v6 不兼容，禁止降级）
 - **Rust edition 2024**
-- **`rdev` = `rustdesk-org/rdev` fork，pin commit `a90dbe11`**
-  - 不用 crates.io 0.5.3：上游在 macOS 子线程跑 listen 遇首个 key event 进程静默 abort（无 panic、无报错）。
-  - fork 还修了 `Key::Function` 映射（macOS CGEventTap）。
+- **`rdev` = `openloaf-rdev` 0.5.1（OpenLoaf 自有 fork via crates.io，crate 通过 `package = "..."` 重命名）**
+  - fork 修的是 macOS event tap 在 `kCGEventTapDisabledByTimeout` / `ByUserInput` 时的自愈，解决 "按下第一次没反应、得再按一次" 偶发 bug。
+  - crate 改名因上游名 `rdev` 被 Narsil 占着；业务代码里仍 `use rdev::...`，不用动。
   - `rdev::listen` **进程内只能调一次** —— 新订阅扩展 `src-tauri/src/hotkey/modifier_only.rs`，不要另起 listen。
-  - 国内网络拉不到 git 时走 `path = "vendor/rdev"` 本地兜底。
+  - **Windows 上双修饰键同时释放（Win+Ctrl 等）OS 会吞 KEYUP**：这是 Windows 抑制开始菜单的副作用，rdev 忠实转发，所以 hook 队列里就缺那条 release。`modifier_only.rs` 的 OS sync correction 就是兜这个，不是兜 rdev。看到 "OS sync removed stale modifier" 不是 bug。
 - **`reqwest` 走 `rustls`**（关 default-features，避免拖入 native-tls）
 - **`tauri` 启用 `tray-icon` feature**（托盘依赖，不可移除）
 - **`openloaf-saas` 跟随 `@openloaf-saas/sdk` Node 包对齐版本号**
