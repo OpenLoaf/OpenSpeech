@@ -15,6 +15,7 @@
 // 后续接 cpal：在 audio/mod.rs 的 push_to_stt_pcm16 旁边再加一行 fanout 到这里
 // （`crate::meetings::try_send_audio_pcm16`），保持 dictation 主路径不被打扰。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,6 +32,8 @@ use crate::asr::meeting::tencent_speaker::TencentSpeakerProvider;
 use crate::asr::meeting::{
     MeetingAsrProvider, MeetingEvent, MeetingProviderError, MeetingSession, MeetingSessionConfig,
 };
+use crate::audio::is_valid_date_segment;
+use crate::db;
 
 /// 前端订阅的事件名。
 pub const EVENT_READY: &str = "meetings://ready";
@@ -167,10 +170,18 @@ pub async fn meeting_start<R: Runtime>(
 }
 
 fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<(), String> {
+    // 自愈：dev HMR / 错误路径 / 弹窗关闭都可能让前端 store 回到 idle，但后端
+    // active_slot 还留着上一场——上一版直接报 "another meeting is already active"
+    // 死路一条，用户必须重启 app。这里把 stale slot 直接 take 掉：drop 后旧的
+    // audio_tx 关闭，旧 worker 在 try_recv 看到 Disconnected → finish session 自退。
+    // 不 join 旧 worker（它最长要 15s 兜底超时），让它在后台 detached 收尾。
     {
-        let slot = active_slot().lock().map_err(|e| e.to_string())?;
-        if slot.is_some() {
-            return Err("another meeting is already active".into());
+        let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
+        if let Some(stale) = slot.take() {
+            log::warn!(
+                "[meetings] dropping stale active meeting {} before starting a new one",
+                stale.meeting_id
+            );
         }
     }
 
@@ -185,12 +196,14 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         .map_err(|e| e.to_string())?;
 
     // 等握手 Ready 事件（最多 8 秒），握手失败直接返回错误，不开 worker。
+    let mut got_ready = false;
     let mut session_id: Option<String> = None;
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
         match session.next_event(Duration::from_millis(200)) {
             MeetingEvent::Ready { session_id: sid } => {
                 session_id = sid;
+                got_ready = true;
                 break;
             }
             MeetingEvent::Error { code, message } => {
@@ -200,6 +213,9 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
             MeetingEvent::Idle => continue,
             other => log::debug!("[meetings] pre-ready event: {other:?}"),
         }
+    }
+    if !got_ready {
+        return Err("handshake timeout: no Ready within 8s".into());
     }
 
     let _ = app.emit(
@@ -449,5 +465,99 @@ fn event_pump<R: Runtime>(
                 return;
             }
         }
+    }
+}
+
+// ---------- 时间轴文件（jsonl）IO ----------
+//
+// 会议时间轴跟音频文件并列放：`recordings/<yyyy-MM-dd>/<id>.jsonl`，每行一个
+// JSON segment。append-only + 整段读 + 不修改的访问模式不该走 SQLite 关系表。
+// 复用 audio 那套相对路径白名单（防任意文件读写）。
+
+fn validated_transcript_subpath(p: &str) -> Result<PathBuf, String> {
+    let Some(rest) = p.strip_prefix("recordings/") else {
+        return Err("transcript_path must start with recordings/".into());
+    };
+    if rest.is_empty() || rest.contains('\\') || rest.contains("..") {
+        return Err("invalid transcript_path".into());
+    }
+    let segs: Vec<&str> = rest.split('/').collect();
+    let (date, filename) = match segs.as_slice() {
+        [filename] => (None, *filename),
+        [date, filename] => (Some(*date), *filename),
+        _ => return Err("invalid transcript_path".into()),
+    };
+    if let Some(d) = date {
+        if !is_valid_date_segment(d) {
+            return Err("invalid date segment in transcript_path".into());
+        }
+    }
+    if !filename.to_ascii_lowercase().ends_with(".jsonl") {
+        return Err("transcript_path must end with .jsonl".into());
+    }
+    let mut out = PathBuf::new();
+    if let Some(d) = date {
+        out.push(d);
+    }
+    out.push(filename);
+    Ok(out)
+}
+
+fn validated_meeting_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.contains('/')
+        || id.contains('\\')
+        || id.contains('\0')
+        || id.contains("..")
+    {
+        return Err("invalid meeting_id".into());
+    }
+    Ok(())
+}
+
+/// 写一场会议的时间轴 jsonl，返回 history.transcript_path 用的相对路径。
+/// payload 由前端拼好（每行一个 JSON）；Rust 不解析内容，只校验 id / 写文件。
+#[tauri::command]
+pub fn meeting_transcript_write<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    date: String,
+    payload: String,
+) -> Result<String, String> {
+    validated_meeting_id(&meeting_id)?;
+    if !is_valid_date_segment(&date) {
+        return Err("invalid date".into());
+    }
+    let day_dir = db::ensure_recordings_dir(&app)?.join(&date);
+    std::fs::create_dir_all(&day_dir)
+        .map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
+    let abs = day_dir.join(format!("{meeting_id}.jsonl"));
+    std::fs::write(&abs, payload).map_err(|e| format!("write {}: {e}", abs.display()))?;
+    Ok(format!("recordings/{date}/{meeting_id}.jsonl"))
+}
+
+/// 读 jsonl 原文（前端自己 split + JSON.parse）。
+#[tauri::command]
+pub fn meeting_transcript_load<R: Runtime>(
+    app: AppHandle<R>,
+    transcript_path: String,
+) -> Result<String, String> {
+    let sub = validated_transcript_subpath(&transcript_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
+    std::fs::read_to_string(&abs).map_err(|e| format!("read {}: {e}", abs.display()))
+}
+
+/// 删除 jsonl 文件（idempotent，不存在视为成功）。
+#[tauri::command]
+pub fn meeting_transcript_delete<R: Runtime>(
+    app: AppHandle<R>,
+    transcript_path: String,
+) -> Result<(), String> {
+    let sub = validated_transcript_subpath(&transcript_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
+    match std::fs::remove_file(&abs) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("delete {}: {e}", abs.display())),
     }
 }

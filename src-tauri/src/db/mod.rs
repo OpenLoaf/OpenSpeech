@@ -181,5 +181,21 @@ ALTER TABLE history ADD COLUMN refine_ms INTEGER;
 "#,
             kind: MigrationKind::Up,
         },
+        // v8：会议时间轴改用 jsonl 文件存储。
+        // - history_segments 是 append-only + 整段读 + 不修改的访问模式，关系表浪费索引/页开销。
+        // - 改成与 audio 并列的 `recordings/<yyyy-MM-dd>/<id>.jsonl`，一场会议两个文件。
+        // - 旧 meeting 数据直接清掉（产品未发布，无用户数据需保住），cascade 自动清空 segments。
+        Migration {
+            version: 8,
+            description: "meeting_transcript_to_jsonl",
+            sql: r#"
+DELETE FROM history WHERE type = 'meeting';
+ALTER TABLE history ADD COLUMN transcript_path TEXT;
+DROP INDEX IF EXISTS idx_history_segments_history_id;
+DROP INDEX IF EXISTS idx_history_segments_speaker;
+DROP TABLE IF EXISTS history_segments;
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
