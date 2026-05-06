@@ -103,7 +103,7 @@ const ensureMainWindowVisible = () => {
 
 let hotkeyConflictFlushTimer: number | null = null;
 
-export const useUIStore = create<UIStore>((set) => ({
+export const useUIStore = create<UIStore>((set, get) => ({
   loginOpen: false,
   settingsOpen: false,
   settingsInitialTab: "GENERAL",
@@ -134,27 +134,39 @@ export const useUIStore = create<UIStore>((set) => ({
     }),
   setStatsOpen: (v) => set({ statsOpen: v }),
   openStats: (metric) => {
+    if (get().statsOpen) return;
     ensureMainWindowVisible();
     set({ statsOpen: true, statsFocusMetric: metric ?? "duration" });
   },
   setPendingUpdate: (v) => set({ pendingUpdate: v }),
 
+  // open* 幂等：若 dialog 已 open，直接返回，不再 ensureMainWindowVisible。
+  // 背景：未登录用户按住 PTT 时，"按下任意修饰键扰动"会让 modifier-only 状态机
+  // cycle 一次 release/press（pressed 集合精确匹配语义），每个 press 都重跑
+  // recording gate → openLogin。如果不幂等，每次 cycle 都会 invoke
+  // show_main_window_cmd → set_focus，把已经在前台但未聚焦的主窗反复抢焦点
+  // （Windows 上表现为任务栏闪烁 + 主窗抢前台）。Dialog 一旦打开，重复弹没有
+  // 任何收益，且抢前台等于打断用户。
   openLogin: () => {
+    if (get().loginOpen) return;
     ensureMainWindowVisible();
     set({ loginOpen: true });
   },
 
   openSettings: (tab = "GENERAL") => {
+    if (get().settingsOpen) return;
     ensureMainWindowVisible();
     set({ settingsOpen: true, settingsInitialTab: tab });
   },
 
   openNoInternet: () => {
+    if (get().noInternetOpen) return;
     ensureMainWindowVisible();
     set({ noInternetOpen: true });
   },
 
   openFeedback: (opts) => {
+    if (get().feedbackOpen) return;
     ensureMainWindowVisible();
     if (opts?.returnToSettingsTab) {
       set({
