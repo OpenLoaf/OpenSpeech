@@ -141,16 +141,9 @@ async fn test_tencent(
 
     let _ = app_id; // AppID 在录音文件接口非必填——保留参数让前端 schema 一致
 
-    let http = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return network_err(&e.to_string()),
-    };
-
-    let resp = match http
+    let resp = match crate::http::client()
         .post(format!("https://{ASR_HOST}/"))
+        .timeout(Duration::from_secs(10))
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Host", ASR_HOST)
         .header("X-TC-Action", ACTION_QUERY)
@@ -311,15 +304,9 @@ async fn test_aliyun(api_key: &str) -> DictationTestResult {
     //   - ApiKey 错：401 InvalidApiKey
     //   - ApiKey 对、task 不存在：404 / 业务错
     let url = "https://dashscope.aliyuncs.com/api/v1/tasks/test-credential-probe";
-    let http = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return network_err(&e.to_string()),
-    };
-    let resp = match http
+    let resp = match crate::http::client()
         .get(url)
+        .timeout(Duration::from_secs(10))
         .bearer_auth(api_key)
         .send()
         .await

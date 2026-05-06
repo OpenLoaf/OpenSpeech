@@ -108,5 +108,64 @@ ALTER TABLE history ADD COLUMN target_lang TEXT;
 "#,
             kind: MigrationKind::Up,
         },
+        // v6：会议模式接入。
+        // - history.type 之前 CHECK 限 ('dictation','ask','translate')，加 'meeting' 必须重建表
+        //   （SQLite 不支持 ALTER TABLE 改 CHECK）。临时表 + INSERT SELECT + RENAME 是标准套路。
+        // - 新增 meeting_id 字段：会议子片段（history_segments）通过它回引主 history 行。
+        // - 新增 history_segments：每条 final 片段一行；partial 不落库。
+        Migration {
+            version: 6,
+            description: "history_add_meeting_kind_and_segments",
+            sql: r#"
+CREATE TABLE history_new (
+    id           TEXT PRIMARY KEY,
+    type         TEXT NOT NULL CHECK (type IN ('dictation', 'ask', 'translate', 'meeting')),
+    text         TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('success', 'failed', 'cancelled')),
+    error        TEXT,
+    duration_ms  INTEGER NOT NULL,
+    created_at   INTEGER NOT NULL,
+    target_app   TEXT,
+    audio_path   TEXT,
+    refined_text TEXT,
+    asr_source   TEXT,
+    ai_model     TEXT,
+    segment_mode TEXT,
+    provider_kind TEXT,
+    target_lang  TEXT,
+    meeting_id   TEXT
+);
+INSERT INTO history_new (
+    id, type, text, status, error, duration_ms, created_at, target_app, audio_path,
+    refined_text, asr_source, ai_model, segment_mode, provider_kind, target_lang
+)
+SELECT
+    id, type, text, status, error, duration_ms, created_at, target_app, audio_path,
+    refined_text, asr_source, ai_model, segment_mode, provider_kind, target_lang
+FROM history;
+DROP TABLE history;
+ALTER TABLE history_new RENAME TO history;
+
+CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_history_type ON history(type);
+CREATE INDEX IF NOT EXISTS idx_history_meeting_id ON history(meeting_id);
+
+CREATE TABLE IF NOT EXISTS history_segments (
+    id            TEXT PRIMARY KEY,
+    history_id    TEXT NOT NULL,
+    sentence_id   INTEGER NOT NULL,
+    speaker_id    INTEGER NOT NULL,
+    speaker_label TEXT,
+    text          TEXT NOT NULL,
+    start_ms      INTEGER NOT NULL,
+    end_ms        INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL,
+    FOREIGN KEY (history_id) REFERENCES history(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_history_segments_history_id ON history_segments(history_id);
+CREATE INDEX IF NOT EXISTS idx_history_segments_speaker ON history_segments(history_id, speaker_id);
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

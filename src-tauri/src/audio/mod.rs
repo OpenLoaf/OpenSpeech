@@ -204,6 +204,11 @@ fn push_to_stt_pcm16(data: &[f32], channels: u16, src_rate: u32) {
         let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         bytes.extend_from_slice(&v.to_le_bytes());
     }
+    // fanout：dictation 主路径 + 会议路径同时消费 PCM。两边都用 try_lock 短路，
+    // 没有激活会话时是几乎零开销的指针检查；会议未启动时根本不会克隆。
+    if crate::meetings::has_active() {
+        crate::meetings::try_send_audio_pcm16(bytes.clone());
+    }
     crate::stt::try_send_audio_pcm16(bytes);
 }
 

@@ -21,12 +21,14 @@ use tauri_plugin_store::StoreExt;
 use tauri::ActivationPolicy;
 
 mod ai_refine;
-mod asr;
+pub mod asr;
 mod audio;
 mod db;
 mod hotkey;
+mod http;
 mod idle;
 mod inject;
+mod meetings;
 mod openloaf;
 mod overlay;
 mod permissions;
@@ -863,6 +865,10 @@ pub fn run() {
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,
+            meetings::meeting_start,
+            meetings::meeting_pause,
+            meetings::meeting_resume,
+            meetings::meeting_stop,
             ai_refine::refine_text_via_chat_stream,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,

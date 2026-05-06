@@ -18,6 +18,7 @@
 pub mod aliyun;
 pub mod backends;
 pub mod byok;
+pub mod meeting;
 pub mod realtime_backend;
 pub mod tencent;
 pub mod test_provider;

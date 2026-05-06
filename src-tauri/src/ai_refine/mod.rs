@@ -295,16 +295,7 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         log::debug!("[ai_refine] request body:\n{}", pretty);
     }
 
-    let http = match reqwest::Client::builder().build() {
-        Ok(c) => c,
-        Err(e) => {
-            let msg = format!("reqwest build: {e}");
-            emit_error(&app, task_id.as_deref(), "network", &msg);
-            return Err(msg);
-        }
-    };
-
-    let resp = match http
+    let resp = match crate::http::client()
         .post(&resolved.full_url)
         .bearer_auth(&resolved.api_key)
         .json(&body)

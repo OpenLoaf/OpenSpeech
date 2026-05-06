@@ -89,15 +89,11 @@ pub async fn openloaf_submit_feedback(
         client_version: app_version,
     };
 
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("FEEDBACK_HTTP_INIT: {e}"))?;
-
-    // 第一次：带当前 access_token（若有）。即便公开端点不需要 token，登录态下带上能让后台
-    // 把 feedback 关联到用户。401 → 走 ensure 一次再重试一次。
     let send = |token: Option<String>| {
-        let mut req = http.post(&url).json(&body);
+        let mut req = crate::http::client()
+            .post(&url)
+            .timeout(Duration::from_secs(15))
+            .json(&body);
         if let Some(t) = token {
             req = req.bearer_auth(t);
         }
