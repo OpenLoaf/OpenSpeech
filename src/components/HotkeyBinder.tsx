@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, AlertCircle, RotateCcw } from "lucide-react";
+import { X, AlertCircle, RotateCcw, Command, Diamond } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -435,9 +435,7 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
                   </span>
                 ) : (
                   <ChipRow
-                    items={state.everPressedMods.map((m) =>
-                      formatMod(m, platform),
-                    )}
+                    items={state.everPressedMods.map((m) => modChip(m, platform))}
                     tone="active"
                     size={size}
                   />
@@ -581,10 +579,12 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
 // 一致，让录入前后切换只表现为颜色淡入淡出，不再有"字符串 → chip 拼图"的格式断层。
 function ModChip({
   label,
+  icon,
   tone,
   size,
 }: {
   label: string;
+  icon?: ReactNode;
   tone: "idle" | "active";
   size: BinderSize;
 }) {
@@ -598,9 +598,19 @@ function ModChip({
         SIZING[size].chip,
       )}
     >
+      {icon ? (
+        <span aria-hidden className="mr-1 inline-flex items-center opacity-70">
+          {icon}
+        </span>
+      ) : null}
       {label}
     </span>
   );
+}
+
+interface ChipItem {
+  label: string;
+  icon?: ReactNode;
 }
 
 function ChipRow({
@@ -608,13 +618,13 @@ function ChipRow({
   tone,
   size,
 }: {
-  items: string[];
+  items: ChipItem[];
   tone: "idle" | "active";
   size: BinderSize;
 }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      {items.map((label, i) => (
+      {items.map((item, i) => (
         <span key={i} className="inline-flex items-center gap-1.5">
           {i > 0 ? (
             <span
@@ -627,20 +637,83 @@ function ChipRow({
               +
             </span>
           ) : null}
-          <ModChip label={label} tone={tone} size={size} />
+          <ModChip
+            label={item.label}
+            icon={item.icon}
+            tone={tone}
+            size={size}
+          />
         </span>
       ))}
     </span>
   );
 }
 
-function bindingToChips(binding: HotkeyBinding, platform: Platform): string[] {
-  if (binding.kind === "doubleTap" && binding.mods.length > 0) {
-    return [`2× ${formatMod(binding.mods[0]!, platform)}`];
+// Win 键 SVG（与 HotkeyPreview 保持视觉一致）
+function WinIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M1 3.5l5.5-.75v5.5H1V3.5z" />
+      <path d="M7.5 2.5L15 1v7H7.5V2.5z" />
+      <path d="M1 9h5.5v5.5L1 13.5V9z" />
+      <path d="M7.5 9H15v7l-7.5-1.5V9z" />
+    </svg>
+  );
+}
+
+// macOS: 沿用 ⌃ ⌥ ⇧ ⌘ 系统符号，Mac 用户都认。
+// Windows / Linux: 只给 meta 键（Win / Super）加 logo，Ctrl / Alt / Shift 保持纯文字——
+// Windows 用户不认识 ⌃ ⌥，硬塞反而显得不专业。
+function modIcon(mod: HotkeyMod, platform: Platform): ReactNode {
+  if (mod === "fn") return null;
+  if (platform === "macos") {
+    if (mod === "ctrl") return "⌃";
+    if (mod === "shift") return "⇧";
+    if (mod === "alt") return "⌥";
+    if (mod === "meta") return <Command size={11} strokeWidth={2.5} />;
+    return null;
   }
-  const out = binding.mods.map((m) => formatMod(m, platform));
+  if (mod === "meta") {
+    return platform === "windows" ? (
+      <WinIcon />
+    ) : (
+      <Diamond size={10} strokeWidth={2.5} />
+    );
+  }
+  return null;
+}
+
+const MAIN_ICON: Record<string, ReactNode> = {
+  Enter: "↵",
+  Escape: "⎋",
+  Tab: "⇥",
+  Backspace: "⌫",
+  Delete: "⌦",
+  Space: "␣",
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+};
+
+function modChip(mod: HotkeyMod, platform: Platform): ChipItem {
+  return { label: formatMod(mod, platform), icon: modIcon(mod, platform) };
+}
+
+function bindingToChips(binding: HotkeyBinding, platform: Platform): ChipItem[] {
+  if (binding.kind === "doubleTap" && binding.mods.length > 0) {
+    const m = binding.mods[0]!;
+    return [{ label: `2× ${formatMod(m, platform)}`, icon: modIcon(m, platform) }];
+  }
+  const out: ChipItem[] = binding.mods.map((m) => modChip(m, platform));
   if (binding.kind === "combo" && binding.code) {
-    out.push(formatCode(binding.code));
+    out.push({ label: formatCode(binding.code), icon: MAIN_ICON[binding.code] });
   }
   return out;
 }

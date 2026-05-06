@@ -57,11 +57,11 @@ export function getDefaultBindings(
       ? { kind: "modifierOnly", mods: ["fn", "ctrl"], code: "" }
       : { kind: "modifierOnly", mods: ["ctrl", "meta"], code: "" };
 
-  // 翻译：默认 macOS = Fn + Shift；Win/Linux 没 Fn，回退到 Alt + Shift。
+  // 翻译：默认 macOS = Fn + Shift；Windows = Win + Alt；Linux = Super + Alt（meta + alt）。
   const translate: HotkeyBinding =
     platform === "macos"
       ? { kind: "modifierOnly", mods: ["fn", "shift"], code: "" }
-      : { kind: "modifierOnly", mods: ["alt", "shift"], code: "" };
+      : { kind: "modifierOnly", mods: ["alt", "meta"], code: "" };
 
   const showMainWindow: HotkeyBinding = {
     kind: "combo",
