@@ -65,7 +65,7 @@ export interface RecordingResult {
 }
 
 /** 取当前本地日期 yyyy-MM-dd（用于把录音按天分子目录保存）。 */
-function localDateYmd(): string {
+export function localDateYmd(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

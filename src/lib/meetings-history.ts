@@ -1,16 +1,19 @@
-// 会议历史的数据层（直接走 tauri-plugin-sql）。
+// 会议历史的数据层。
+//
+// 存储方案（v8 起）：
+//   - history 表 type='meeting' 一行存元数据 + transcript_path
+//   - 时间轴 segments 落到 `recordings/<yyyy-MM-dd>/<id>.jsonl`，一行一段
+//   - 跟音频文件并列：一场会议 = `<id>.ogg` + `<id>.jsonl`，删除时一并清掉
 //
 // 与 `src/stores/history.ts` 故意分离：
 //   - 主历史（dictation/ask/translate）由 useHistoryStore 管，UI 在 /history 页
 //   - 会议历史是独立的二级界面，由 useMeetingsStore 拉取，schema 复用 history 表
 //   - useHistoryStore.reload 已加 `WHERE type != 'meeting'` 把会议过滤掉
-//
-// 删除一行 history（type='meeting'）时，依赖 SQLite ON DELETE CASCADE 联动
-// 删除 history_segments；外键由 lib/db.ts 显式 `PRAGMA foreign_keys = ON`。
+
+import { invoke } from "@tauri-apps/api/core";
 
 import { db } from "@/lib/db";
-import { newId } from "@/lib/ids";
-import { deleteRecordingFile } from "@/lib/audio";
+import { localDateYmd, deleteRecordingFile } from "@/lib/audio";
 
 /** 会议主行（history 表，type='meeting'）。 */
 export interface MeetingHistoryRow {
@@ -19,25 +22,13 @@ export interface MeetingHistoryRow {
   duration_ms: number;
   created_at: number;
   audio_path: string | null;
+  transcript_path: string | null;
   /** 写库时填入的供应商通道，如 "tencent-realtime"。 */
   provider_kind: string | null;
 }
 
-/** 会议子片段（history_segments 表）。 */
-export interface MeetingSegmentRow {
-  id: string;
-  history_id: string;
-  sentence_id: number;
-  speaker_id: number;
-  speaker_label: string | null;
-  text: string;
-  start_ms: number;
-  end_ms: number;
-  created_at: number;
-}
-
-/** stop 落库时调用方传入的 segment 子集（仅 final）。 */
-export interface InsertSegmentInput {
+/** jsonl 文件里每行的 segment 结构。 */
+export interface MeetingSegmentJson {
   sentenceId: number;
   speakerId: number;
   text: string;
@@ -52,87 +43,84 @@ export interface InsertMeetingInput {
   durationMs: number;
   audioPath: string | null;
   providerKind: string;
-  segments: InsertSegmentInput[];
+  segments: MeetingSegmentJson[];
 }
 
-/** 写一条会议主行 + 全部 final 子片段。事务内执行，失败整体回滚。 */
+/** 写一条会议主行 + 把 segments 落到 jsonl。
+ *  顺序：先写文件（失败就别污染 db），再 INSERT history（包含 transcript_path）。 */
 export async function insertMeetingHistory(input: InsertMeetingInput): Promise<void> {
+  const transcriptPath = await writeTranscriptFile(input.meetingId, input.segments);
   const d = await db();
   const createdAt = Date.now();
-  await d.execute("BEGIN");
   try {
     await d.execute(
       `INSERT INTO history (
         id, type, text, status, duration_ms, created_at,
-        audio_path, provider_kind, meeting_id
-      ) VALUES ($1, 'meeting', $2, 'success', $3, $4, $5, $6, $7)`,
+        audio_path, transcript_path, provider_kind, meeting_id
+      ) VALUES ($1, 'meeting', $2, 'success', $3, $4, $5, $6, $7, $8)`,
       [
         input.meetingId,
         input.text,
         input.durationMs,
         createdAt,
         input.audioPath,
+        transcriptPath,
         input.providerKind,
         input.meetingId,
       ],
     );
-    for (const seg of input.segments) {
-      await d.execute(
-        `INSERT INTO history_segments (
-          id, history_id, sentence_id, speaker_id, speaker_label,
-          text, start_ms, end_ms, created_at
-        ) VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8)`,
-        [
-          newId(),
-          input.meetingId,
-          seg.sentenceId,
-          seg.speakerId,
-          seg.text,
-          seg.startMs,
-          seg.endMs,
-          createdAt,
-        ],
-      );
-    }
-    await d.execute("COMMIT");
   } catch (e) {
-    try {
-      await d.execute("ROLLBACK");
-    } catch {
-      /* noop */
-    }
+    // db 写失败时把孤儿 jsonl 清掉，避免下次扫描看到垃圾文件
+    void invoke("meeting_transcript_delete", { transcriptPath }).catch(() => undefined);
     throw e;
   }
+}
+
+async function writeTranscriptFile(
+  meetingId: string,
+  segments: MeetingSegmentJson[],
+): Promise<string> {
+  const payload = segments.map((s) => JSON.stringify(s)).join("\n") + (segments.length ? "\n" : "");
+  return await invoke<string>("meeting_transcript_write", {
+    meetingId,
+    date: localDateYmd(),
+    payload,
+  });
 }
 
 /** 列出最近会议（按创建时间倒序）。limit 默认 30 条。 */
 export async function listRecentMeetings(limit = 30): Promise<MeetingHistoryRow[]> {
   const d = await db();
   return await d.select<MeetingHistoryRow[]>(
-    `SELECT id, text, duration_ms, created_at, audio_path, provider_kind
+    `SELECT id, text, duration_ms, created_at, audio_path, transcript_path, provider_kind
      FROM history WHERE type = 'meeting'
      ORDER BY created_at DESC LIMIT $1`,
     [limit],
   );
 }
 
-/** 拉一场会议的全部子片段（按 sentence_id 升序）。 */
-export async function loadMeetingSegments(meetingId: string): Promise<MeetingSegmentRow[]> {
-  const d = await db();
-  return await d.select<MeetingSegmentRow[]>(
-    `SELECT id, history_id, sentence_id, speaker_id, speaker_label,
-            text, start_ms, end_ms, created_at
-     FROM history_segments WHERE history_id = $1
-     ORDER BY sentence_id ASC`,
-    [meetingId],
-  );
+/** 拉一场会议的全部子片段。读 jsonl 文件，按 sentenceId 升序返回。 */
+export async function loadMeetingSegments(transcriptPath: string): Promise<MeetingSegmentJson[]> {
+  const raw = await invoke<string>("meeting_transcript_load", { transcriptPath });
+  const out: MeetingSegmentJson[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      out.push(JSON.parse(trimmed) as MeetingSegmentJson);
+    } catch (e) {
+      console.warn("[meetings] skip malformed transcript line:", trimmed, e);
+    }
+  }
+  out.sort((a, b) => a.sentenceId - b.sentenceId);
+  return out;
 }
 
-/** 删除一场会议（联动删 audio 文件，由 SQLite cascade 删 history_segments）。 */
+/** 删除一场会议（联动删 audio + transcript 文件）。 */
 export async function deleteMeeting(meetingId: string): Promise<void> {
   const d = await db();
-  const rows = await d.select<{ audio_path: string | null }[]>(
-    "SELECT audio_path FROM history WHERE id = $1 AND type = 'meeting'",
+  const rows = await d.select<{ audio_path: string | null; transcript_path: string | null }[]>(
+    "SELECT audio_path, transcript_path FROM history WHERE id = $1 AND type = 'meeting'",
     [meetingId],
   );
   await d.execute("DELETE FROM history WHERE id = $1 AND type = 'meeting'", [meetingId]);
@@ -140,6 +128,12 @@ export async function deleteMeeting(meetingId: string): Promise<void> {
   if (audioPath) {
     void deleteRecordingFile(audioPath).catch((e) =>
       console.warn("[meetings] delete audio failed:", audioPath, e),
+    );
+  }
+  const transcriptPath = rows[0]?.transcript_path;
+  if (transcriptPath) {
+    void invoke("meeting_transcript_delete", { transcriptPath }).catch((e) =>
+      console.warn("[meetings] delete transcript failed:", transcriptPath, e),
     );
   }
 }

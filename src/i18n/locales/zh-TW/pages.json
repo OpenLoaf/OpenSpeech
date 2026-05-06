@@ -44,7 +44,7 @@
     },
     "stats_dialog": {
       "title": "數據統計",
-      "subtitle": "本機資料 · 未上傳任何伺服器",
+      "subtitle": "含聽寫 / 問 AI / 翻譯 · 資料僅本機",
       "close": "關閉",
       "range": {
         "today": "今日",

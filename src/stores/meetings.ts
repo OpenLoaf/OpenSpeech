@@ -102,6 +102,10 @@ let unsubscribe: (() => void) | null = null;
 let timerId: number | null = null;
 /** elapsedMs 的"已累计"基线，timer 在此之上每 tick 加 (Date.now() - activeStartedAt)。 */
 let elapsedBaseline = 0;
+/** stop() 整段是 await stopMeeting → stopRecordingAndSave → insertMeetingHistory，
+ *  第一个 await 期间 view 仍是 "live"，再点一下会并发跑两遍写库 → SQLite 抢锁
+ *  → 5s busy_timeout 到期回滚 → 用户看到 "database is locked"。 */
+let stopInFlight = false;
 
 function startTimer(set: (partial: Partial<MeetingsState>) => void, getStartedAt: () => number | null) {
   if (timerId !== null) return;
@@ -276,61 +280,67 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   async stop() {
     const s = get();
     if (s.view !== "live" && s.view !== "paused") return;
-    const startedAt = s.activeStartedAt;
-    if (startedAt) elapsedBaseline += Date.now() - startedAt;
-    stopTimer();
-    try { await stopMeeting(); } catch (e) { console.warn("[meetings] stop:", e); }
-    let recording: RecordingResult | null = null;
-    try { recording = await stopRecordingAndSave(); } catch (e) { console.warn("[meetings] save recording:", e); }
-    try { await stopAudioLevel(); } catch { /* noop */ }
+    if (stopInFlight) return;
+    stopInFlight = true;
+    try {
+      const startedAt = s.activeStartedAt;
+      if (startedAt) elapsedBaseline += Date.now() - startedAt;
+      stopTimer();
+      try { await stopMeeting(); } catch (e) { console.warn("[meetings] stop:", e); }
+      let recording: RecordingResult | null = null;
+      try { recording = await stopRecordingAndSave(); } catch (e) { console.warn("[meetings] save recording:", e); }
+      try { await stopAudioLevel(); } catch { /* noop */ }
 
-    const meetingId = s.meetingId;
-    const finalSegments = Array.from(get().segments.values())
-      .filter((seg) => seg.isFinal)
-      .sort((a, b) => a.sentenceId - b.sentenceId);
+      const meetingId = s.meetingId;
+      const finalSegments = Array.from(get().segments.values())
+        .filter((seg) => seg.isFinal)
+        .sort((a, b) => a.sentenceId - b.sentenceId);
 
-    // 写库（type='meeting' + history_segments）。
-    // 跳过条件：没有 meetingId（不该发生） / 没拿到任何 final 片段（用户秒停或会话失败）/
-    // retention='off'（与听写主历史一致：只保留内存）。
-    const retention = useSettingsStore.getState().general.historyRetention;
-    if (meetingId && finalSegments.length > 0 && retention !== "off") {
-      try {
-        await insertMeetingHistory({
-          meetingId,
-          text: buildPlainTranscript(finalSegments),
-          durationMs: recording?.duration_ms ?? elapsedBaseline,
-          audioPath: recording?.audio_path && recording.audio_path.length > 0
-            ? recording.audio_path
-            : null,
-          providerKind: "tencent-realtime",
-          segments: finalSegments.map((seg) => ({
-            sentenceId: seg.sentenceId,
-            speakerId: seg.speakerId,
-            text: seg.text,
-            startMs: seg.startMs,
-            endMs: seg.endMs,
-          })),
-        });
-        // 写库成功后顺手刷新最近列表
+      // 写库（type='meeting' + history_segments）。
+      // 跳过条件：没有 meetingId（不该发生） / 没拿到任何 final 片段（用户秒停或会话失败）/
+      // retention='off'（与听写主历史一致：只保留内存）。
+      const retention = useSettingsStore.getState().general.historyRetention;
+      if (meetingId && finalSegments.length > 0 && retention !== "off") {
         try {
-          const rows = await listRecentMeetings();
-          set({ recentMeetings: rows, recentLoaded: true });
+          await insertMeetingHistory({
+            meetingId,
+            text: buildPlainTranscript(finalSegments),
+            durationMs: recording?.duration_ms ?? elapsedBaseline,
+            audioPath: recording?.audio_path && recording.audio_path.length > 0
+              ? recording.audio_path
+              : null,
+            providerKind: "tencent-realtime",
+            segments: finalSegments.map((seg) => ({
+              sentenceId: seg.sentenceId,
+              speakerId: seg.speakerId,
+              text: seg.text,
+              startMs: seg.startMs,
+              endMs: seg.endMs,
+            })),
+          });
+          // 写库成功后顺手刷新最近列表
+          try {
+            const rows = await listRecentMeetings();
+            set({ recentMeetings: rows, recentLoaded: true });
+          } catch (e) {
+            console.warn("[meetings] reload recent failed after insert:", e);
+          }
         } catch (e) {
-          console.warn("[meetings] reload recent failed after insert:", e);
+          console.warn("[meetings] insert history failed:", e);
+          set({ error: { code: "history_save_failed", message: String(e) } });
         }
-      } catch (e) {
-        console.warn("[meetings] insert history failed:", e);
-        set({ error: { code: "history_save_failed", message: String(e) } });
       }
-    }
 
-    set({
-      view: "review",
-      lastRecording: recording,
-      elapsedMs: elapsedBaseline,
-      activeStartedAt: null,
-      reviewMeetingId: meetingId,
-    });
+      set({
+        view: "review",
+        lastRecording: recording,
+        elapsedMs: elapsedBaseline,
+        activeStartedAt: null,
+        reviewMeetingId: meetingId,
+      });
+    } finally {
+      stopInFlight = false;
+    }
   },
 
   async cancel() {
@@ -374,19 +384,16 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   async openMeeting(meetingId: string) {
     if (get().view !== "idle") return;
     try {
-      const rows = await loadMeetingSegments(meetingId);
-      const map = new Map<number, MeetingSegment>();
-      for (const r of rows) {
-        map.set(r.sentence_id, {
-          sentenceId: r.sentence_id,
-          speakerId: r.speaker_id,
-          text: r.text,
-          startMs: r.start_ms,
-          endMs: r.end_ms,
-          isFinal: true,
-        });
-      }
       const meta = get().recentMeetings.find((m) => m.id === meetingId);
+      const map = new Map<number, MeetingSegment>();
+      // 老数据 / 写入失败的 transcript_path 可能为空——空 map 也允许进 review，
+      // 至少能让用户看到元数据 + 删除入口，不至于卡在 idle 看不到。
+      if (meta?.transcript_path) {
+        const rows = await loadMeetingSegments(meta.transcript_path);
+        for (const r of rows) {
+          map.set(r.sentenceId, { ...r, isFinal: true });
+        }
+      }
       const dur = meta?.duration_ms ?? 0;
       elapsedBaseline = dur;
       set({

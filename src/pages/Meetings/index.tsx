@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMeetingsStore, type MeetingSegment } from "@/stores/meetings";
+import { usePlaybackStore } from "@/stores/playback";
 import type { MeetingHistoryRow } from "@/lib/meetings-history";
 import { MeetingErrorDialog } from "@/components/MeetingErrorDialog";
 
@@ -507,7 +508,16 @@ function ReviewView({ onBack }: { onBack: () => void }) {
   const elapsedMs = useMeetingsStore((s) => s.elapsedMs);
   const reviewMeetingId = useMeetingsStore((s) => s.reviewMeetingId);
   const recent = useMeetingsStore((s) => s.recentMeetings);
+  const lastRecording = useMeetingsStore((s) => s.lastRecording);
   const removeMeeting = useMeetingsStore((s) => s.removeMeeting);
+
+  const playbackId = usePlaybackStore((s) => s.playingId);
+  const isPlaying = usePlaybackStore((s) => s.isPlaying);
+  const playbackDuration = usePlaybackStore((s) => s.duration);
+  const playbackCurrent = usePlaybackStore((s) => s.currentTime);
+  const togglePlayback = usePlaybackStore((s) => s.toggle);
+  const seekPlayback = usePlaybackStore((s) => s.seek);
+  const stopPlayback = usePlaybackStore((s) => s.stop);
 
   const speakerCount = useMemo(() => {
     const set = new Set<number>();
@@ -519,6 +529,42 @@ function ReviewView({ onBack }: { onBack: () => void }) {
   const meta = reviewMeetingId ? recent.find((m) => m.id === reviewMeetingId) : null;
   const titleDate = new Date(meta?.created_at ?? Date.now()).toLocaleDateString();
   const title = `${t("pages:meetings.title")} · ${titleDate}`;
+
+  // 优先取 recent 列表里的 audio_path（历史进入），fallback 到刚停的 lastRecording（review 直进）。
+  const audioPath = meta?.audio_path ?? lastRecording?.audio_path ?? null;
+  const isThisLoaded = !!reviewMeetingId && playbackId === reviewMeetingId;
+  const isThisPlaying = isThisLoaded && isPlaying;
+  // duration 优先用 audio 实际值（loaded 后），未加载则 fallback 到 db 元数据
+  const totalSec = isThisLoaded && playbackDuration > 0 ? playbackDuration : elapsedMs / 1000;
+  const currentSec = isThisLoaded ? playbackCurrent : 0;
+  const progressRatio = totalSec > 0 ? Math.min(1, currentSec / totalSec) : 0;
+
+  const handlePlayToggle = () => {
+    if (!reviewMeetingId || !audioPath) return;
+    void togglePlayback(reviewMeetingId, audioPath);
+  };
+
+  const handleSeekClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isThisLoaded || playbackDuration <= 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    seekPlayback(ratio * playbackDuration);
+  };
+
+  // 点 segment 跳到对应时间。未加载就先 toggle 触发加载，audio 元素 'play' 后会有
+  // currentTime 同步——这里立即调一次 seek，浏览器会等加载完后定位（startMs=0 时也安全）。
+  const handleSegmentClick = (startMs: number) => {
+    if (!reviewMeetingId || !audioPath) return;
+    const sec = startMs / 1000;
+    if (!isThisLoaded) {
+      void togglePlayback(reviewMeetingId, audioPath).then(() => seekPlayback(sec));
+    } else {
+      seekPlayback(sec);
+    }
+  };
+
+  // 离开 review（unmount / 切回 list）时停止播放，避免后台残留 audio 元素继续放。
+  useEffect(() => stopPlayback, [stopPlayback]);
 
   const handleDelete = async () => {
     if (!reviewMeetingId) return onBack();
@@ -566,15 +612,26 @@ function ReviewView({ onBack }: { onBack: () => void }) {
         <div className="mx-auto flex max-w-5xl items-center gap-4 px-[4vw] py-4">
           <button
             type="button"
-            className="flex size-9 shrink-0 items-center justify-center border border-te-gray/40 bg-te-bg text-te-fg transition hover:border-te-accent hover:text-te-accent"
+            onClick={handlePlayToggle}
+            disabled={!audioPath}
+            className="flex size-9 shrink-0 items-center justify-center border border-te-gray/40 bg-te-bg text-te-fg transition hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <Play className="size-4" />
+            {isThisPlaying ? <Pause className="size-4" /> : <Play className="size-4" />}
           </button>
-          <div className="relative h-1 flex-1 bg-te-gray/40">
-            <div className="absolute top-0 left-0 h-full w-0 bg-te-accent" />
+          <div
+            onClick={handleSeekClick}
+            className={cn(
+              "relative h-1 flex-1 bg-te-gray/40",
+              isThisLoaded && playbackDuration > 0 ? "cursor-pointer" : "cursor-default",
+            )}
+          >
+            <div
+              className="absolute top-0 left-0 h-full bg-te-accent"
+              style={{ width: `${progressRatio * 100}%` }}
+            />
           </div>
           <span className="shrink-0 font-mono text-[10px] tabular-nums text-te-light-gray">
-            00:00 / {formatHMS(elapsedMs)}
+            {formatHMS(currentSec * 1000)} / {formatHMS(totalSec * 1000)}
           </span>
         </div>
       </div>
@@ -610,20 +667,33 @@ function ReviewView({ onBack }: { onBack: () => void }) {
                     {t("pages:meetings.review.transcript")} —
                   </div>
                 ) : null}
-                {segments.map((seg) => (
-                  <div
-                    key={seg.sentenceId}
-                    className="flex flex-col gap-2 border-l-2 border-transparent px-3 py-1 text-left transition hover:border-te-gray/40 hover:bg-te-surface-hover/50"
-                  >
-                    <div className="flex items-baseline gap-3">
-                      <SpeakerLabel speakerId={seg.speakerId} />
-                      <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
-                        {formatHMS(seg.startMs)}
-                      </span>
-                    </div>
-                    <p className="text-sm leading-relaxed text-te-fg">{seg.text}</p>
-                  </div>
-                ))}
+                {segments.map((seg) => {
+                  const isActive = isThisLoaded
+                    && currentSec * 1000 >= seg.startMs
+                    && currentSec * 1000 < seg.endMs;
+                  return (
+                    <button
+                      key={seg.sentenceId}
+                      type="button"
+                      onClick={() => handleSegmentClick(seg.startMs)}
+                      disabled={!audioPath}
+                      className={cn(
+                        "flex w-full flex-col gap-2 border-l-2 px-3 py-1 text-left transition disabled:cursor-default",
+                        isActive
+                          ? "border-te-accent bg-te-surface-hover/40"
+                          : "border-transparent hover:border-te-gray/40 hover:bg-te-surface-hover/50",
+                      )}
+                    >
+                      <div className="flex items-baseline gap-3">
+                        <SpeakerLabel speakerId={seg.speakerId} />
+                        <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
+                          {formatHMS(seg.startMs)}
+                        </span>
+                      </div>
+                      <p className="text-sm leading-relaxed text-te-fg">{seg.text}</p>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>

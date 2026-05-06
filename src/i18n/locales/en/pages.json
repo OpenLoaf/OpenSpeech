@@ -44,7 +44,7 @@
     },
     "stats_dialog": {
       "title": "Statistics",
-      "subtitle": "Local data · nothing leaves this device",
+      "subtitle": "Dictation · ask · translate · stays on device",
       "close": "Close",
       "range": {
         "today": "Today",
