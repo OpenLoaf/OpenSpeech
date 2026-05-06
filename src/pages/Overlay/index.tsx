@@ -205,7 +205,10 @@ export default function OverlayPage() {
       // 容器拦掉 pointer-events——固定窗口尺寸 130px 后，pill 上方约 94px 是
       // 透明的，整个容器若仍接收事件会吞掉用户点击下方 app 的鼠标。子元素
       // （pill / toast / debug strip）显式开 pointer-events-auto 接受交互。
-      className="pointer-events-none flex h-screen w-screen flex-col justify-end"
+      // pb-px：Windows 在 125% / 150% 等非整数 DPI 下，pill 的 1px 底边框若压在
+      // webview 最后一行像素上会被 DWM 透明合成 / subpixel rounding 吞掉，肉眼
+      // 看不到底边线。抬 1px 让底边框不再贴底，跨平台无感知。
+      className="pointer-events-none flex h-screen w-screen flex-col justify-end pb-px"
       style={{ transformOrigin: "50% 100%" }}
     >
       <AnimatePresence initial={false}>
