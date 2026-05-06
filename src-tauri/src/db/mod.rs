@@ -197,5 +197,14 @@ DROP TABLE IF EXISTS history_segments;
 "#,
             kind: MigrationKind::Up,
         },
+        // v9：会议 AI 纪要落盘到 `recordings/<yyyy-MM-dd>/<id>.summary.md`。
+        // history 表只存路径指针，纪要正文走文件——markdown 文本可能很长，
+        // 单行膨胀对 SQLite 检索 / VACUUM 都不友好。
+        Migration {
+            version: 9,
+            description: "history_add_summary_path",
+            sql: "ALTER TABLE history ADD COLUMN summary_path TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
