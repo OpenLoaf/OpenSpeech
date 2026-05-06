@@ -46,6 +46,16 @@
     "check_failed": "檢查更新失敗",
     "available": "發現新版本 {{version}}"
   },
+  "report": {
+    "action": "回報錯誤",
+    "sending": "回報中…",
+    "sent": "已回報",
+    "toast_success": "錯誤已回報，感謝你的回饋！",
+    "toast_failed": "回報失敗：{{message}}",
+    "toast_auth_lost": "登入狀態已失效，請重新登入後再回報",
+    "toast_network": "網路異常，無法回報，請稍後再試",
+    "toast_timeout": "請求逾時，請檢查網路後重試"
+  },
   "meetings": {
     "go_to_settings": "前往設定",
     "meeting_provider_unsupported": "目前通道不支援會議轉錄",

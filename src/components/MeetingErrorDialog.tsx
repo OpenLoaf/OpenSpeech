@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ReportErrorButton } from "@/components/ReportErrorButton";
 import { useUIStore } from "@/stores/ui";
 
 const ERROR_CODES_OPEN_SETTINGS: ReadonlySet<string> = new Set([
@@ -90,7 +91,15 @@ export function MeetingErrorDialog({ error, onClose }: Props) {
             </button>
           ) : null}
 
-          <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <div className="mt-5 flex flex-wrap items-center gap-2">
+            {error ? (
+              <ReportErrorButton
+                scope="meetings"
+                code={error.code}
+                message={error.message}
+              />
+            ) : null}
+            <div className="ml-auto flex flex-wrap justify-end gap-2">
             {showOpenSettings ? (
               <button
                 type="button"
@@ -110,6 +119,7 @@ export function MeetingErrorDialog({ error, onClose }: Props) {
             >
               {t("common:actions.close", { defaultValue: "Close" })}
             </button>
+            </div>
           </div>
         </div>
       </DialogContent>

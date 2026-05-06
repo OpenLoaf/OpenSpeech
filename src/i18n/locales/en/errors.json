@@ -46,6 +46,16 @@
     "check_failed": "Failed to check for updates",
     "available": "New version {{version}} available"
   },
+  "report": {
+    "action": "Report error",
+    "sending": "Reporting…",
+    "sent": "Reported",
+    "toast_success": "Error reported. Thanks for the feedback!",
+    "toast_failed": "Report failed: {{message}}",
+    "toast_auth_lost": "Session expired. Please sign in again before reporting.",
+    "toast_network": "Network error. Couldn't send the report, please try again later.",
+    "toast_timeout": "Request timed out. Check your network and try again."
+  },
   "meetings": {
     "go_to_settings": "Open settings",
     "meeting_provider_unsupported": "Channel doesn't support meeting transcription",

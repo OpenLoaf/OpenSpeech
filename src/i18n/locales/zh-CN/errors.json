@@ -46,6 +46,16 @@
     "check_failed": "检查更新失败",
     "available": "发现新版本 {{version}}"
   },
+  "report": {
+    "action": "上报错误",
+    "sending": "上报中…",
+    "sent": "已上报",
+    "toast_success": "错误已上报，感谢反馈！",
+    "toast_failed": "上报失败：{{message}}",
+    "toast_auth_lost": "登录状态已失效，请重新登录后再上报",
+    "toast_network": "网络异常，无法上报，请稍后再试",
+    "toast_timeout": "请求超时，请检查网络后重试"
+  },
   "meetings": {
     "go_to_settings": "前往设置",
     "meeting_provider_unsupported": "当前通道不支持会议转录",
