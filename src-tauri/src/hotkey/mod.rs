@@ -419,7 +419,7 @@ pub fn esc_capture_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
             log::warn!("[hotkey] esc_capture_start failed: {e:?}");
             format!("esc_capture_start: {e}")
         })?;
-    log::warn!("[hotkey] esc_capture_start: Esc swallowed from foreground app");
+    log::debug!("[hotkey] esc_capture_start: Esc swallowed from foreground app");
     Ok(())
 }
 
@@ -434,6 +434,6 @@ pub fn esc_capture_stop<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         log::warn!("[hotkey] esc_capture_stop failed: {e:?}");
         format!("esc_capture_stop: {e}")
     })?;
-    log::warn!("[hotkey] esc_capture_stop: Esc returned to foreground");
+    log::debug!("[hotkey] esc_capture_stop: Esc returned to foreground");
     Ok(())
 }

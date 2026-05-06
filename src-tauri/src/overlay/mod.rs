@@ -155,7 +155,7 @@ fn position_to_bottom_center<R: Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let origin_y = work_area.position.y as f64 / scale;
     let x = origin_x + (logical_w - WIDTH) / 2.0;
     let y = origin_y + logical_h - HEIGHT - BOTTOM_MARGIN;
-    log::warn!(
+    log::debug!(
         "[overlay] target monitor name={:?} work_area_origin=({},{}) work_area_size=({}x{}) scale={} → logical_pos=({:.1},{:.1})",
         monitor.name(),
         work_area.position.x,
@@ -176,7 +176,7 @@ fn active_monitor<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Option<Monito
     if let Ok(cursor) = app.cursor_position() {
         let cx = cursor.x;
         let cy = cursor.y;
-        log::warn!("[overlay] cursor physical=({cx},{cy})");
+        log::debug!("[overlay] cursor physical=({cx},{cy})");
         for m in &monitors {
             let pos = m.position();
             let sz = m.size();
@@ -205,7 +205,7 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         // 可能变化），不再 set_size——避免 NSWindow setContentSize 引起的整窗重绘。
         position_to_bottom_center(&w)?;
         w.show()?;
-        log::warn!("[overlay] show");
+        log::debug!("[overlay] show");
     }
     Ok(())
 }
@@ -216,7 +216,7 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         let _ = w.set_position(LogicalPosition::new(OFFSCREEN_POSITION, OFFSCREEN_POSITION));
         w.hide()?;
-        log::warn!("[overlay] hide");
+        log::debug!("[overlay] hide");
     }
     Ok(())
 }
