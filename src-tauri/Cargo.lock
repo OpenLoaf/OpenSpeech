@@ -4114,7 +4114,7 @@ dependencies = [
 
 [[package]]
 name = "openspeech"
-version = "0.2.30-beta.12"
+version = "0.2.30-beta.13"
 dependencies = [
  "async-openai",
  "async-trait",

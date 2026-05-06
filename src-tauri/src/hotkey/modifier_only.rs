@@ -112,6 +112,51 @@ fn rdev_key_to_mod(k: Key) -> Option<Mod> {
     }
 }
 
+/// 用 OS 同步 API 查当前**真实**按下的修饰键集合，用来在每个 rdev 事件入口
+/// 校准内部 `pressed` 状态——根治 rdev 漏报 release 导致 modifier 永久卡住
+/// （日志特征：连续多事件 `pressed_before={Meta}` 不消失，下一次 Ctrl press
+/// 立即被算成 Ctrl+Meta 触发 PTT）。
+///
+/// Windows：`GetAsyncKeyState` 返回最近一次查询以来的物理按键状态，无关 hook
+/// 是否漏报；高位 1 = 当前按下。VK_CONTROL/VK_SHIFT/VK_MENU 已合并左右键，
+/// VK_LWIN/VK_RWIN 需要分别查。
+///
+/// Fn 键 Windows 没标准 VK，跳过：返回的集合不含 Fn，调用方需保留原 pressed
+/// 里 Fn 的状态（`Fn` 仅 macOS 实际可用，Windows 上从不进入 pressed）。
+///
+/// 非 Windows 平台返回 None，调用方走原 ghost 兜底逻辑。macOS 后续可加
+/// CGEventSourceFlagsState 的实现。
+#[cfg(target_os = "windows")]
+fn query_real_modifier_state() -> Option<HashSet<Mod>> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+    fn down(vk: i32) -> bool {
+        // i16 的高位（0x8000）= 当前按下；低位（0x0001）= 自上次查询以来按过，
+        // 我们只关心当前是否按住，所以只看高位。
+        (unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000) != 0
+    }
+    let mut s: HashSet<Mod> = HashSet::new();
+    if down(VK_CONTROL as i32) {
+        s.insert(Mod::Ctrl);
+    }
+    if down(VK_SHIFT as i32) {
+        s.insert(Mod::Shift);
+    }
+    if down(VK_MENU as i32) {
+        s.insert(Mod::Alt);
+    }
+    if down(VK_LWIN as i32) || down(VK_RWIN as i32) {
+        s.insert(Mod::Meta);
+    }
+    Some(s)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn query_real_modifier_state() -> Option<HashSet<Mod>> {
+    None
+}
+
 /// 把 rdev `Key` 归一化成 UI Events KeyboardEvent.code 兼容的字符串，让前端
 /// 录入组件不用再区分"事件源是 DOM 还是 Rust"。Fn 用约定 token `"Fn"`（DOM 里
 /// 不存在这个 code，我们自定义）。未知键 fallback 到 Debug 表示，录入 UI 会拒绝。
@@ -340,6 +385,22 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 _ => return,
             };
 
+            // 诊断 trace：每个进入 rdev callback 的修饰键事件都打一行，方便用户复现
+            // "按某个键导致主窗激活"时，回看日志判断到底是 binding 命中、ghost 路径，
+            // 还是根本没进 hotkey 子系统。仅修饰键 + Fn 进 trace（与 should_emit_preview
+            // 同集合），其它键不打——按 KeyPreview 注释的隐私 / 噪声原则。
+            if rdev_key_to_mod(key).is_some() {
+                let pressed_snapshot = state_clone
+                    .lock()
+                    .ok()
+                    .map(|s| format!("{:?}", s.pressed))
+                    .unwrap_or_else(|| "<lock-poisoned>".to_string());
+                log::debug!(
+                    "[modifier_only] event key={key:?} phase={} pressed_before={pressed_snapshot}",
+                    if is_press { "press" } else { "release" },
+                );
+            }
+
             // 空闲超阈值则视为状态可能与系统不同步，先 reset 再处理本次事件。
             let stale = {
                 let mut last = match last_event_at.lock() {
@@ -416,87 +477,124 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                     Err(_) => return, // poisoned
                 };
 
-                // rdev 在 enigo 合成事件 / cmd-tab / 空间切换 / CGEventTap 短暂掉线
-                // 期间会丢事件。两类不一致信号 + 各自的恢复策略：
-                //
-                //   1) ghost release（release 但 pressed 不含此键）—— 漏了 press。
-                //   2) ghost press（press 但 pressed 已含此键）—— 漏了 release。
-                //
-                // 旧实现见 git blame：检测到任意 ghost 就 `pressed.clear()` +
-                // `active_ids.clear()`。这会把用户**实际还按着的其他 modifier** 一并
-                // 抹掉，让状态机永远凑不齐多 modifier binding。日志重现：用户按 Ctrl+Fn
-                // 但 Ctrl press 被 rdev 漏，状态变成 pressed={Fn}；松开 Ctrl 时 ghost
-                // release 把 Fn 也清了 → pressed={Ctrl} → subset 不命中 binding
-                // {Ctrl,Fn} → 0 press；用户感知为"第一次按完全没反应、得再按一次"。
-                //
-                // 新实现：ghost 检测后**不重置 pressed/active_ids**，只在 ghost release
-                // 时 synthesize 一次 tap（press + release），让 release 时刻能补一次
-                // 完整 binding 触发；ghost press 直接走下面的正常路径（insert 是 no-op，
-                // 不改变集合）。其他真实按着的 modifier 状态不丢。
                 let mut newly_pressed: Vec<(BindingId, String)> = Vec::new();
                 let mut newly_released: Vec<(BindingId, String)> = Vec::new();
 
-                let ghost_release = !is_press && !s.pressed.contains(&m);
-                let ghost_press = is_press && s.pressed.contains(&m);
-                let is_ghost = ghost_release || ghost_press;
-
-                if is_ghost {
-                    log::warn!(
-                        "[modifier_only] ghost {phase} on {key:?} \
-                         (pressed={:?}, active={:?}) — preserving state",
-                        s.pressed,
-                        s.active_ids,
-                        phase = if ghost_press { "press" } else { "release" },
-                    );
-                }
-
-                if ghost_release {
-                    // 合成"丢失的 press"：临时把 m insert 进 pressed，subset 匹配
-                    // bindings——任何 mods ⊆ pressed 的 binding 都算命中。pressed 里
-                    // 已有的其他真实 modifier 留着，让多键 binding 能正确命中。
-                    s.pressed.insert(m);
-                    let virtual_matching: HashSet<BindingId> = s
-                        .bindings
-                        .iter()
-                        .filter(|b| !b.mods.is_empty() && b.mods.is_subset(&s.pressed))
-                        .map(|b| b.id)
-                        .collect();
-                    let to_synth: Vec<(BindingId, String)> = s
-                        .bindings
-                        .iter()
-                        .filter(|b| {
-                            virtual_matching.contains(&b.id)
-                                && !s.active_ids.contains(&b.id)
-                        })
-                        .map(|b| (b.id, b.id_str.clone()))
-                        .collect();
-                    for (id, _) in &to_synth {
-                        s.active_ids.insert(*id);
+                // 优先用 OS 同步 API 校准 pressed（目前 Windows 实现，macOS/Linux 后续）。
+                // 校准能根治 rdev 漏报带来的"幽灵 modifier 卡住"——典型症状：日志里
+                // 连续多个事件 `pressed_before={Meta}` 不消失，下一次 Ctrl press 立刻
+                // 被算成 Ctrl+Meta 命中 PTT 错误响声。校准后 pressed 直接等于 OS 真实
+                // 物理状态（含本次事件之后的结果），无需 ghost 检测 + insert/remove。
+                let os_synced = if let Some(real) = query_real_modifier_state() {
+                    // Fn 仅 macOS 走 rdev::Key::Function 路径，Windows 永远不会进入
+                    // pressed；此处保留 had_fn 是面向"将来 macOS 也接入校准"的预留。
+                    let had_fn = s.pressed.contains(&Mod::Fn);
+                    let prev = s.pressed.clone();
+                    s.pressed = real;
+                    if had_fn {
+                        s.pressed.insert(Mod::Fn);
                     }
-                    let synth_count = to_synth.len();
-                    newly_pressed.extend(to_synth);
-                    let bindings_dump: Vec<String> = s
-                        .bindings
-                        .iter()
-                        .map(|b| format!("{}:{:?}", b.id_str, b.mods))
-                        .collect();
-                    log::warn!(
-                        "[modifier_only] ghost release recovery on {key:?} → \
-                         synthesized {synth_count} press (pressed={:?}, active={:?}, \
-                         bindings_count={}, bindings=[{}])",
-                        s.pressed,
-                        s.active_ids,
-                        bindings_dump.len(),
-                        bindings_dump.join(", "),
-                    );
-                    // pressed.insert 已经做了，跳过下面的"正常 pressed 更新"——
-                    // 直接做 release：从 pressed 移除让 release 路径正常执行。
-                }
-
-                if is_press {
-                    s.pressed.insert(m);
+                    if prev != s.pressed {
+                        // chord 中第二个键尚未到达 rdev 时，OS 先于 rdev 知道全集，
+                        // correction 表现为"补进"——这是预期视角差，非 rdev bug。
+                        // 真信号是反向：内部有键但 OS 已无 → rdev 漏报 release，
+                        // 幽灵 modifier 被纠正掉。只在这种情况打 WARN。
+                        let removed: HashSet<Mod> =
+                            prev.difference(&s.pressed).cloned().collect();
+                        if !removed.is_empty() {
+                            log::warn!(
+                                "[modifier_only] OS sync removed stale modifier(s): {:?} (prev={:?} → {:?}, event {:?} {})",
+                                removed,
+                                prev,
+                                s.pressed,
+                                key,
+                                if is_press { "press" } else { "release" },
+                            );
+                        } else {
+                            log::debug!(
+                                "[modifier_only] OS sync filled in: {:?} → {:?} (event {:?} {})",
+                                prev,
+                                s.pressed,
+                                key,
+                                if is_press { "press" } else { "release" },
+                            );
+                        }
+                    }
+                    true
                 } else {
-                    s.pressed.remove(&m);
+                    false
+                };
+
+                if !os_synced {
+                    // rdev 在 enigo 合成事件 / cmd-tab / 空间切换 / CGEventTap 短暂掉线
+                    // 期间会丢事件。两类不一致信号 + 各自的恢复策略：
+                    //
+                    //   1) ghost release（release 但 pressed 不含此键）—— 漏了 press。
+                    //   2) ghost press（press 但 pressed 已含此键）—— 漏了 release。
+                    //
+                    // 仅在没有 OS 校准时走此分支（macOS/Linux 当前路径）。
+                    let ghost_release = !is_press && !s.pressed.contains(&m);
+                    let ghost_press = is_press && s.pressed.contains(&m);
+                    let is_ghost = ghost_release || ghost_press;
+
+                    if is_ghost {
+                        log::warn!(
+                            "[modifier_only] ghost {phase} on {key:?} \
+                             (pressed={:?}, active={:?}) — preserving state",
+                            s.pressed,
+                            s.active_ids,
+                            phase = if ghost_press { "press" } else { "release" },
+                        );
+                    }
+
+                    if ghost_release {
+                        // 合成"丢失的 press"：临时把 m insert 进 pressed，subset 匹配
+                        // bindings——任何 mods ⊆ pressed 的 binding 都算命中。pressed 里
+                        // 已有的其他真实 modifier 留着，让多键 binding 能正确命中。
+                        s.pressed.insert(m);
+                        let virtual_matching: HashSet<BindingId> = s
+                            .bindings
+                            .iter()
+                            .filter(|b| !b.mods.is_empty() && b.mods.is_subset(&s.pressed))
+                            .map(|b| b.id)
+                            .collect();
+                        let to_synth: Vec<(BindingId, String)> = s
+                            .bindings
+                            .iter()
+                            .filter(|b| {
+                                virtual_matching.contains(&b.id)
+                                    && !s.active_ids.contains(&b.id)
+                            })
+                            .map(|b| (b.id, b.id_str.clone()))
+                            .collect();
+                        for (id, _) in &to_synth {
+                            s.active_ids.insert(*id);
+                        }
+                        let synth_count = to_synth.len();
+                        newly_pressed.extend(to_synth);
+                        let bindings_dump: Vec<String> = s
+                            .bindings
+                            .iter()
+                            .map(|b| format!("{}:{:?}", b.id_str, b.mods))
+                            .collect();
+                        log::warn!(
+                            "[modifier_only] ghost release recovery on {key:?} → \
+                             synthesized {synth_count} press (pressed={:?}, active={:?}, \
+                             bindings_count={}, bindings=[{}])",
+                            s.pressed,
+                            s.active_ids,
+                            bindings_dump.len(),
+                            bindings_dump.join(", "),
+                        );
+                        // pressed.insert 已经做了，跳过下面的"正常 pressed 更新"——
+                        // 直接做 release：从 pressed 移除让 release 路径正常执行。
+                    }
+
+                    if is_press {
+                        s.pressed.insert(m);
+                    } else {
+                        s.pressed.remove(&m);
+                    }
                 }
 
                 // 正常路径用 exact match 保留"修饰键集合完全相等"的语义；ghost 路径
