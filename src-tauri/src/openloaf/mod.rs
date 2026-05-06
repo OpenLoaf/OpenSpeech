@@ -620,6 +620,8 @@ pub struct UserProfile {
     pub email: Option<String>,
     pub is_admin: bool,
     pub is_internal: Option<bool>,
+    /// 登录方式：google / wechat / ...（服务端原样透传）。前端用它决定身份行展示邮箱还是昵称。
+    pub provider: String,
 }
 
 fn membership_level_to_str(level: UserMembershipLevel) -> &'static str {
@@ -642,6 +644,7 @@ impl From<UserSelf> for UserProfile {
             email: u.email,
             is_admin: u.is_admin,
             is_internal: u.is_internal,
+            provider: u.provider,
         }
     }
 }
