@@ -15,7 +15,9 @@
 // 后续接 cpal：在 audio/mod.rs 的 push_to_stt_pcm16 旁边再加一行 fanout 到这里
 // （`crate::meetings::try_send_audio_pcm16`），保持 dictation 主路径不被打扰。
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -81,17 +83,20 @@ pub struct StatusPayload {
 }
 
 /// 全局活动会议状态。一次只允许一场会议——MVP 不做多会议并行。
+///
+/// session 的所有权交给 worker 线程独占（详见 `event_pump`）：上一版让 worker
+/// 持全局锁等 next_event，audio fanout 的 try_lock 在 200ms 窗口内全部失败，
+/// 真实场景下连一帧 PCM 都送不到，握手成功 15s 后必触发腾讯 4008。
 struct ActiveMeeting {
     meeting_id: String,
     #[allow(dead_code)]
     provider_id: String,
-    session: Box<dyn MeetingSession>,
+    audio_tx: Sender<Vec<u8>>,
+    paused: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     started_at: Instant,
     /// 累计运行毫秒（包含历史 pause 区间之间的活动时间）。
     elapsed_baseline_ms: u64,
-    /// 是否处于暂停态：暂停时 send_audio 走 noop，事件轮询继续运行。
-    paused: bool,
 }
 
 fn active_slot() -> &'static Mutex<Option<ActiveMeeting>> {
@@ -206,35 +211,36 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         },
     );
 
-    // worker：把 session 的事件 emit 到前端。session 此时已经在 active slot 里，
-    // worker 拿不到所有权——所以我们用一个独立的 channel：worker 借助一个
-    // 共享的 Mutex 拉 next_event。
-    let active = ActiveMeeting {
-        meeting_id: args.meeting_id.clone(),
-        provider_id,
-        session,
-        worker: None,
-        started_at: Instant::now(),
-        elapsed_baseline_ms: 0,
-        paused: false,
-    };
-    {
-        let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
-        *slot = Some(active);
-    }
+    let paused = Arc::new(AtomicBool::new(false));
+    let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>();
 
     let app_for_worker = app.clone();
     let meeting_id_for_worker = args.meeting_id.clone();
+    let paused_for_worker = paused.clone();
     let handle = thread::Builder::new()
         .name("openspeech-meetings".into())
-        .spawn(move || event_pump(app_for_worker, meeting_id_for_worker))
+        .spawn(move || {
+            event_pump(
+                app_for_worker,
+                meeting_id_for_worker,
+                session,
+                audio_rx,
+                paused_for_worker,
+            )
+        })
         .map_err(|e| format!("spawn meetings worker: {e}"))?;
 
     {
         let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
-        if let Some(a) = slot.as_mut() {
-            a.worker = Some(handle);
-        }
+        *slot = Some(ActiveMeeting {
+            meeting_id: args.meeting_id.clone(),
+            provider_id,
+            audio_tx,
+            paused,
+            worker: Some(handle),
+            started_at: Instant::now(),
+            elapsed_baseline_ms: 0,
+        });
     }
 
     let _ = app.emit(
@@ -251,25 +257,24 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
 
 /// audio callback / 测试代码喂 PCM16 LE 帧的入口。无激活会议时无 op。
 /// 暂停态时丢帧（不是错误，前端 pause 后 cpal 仍在跑），避免污染识别。
+/// 锁内只 clone Sender 句柄 + 读 atomic，零阻塞：worker 不再共享这把锁。
 pub fn try_send_audio_pcm16(pcm16: Vec<u8>) {
-    let Ok(mut slot) = active_slot().try_lock() else {
+    let Ok(slot) = active_slot().try_lock() else {
         return;
     };
-    let Some(a) = slot.as_mut() else { return };
-    if a.paused {
+    let Some(a) = slot.as_ref() else { return };
+    if a.paused.load(Ordering::Relaxed) {
         return;
     }
-    if let Err(e) = a.session.send_audio(pcm16) {
-        log::warn!("[meetings] send_audio failed: {e}");
-    }
+    let _ = a.audio_tx.send(pcm16);
 }
 
 #[tauri::command]
 pub fn meeting_pause<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
     let a = slot.as_mut().ok_or("no active meeting")?;
-    if !a.paused {
-        a.paused = true;
+    if !a.paused.load(Ordering::Relaxed) {
+        a.paused.store(true, Ordering::Relaxed);
         // 累计已运行的时间作为 baseline，下一次 resume 重新计时。
         a.elapsed_baseline_ms += a.started_at.elapsed().as_millis() as u64;
     }
@@ -287,8 +292,8 @@ pub fn meeting_pause<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 pub fn meeting_resume<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
     let a = slot.as_mut().ok_or("no active meeting")?;
-    if a.paused {
-        a.paused = false;
+    if a.paused.load(Ordering::Relaxed) {
+        a.paused.store(false, Ordering::Relaxed);
         a.started_at = Instant::now();
     }
     let payload = StatusPayload {
@@ -312,9 +317,13 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
     let (worker_handle, meeting_id, total_ms) = {
         let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
         let mut a = slot.take().ok_or("no active meeting")?;
-        let _ = a.session.finish();
         let total_ms = a.elapsed_baseline_ms
-            + if a.paused { 0 } else { a.started_at.elapsed().as_millis() as u64 };
+            + if a.paused.load(Ordering::Relaxed) {
+                0
+            } else {
+                a.started_at.elapsed().as_millis() as u64
+            };
+        // drop a → drop audio_tx → worker 在 try_recv 拿到 Disconnected 后调 session.finish()
         (a.worker.take(), a.meeting_id, total_ms)
     };
 
@@ -336,16 +345,43 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
 }
 
 // ---------- Worker：把 vendor 事件转成前端 emit ----------
-
-fn event_pump<R: Runtime>(app: AppHandle<R>, meeting_id: String) {
+//
+// 单线程独占 session：从 audio_rx 排空所有待发音频帧，再短超时拉一个事件 emit。
+// 不持全局锁——audio fanout 的 try_lock 现在永远拿得到。
+fn event_pump<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    mut session: Box<dyn MeetingSession>,
+    audio_rx: Receiver<Vec<u8>>,
+    paused: Arc<AtomicBool>,
+) {
+    let mut finished = false;
+    let mut finish_deadline: Option<Instant> = None;
     loop {
-        let ev = {
-            let Ok(mut slot) = active_slot().lock() else {
-                return;
-            };
-            let Some(a) = slot.as_mut() else { return };
-            a.session.next_event(Duration::from_millis(200))
-        };
+        // 1) 排空 audio queue：尽量把堆积的帧一次性灌进 session，避免节奏被打散。
+        loop {
+            match audio_rx.try_recv() {
+                Ok(pcm) => {
+                    if !paused.load(Ordering::Relaxed) {
+                        if let Err(e) = session.send_audio(pcm) {
+                            log::warn!("[meetings] send_audio failed: {e}");
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if !finished {
+                        let _ = session.finish();
+                        finished = true;
+                        finish_deadline = Some(Instant::now() + Duration::from_secs(15));
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 2) 短超时拉一个事件——保证频繁回到第 1 步排音频。
+        let ev = session.next_event(Duration::from_millis(50));
         match ev {
             MeetingEvent::SegmentPartial(s) => {
                 let _ = app.emit(
@@ -403,14 +439,14 @@ fn event_pump<R: Runtime>(app: AppHandle<R>, meeting_id: String) {
             MeetingEvent::DecodeRecoverable(m) => {
                 log::warn!("[meetings] decode recoverable: {m}");
             }
-            MeetingEvent::Idle => {
-                // 没事件 —— 检查 slot 是否还在。
-                let Ok(slot) = active_slot().lock() else {
-                    return;
-                };
-                if slot.as_ref().map(|a| a.meeting_id != meeting_id).unwrap_or(true) {
-                    return;
-                }
+            MeetingEvent::Idle => {}
+        }
+
+        // 3) 已 finish 但服务端不发 EndOfStream（极少见）—— 兜底超时退出。
+        if let Some(d) = finish_deadline {
+            if Instant::now() > d {
+                log::warn!("[meetings] finish timeout, exiting worker");
+                return;
             }
         }
     }

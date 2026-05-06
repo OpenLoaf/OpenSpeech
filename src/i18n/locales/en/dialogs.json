@@ -1,4 +1,9 @@
 {
+  "hotkey_conflict": {
+    "title": "Hotkey conflict",
+    "description_one": "The shortcut below couldn't be registered — it may be claimed by the system or another app. Bind a new combo right here.",
+    "description_other": "{{count}} shortcuts couldn't be registered — they may be claimed by the system or another app. Bind new combos right here."
+  },
   "login": {
     "title": "Sign in to OpenLoaf",
     "openloaf_note": "OpenSpeech is an OpenLoaf product — one OpenLoaf account works across the family.",
@@ -75,13 +80,17 @@
   },
   "hotkey_field": {
     "press_new": "Press a new hotkey...",
+    "recording_hint": "ESC to cancel · auto-exit in 4s",
     "clear_title": "Clear",
     "clear_aria": "Clear hotkey",
     "error_prefix": "ERROR",
     "error_illegal_combo": "Illegal combination",
     "conflict_with": "Already used by \"{{name}}\"",
     "replace": "Replace",
-    "cancel": "Cancel"
+    "rebind": "Re-record",
+    "cancel": "Cancel",
+    "replaced_toast": "Replaced \"{{name}}\"'s previous binding",
+    "undo": "Undo"
   },
   "hotkey_preview": {
     "default_title": "Dictation hotkey / PUSH-TO-TALK",

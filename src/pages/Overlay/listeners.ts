@@ -27,6 +27,16 @@ interface DebugPayload {
   endAtUnixMs?: number;
 }
 
+interface TranslatePayload {
+  active: boolean;
+  /** 当前界面语言下的目标语言全称，如 "英文" / "English"。active=false 时无意义。 */
+  lang?: string;
+}
+
+interface ModeSwitchHintPayload {
+  kind: "translate" | "dictation";
+}
+
 export interface OverlayHandlers {
   onFsm: (p: FsmPayload) => void;
   onToast: (p: ToastPayload) => void;
@@ -35,6 +45,10 @@ export interface OverlayHandlers {
   onEscArmed: () => void;
   onEscDisarmed: () => void;
   onDebug: (p: DebugPayload) => void;
+  /** 翻译听写激活态变化——用于在 pill 上方挂"翻译为<目标语言>"独立 indicator。 */
+  onTranslate: (p: TranslatePayload) => void;
+  /** 录音中跨模式切换提示——overlay pill 中心临时显示"切换到 X 模式" ~2s。 */
+  onModeSwitchHint: (p: ModeSwitchHintPayload) => void;
 }
 
 /**
@@ -93,6 +107,18 @@ export function useOverlayListeners(handlers: OverlayHandlers) {
     pending.push(
       listen<DebugPayload>("openspeech://debug-recording", (e) => {
         if (alive) handlersRef.current.onDebug(e.payload);
+      }),
+    );
+
+    pending.push(
+      listen<TranslatePayload>("openspeech://translate-active", (e) => {
+        if (alive) handlersRef.current.onTranslate(e.payload);
+      }),
+    );
+
+    pending.push(
+      listen<ModeSwitchHintPayload>("openspeech://mode-switch-hint", (e) => {
+        if (alive) handlersRef.current.onModeSwitchHint(e.payload);
       }),
     );
 

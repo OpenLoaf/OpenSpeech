@@ -5,7 +5,22 @@
     "close_result": "Close result"
   },
   "translate": {
-    "target": "Translate target: {{lang}}"
+    "target": "Translate target: {{lang}}",
+    "mode_label": "Translate mode",
+    "lang": {
+      "en": "English",
+      "zh": "Chinese",
+      "zh-TW": "Traditional Chinese",
+      "ja": "Japanese",
+      "ko": "Korean",
+      "fr": "French",
+      "de": "German",
+      "es": "Spanish"
+    }
+  },
+  "mode_switch": {
+    "to_translate": "Switched to translate mode",
+    "to_dictation": "Switched to dictation mode"
   },
   "status": {
     "error_fallback": "Error",
@@ -37,6 +52,30 @@
       "result": "Or click ✕ to dismiss"
     },
     "placeholder": "Live transcript will appear here…",
+    "utterance_timer_label": "UTTERANCE",
+    "result_label": {
+      "original": "Original",
+      "translation": "Translation"
+    },
+    "result_stats": {
+      "recording": "Recording",
+      "response": "Response"
+    },
+    "mode_action": {
+      "dictate": "Dictate",
+      "translate": "Translate"
+    },
+    "mode_segment": {
+      "utterance": "Utterance",
+      "realtime": "Realtime"
+    },
+    "action": {
+      "stop": "Stop & transcribe",
+      "stop_translate": "Stop & translate",
+      "cancel": "Cancel recording",
+      "retry_hint": "Press the hotkey to retry",
+      "kbd_esc": "Esc"
+    },
     "meter": {
       "live": "LIVE",
       "chars": "{{count}} CHARS",
@@ -131,7 +170,6 @@
     "stt_4xx": "SaaS auth failed (4xx)",
     "stt_mic_not_ready": "Microphone not ready",
     "stt_network": "Network unreachable",
-    "register_failed": "Registration failed: {{id}} ({{error}})",
     "sync_hotkey_failed": "Failed to sync hotkeys to Rust: {{error}}",
     "preflight_permission_denied": "Microphone permission not granted",
     "preflight_no_device": "No microphone available",

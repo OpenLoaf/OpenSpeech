@@ -141,6 +141,19 @@ const bootPromise = (async () => {
       else console.warn("[boot] unknown overlay-toast-action:", key);
     });
 
+    // Rust apply_bindings 注册失败按 binding 维度逐条 emit；ui store 内部聚合
+    // 短窗口内的 push，最终由 HotkeyConflictDialog 一次列出全部冲突。
+    void listen<{ id: string; error: string }>(
+      "openspeech://hotkey/register-failed",
+      (evt) => {
+        console.warn("[boot] hotkey register-failed:", evt.payload);
+        useUIStore.getState().pushHotkeyConflict({
+          id: String(evt.payload?.id ?? ""),
+          error: String(evt.payload?.error ?? ""),
+        });
+      },
+    );
+
     await useRecordingStore.getState().syncBindings(
       useHotkeysStore.getState().bindings,
     );

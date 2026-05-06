@@ -17,6 +17,8 @@ import {
   DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS,
   DEFAULT_AI_POLISH_SYSTEM_PROMPTS,
   DEFAULT_POLISH_SCENARIOS,
+  hasUnverifiedActiveDictation,
+  hasUnverifiedActiveAiRefine,
   type PolishScenario,
 } from "@/stores/settings";
 import { resolveLang } from "@/i18n";
@@ -59,15 +61,16 @@ import {
   checkForUpdateForChannel,
   installUpdateWithProgress,
 } from "@/lib/updaterInstall";
-import { HotkeyField } from "@/components/HotkeyField";
+import { HotkeyBinder } from "@/components/HotkeyBinder";
 import { useHotkeysStore } from "@/stores/hotkeys";
-import {
-  BINDING_IDS,
-  findConflict,
-  type BindingId,
-  type HotkeyBinding,
-} from "@/lib/hotkey";
 import { detectPlatform } from "@/lib/platform";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 /* ──────────────────────────────────────────────────────────────── */
 /*  Types                                                             */
@@ -296,59 +299,6 @@ function LevelMeter({ peak }: { peak: number }) {
 }
 
 /* ──────────────────────────────────────────────────────────────── */
-/*  Hotkeys section                                                   */
-/* ──────────────────────────────────────────────────────────────── */
-
-const UNDO_WINDOW_MS = 8000;
-
-function HotkeysSection() {
-  const bindings = useHotkeysStore((s) => s.bindings);
-  const setBinding = useHotkeysStore((s) => s.setBinding);
-  const recordUndo = useHotkeysStore((s) => s.recordUndo);
-
-  const commitChange = async (
-    id: BindingId,
-    newValue: HotkeyBinding | null,
-  ) => {
-    const conflictId =
-      newValue && findConflict(bindings, newValue, id);
-    if (conflictId) {
-      const replacedOld = bindings[conflictId];
-      await setBinding(conflictId, null);
-      await setBinding(id, newValue);
-      await recordUndo({
-        replacedId: conflictId,
-        oldValue: replacedOld,
-        changedId: id,
-        newValue,
-        expiresAt: Date.now() + UNDO_WINDOW_MS,
-      });
-      return;
-    }
-    await setBinding(id, newValue);
-  };
-
-  const handleCheckConflict = (candidate: HotkeyBinding, excludeId: BindingId) =>
-    findConflict(bindings, candidate, excludeId);
-
-  return (
-    <div className="divide-y divide-te-gray/30">
-      {BINDING_IDS.map((id) => (
-        <HotkeyField
-          key={id}
-          id={id}
-          value={bindings[id]}
-          onChange={(v) => void commitChange(id, v)}
-          onConflictCheck={(c) => handleCheckConflict(c, id)}
-          // 听写至少保留一个可用绑定：不允许清空
-          canClear={id !== "dictate_ptt"}
-        />
-      ))}
-    </div>
-  );
-}
-
-/* ──────────────────────────────────────────────────────────────── */
 /*  Tab content                                                       */
 /* ──────────────────────────────────────────────────────────────── */
 
@@ -503,10 +453,11 @@ function GeneralTab() {
 function HotkeysTab() {
   const { t } = useTranslation("settings");
   const resetAll = useHotkeysStore((s) => s.resetAll);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
-  const handleResetAll = async () => {
-    if (!window.confirm(t("hotkeys.reset_all_confirm"))) return;
+  const handleConfirmReset = async () => {
     await resetAll();
+    setResetConfirmOpen(false);
     toast.success(t("hotkeys.reset_all_done"));
   };
 
@@ -521,14 +472,68 @@ function HotkeysTab() {
         </div>
         <button
           type="button"
-          onClick={() => void handleResetAll()}
+          onClick={() => setResetConfirmOpen(true)}
           className="border border-te-gray/40 bg-te-surface px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.15em] text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
         >
           {t("hotkeys.reset_all")}
         </button>
       </div>
-      <HotkeysSection />
+      <HotkeyBinder size="comfortable" />
+
+      <ResetHotkeysConfirmDialog
+        open={resetConfirmOpen}
+        onOpenChange={setResetConfirmOpen}
+        onConfirm={() => void handleConfirmReset()}
+      />
     </div>
+  );
+}
+
+function ResetHotkeysConfirmDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation("settings");
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        showCloseButton={false}
+        className="flex w-[92vw] max-w-sm flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 sm:max-w-sm"
+      >
+        <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
+          <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
+            {t("hotkeys.reset_all")}
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            {t("hotkeys.reset_all_confirm")}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="px-5 py-5 font-sans text-sm text-te-light-gray">
+          {t("hotkeys.reset_all_confirm")}
+        </div>
+        <div className="flex items-stretch border-t border-te-dialog-border">
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="flex-1 border-r border-te-dialog-border px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:bg-te-surface-hover hover:text-te-fg"
+          >
+            {t("common:actions.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="flex-1 bg-te-accent px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
+          >
+            {t("common:actions.confirm")}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1220,8 +1225,10 @@ function AiProviderCard({
   };
 
   const [testing, setTesting] = useState(false);
-  const runTest = async () => {
-    if (testing) return;
+  /// 跑一次连通性测试。返回 true=测试通过，false=测试失败 / 字段缺失 / 异常。
+  /// 自身负责 toast & verified 标记；调用方只需要拿 boolean 决定是否继续后续动作。
+  const runTest = async (): Promise<boolean> => {
+    if (testing) return false;
     setTesting(true);
     try {
       await persistKey();
@@ -1230,7 +1237,7 @@ function AiProviderCard({
       if (!baseUrl || !model) {
         toast.error(t("ai.provider_test_fail", { message: t("ai.provider_test_missing_fields") }));
         if (provider.verified) await setAiProviderVerified(provider.id, false);
-        return;
+        return false;
       }
       let acc = "";
       const result = await refineTextViaChatStream(
@@ -1252,17 +1259,30 @@ function AiProviderCard({
       if (reply.length === 0) {
         toast.error(t("ai.provider_test_fail", { message: t("ai.provider_test_empty_reply") }));
         if (provider.verified) await setAiProviderVerified(provider.id, false);
-        return;
+        return false;
       }
       toast.success(t("ai.provider_test_pass"));
       await setAiProviderVerified(provider.id, true);
+      return true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(t("ai.provider_test_fail", { message: msg }));
       if (provider.verified) await setAiProviderVerified(provider.id, false);
+      return false;
     } finally {
       setTesting(false);
     }
+  };
+
+  /// 「设为激活」语义 = 应用该供应商。verified 已通过则直接 setActive；否则自动
+  /// 跑一次测试，通过才 setActive，避免把没验证的配置真的"应用"出去。
+  const handleSetActive = async () => {
+    if (testing) return;
+    if (!provider.verified) {
+      const ok = await runTest();
+      if (!ok) return;
+    }
+    onSetActive();
   };
 
   return (
@@ -1295,8 +1315,9 @@ function AiProviderCard({
           {!isActive && (
             <button
               type="button"
-              onClick={onSetActive}
-              className="border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+              onClick={() => void handleSetActive()}
+              disabled={testing}
+              className="border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors enabled:hover:border-te-accent enabled:hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {t("ai.provider_set_active")}
             </button>
@@ -1429,8 +1450,10 @@ function DictationProviderCard({
   };
 
   const [testing, setTesting] = useState(false);
-  const runTest = async () => {
-    if (testing) return;
+  /// 跑一次连通性测试。返回 true=通过，false=失败 / 字段缺失 / 异常。
+  /// 自身负责 toast & verified 标记；调用方拿 boolean 决定下一步。
+  const runTest = async (): Promise<boolean> => {
+    if (testing) return false;
     setTesting(true);
     try {
       // 测试前先持久化最新凭证（这样下次打开 settings 也能看到）；测试本身用内存值
@@ -1442,7 +1465,7 @@ function DictationProviderCard({
               message: t("dictation_provider.test_missing_fields"),
             }),
           );
-          return;
+          return false;
         }
       } else {
         const missing =
@@ -1455,7 +1478,7 @@ function DictationProviderCard({
               message: t("dictation_provider.test_missing_fields"),
             }),
           );
-          return;
+          return false;
         }
       }
       const result = await testDictationProvider(
@@ -1473,25 +1496,38 @@ function DictationProviderCard({
       if (result.ok) {
         toast.success(t("dictation_provider.test_pass"));
         await setDictationProviderVerified(provider.id, true);
-      } else {
-        const reason =
-          t(`dictation_provider.test_code.${result.code}`, {
-            defaultValue: result.message,
-          }) || result.message;
-        toast.error(t("dictation_provider.test_fail", { message: reason }));
-        if (provider.verified) {
-          await setDictationProviderVerified(provider.id, false);
-        }
+        return true;
       }
+      const reason =
+        t(`dictation_provider.test_code.${result.code}`, {
+          defaultValue: result.message,
+        }) || result.message;
+      toast.error(t("dictation_provider.test_fail", { message: reason }));
+      if (provider.verified) {
+        await setDictationProviderVerified(provider.id, false);
+      }
+      return false;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(t("dictation_provider.test_fail", { message: msg }));
       if (provider.verified) {
         await setDictationProviderVerified(provider.id, false);
       }
+      return false;
     } finally {
       setTesting(false);
     }
+  };
+
+  /// 「设为激活」语义 = 应用该供应商。verified 已通过则直接 setActive；否则自动
+  /// 跑一次测试，通过才 setActive，避免把没验证的配置真的"应用"出去。
+  const handleSetActive = async () => {
+    if (testing) return;
+    if (!provider.verified) {
+      const ok = await runTest();
+      if (!ok) return;
+    }
+    onSetActive();
   };
 
   const vendorLabel =
@@ -1533,8 +1569,9 @@ function DictationProviderCard({
           {!isActive && (
             <button
               type="button"
-              onClick={onSetActive}
-              className="border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+              onClick={() => void handleSetActive()}
+              disabled={testing}
+              className="border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors enabled:hover:border-te-accent enabled:hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {t("dictation_provider.set_active")}
             </button>
@@ -1816,15 +1853,22 @@ function AboutTab() {
           <span className="font-mono text-sm text-te-fg">
             {appVersion ? `v${appVersion}` : "—"}
           </span>
-          <button
-            type="button"
-            onClick={() => void handleCheckUpdate()}
-            disabled={checkingUpdate}
-            className="inline-flex items-center gap-2 border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span className={cn("size-1.5 bg-te-accent", checkingUpdate && "animate-pulse")} />
-            {t("about.check_update")}
-          </button>
+          {import.meta.env.DEV ? (
+            <span className="inline-flex items-center gap-2 border border-dashed border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
+              <span className="size-1.5 bg-te-light-gray" />
+              {t("about.dev_build")}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleCheckUpdate()}
+              disabled={checkingUpdate}
+              className="inline-flex items-center gap-2 border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span className={cn("size-1.5 bg-te-accent", checkingUpdate && "animate-pulse")} />
+              {t("about.check_update")}
+            </button>
+          )}
         </div>
       </Row>
       <Row label={t("about.platform")}>
@@ -1883,9 +1927,8 @@ function AboutTab() {
         <button
           type="button"
           onClick={() => {
-            // feedback 弹窗与设置 Dialog 不并存——关掉设置再开反馈
-            setSettingsOpen(false);
-            openFeedback();
+            // 反馈弹窗会接管：关掉设置 → 开反馈 → 用户提交/取消后自动回到 ABOUT。
+            openFeedback({ returnToSettingsTab: "ABOUT" });
           }}
           className="inline-flex items-center gap-2 border border-te-gray/60 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
         >
@@ -1925,11 +1968,13 @@ function SubNav({
   onChange: (id: TabId) => void;
   actions?: SubNavAction[];
 }) {
+  const isMac = detectPlatform() === "macos";
   return (
     <nav className="flex flex-col gap-px border border-te-gray/30 bg-te-surface">
-      {tabs.map((t) => {
+      {tabs.map((t, idx) => {
         const isActive = t.id === active;
         const Icon = t.icon;
+        const shortcut = isMac ? `⌘ ${idx + 1}` : `Alt + ${idx + 1}`;
         return (
           <button
             key={t.id}
@@ -1950,6 +1995,17 @@ function SubNav({
             />
             <Icon className="size-4 shrink-0" />
             <span>{t.label}</span>
+            <span
+              aria-hidden
+              className={cn(
+                "ml-auto pl-4 font-mono text-[10px] normal-case tracking-normal transition-colors",
+                isActive
+                  ? "text-te-accent/35"
+                  : "text-te-light-gray/20 group-hover:text-te-light-gray/40",
+              )}
+            >
+              {shortcut}
+            </span>
           </button>
         );
       })}
@@ -1979,8 +2035,56 @@ function SubNav({
 export default function SettingsContent({
   initialTab = "GENERAL",
 }: { initialTab?: TabId } = {}) {
+  const { t } = useTranslation("settings");
   const [tab, setTab] = useState<TabId>(initialTab);
   const tabs = useTabs();
+
+  /// 切 tab 前先看离开的 tab 是否处于 mode=custom 但 active provider 还没测试通过的状态：
+  /// 是的话静默回退到 saas 并 toast，避免用户切走后真的用着一个根本不可用的供应商。
+  const requestTabChange = (next: TabId) => {
+    if (next === tab) return;
+    const state = useSettingsStore.getState();
+    const fellBack: ("dictation" | "ai")[] = [];
+    if (tab === "DICTATION" && hasUnverifiedActiveDictation(state.dictation)) {
+      void state.setDictationMode("saas");
+      fellBack.push("dictation");
+    }
+    if (tab === "AI" && hasUnverifiedActiveAiRefine(state.aiRefine)) {
+      void state.setAiRefineMode("saas");
+      fellBack.push("ai");
+    }
+    if (fellBack.length > 0) {
+      const which =
+        fellBack.length === 2
+          ? t("provider_rollback.both")
+          : t(`provider_rollback.${fellBack[0]}`);
+      toast.message(
+        <span className="text-te-accent">{t("provider_rollback.title")}</span>,
+        { description: t("provider_rollback.description", { which }) },
+      );
+    }
+    setTab(next);
+  };
+
+  // ⌘1~5 (macOS) / Alt+1~5 (Win/Linux) 快速跳 tab。bubble 阶段绑定，让 HotkeyBinder
+  // 录入态在 capture 阶段 stopImmediatePropagation 时能优先吃掉键，避免 Cmd+1 之类
+  // 在录入过程中误切 tab。
+  useEffect(() => {
+    const isMac = detectPlatform() === "macos";
+    const onKeyDown = (e: KeyboardEvent) => {
+      const modOk = isMac
+        ? e.metaKey && !e.ctrlKey && !e.altKey
+        : e.altKey && !e.ctrlKey && !e.metaKey;
+      if (!modOk || e.shiftKey) return;
+      const idx = Number.parseInt(e.key, 10);
+      if (Number.isNaN(idx) || idx < 1 || idx > tabs.length) return;
+      e.preventDefault();
+      requestTabChange(tabs[idx - 1]!.id);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs, tab]);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col md:flex-row">
@@ -1991,7 +2095,7 @@ export default function SettingsContent({
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <SubNav tabs={tabs} active={tab} onChange={setTab} />
+        <SubNav tabs={tabs} active={tab} onChange={requestTabChange} />
       </motion.aside>
 
       {/* Right: tab content — 独立滚动；不再额外嵌套框，避免 Dialog 内 surface 半透明叠加造成的视觉模糊 */}

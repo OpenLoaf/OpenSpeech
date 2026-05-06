@@ -226,10 +226,10 @@ export function isLegalBinding(
 }
 
 const MOD_LABEL_MAC: Record<HotkeyMod, string> = {
-  ctrl: "⌃",
-  alt: "⌥",
-  shift: "⇧",
-  meta: "⌘",
+  ctrl: "⌃ Ctrl",
+  alt: "⌥ Option",
+  shift: "⇧ Shift",
+  meta: "⌘ Cmd",
   fn: "fn",
 };
 

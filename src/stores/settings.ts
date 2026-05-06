@@ -3,6 +3,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { syncI18nFromSettings } from "@/lib/i18n-sync";
 import type { LanguagePref } from "@/i18n";
 import { deleteAiProviderKey, deleteDictationProviderKey } from "@/lib/secrets";
+import { cueSetEnabled } from "@/lib/cue";
 import {
   DEFAULT_AI_SYSTEM_PROMPTS,
   type AiPromptLang as AiPromptLangFromDefaults,
@@ -198,7 +199,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   asrSegmentMode: "UTTERANCE",
   historyRetention: "forever",
   translateTargetLang: "en",
-  translateOutputMode: "target_only",
+  translateOutputMode: "bilingual",
 };
 
 const DEFAULT_AI_REFINE: AiRefineSettings = {
@@ -654,6 +655,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       if (migrated) {
         await writePersisted(shape);
       }
+      // 把听写提示音开关同步给 Rust cue 模块——cue 子系统全局唯一，主窗 / overlay
+      // 谁先 init 都把当前值推一次，幂等。
+      void cueSetEnabled(shape.general.cueSound);
     },
 
     setGeneral: async (key, value) => {
@@ -662,6 +666,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       await persist({ general: next });
       if (key === "interfaceLang") {
         void syncI18nFromSettings(next.interfaceLang);
+      } else if (key === "cueSound") {
+        void cueSetEnabled(value as boolean);
       }
     },
 

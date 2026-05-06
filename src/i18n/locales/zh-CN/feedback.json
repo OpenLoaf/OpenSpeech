@@ -16,12 +16,14 @@
   "email_label": "联系邮箱（可选）",
   "email_placeholder": "you@example.com",
   "email_hint": "留下邮箱方便我们在解决后回复你；不留也能匿名提交。",
+  "attach_logs_label": "附带最近日志",
+  "attach_logs_hint": "勾选后会把最近的应用日志一起发给我们，帮助定位问题。Bug 类反馈默认勾选。",
+  "attach_logs_failed": "读取日志失败，将不附带日志提交。",
   "submit": "提交反馈",
   "submit_loading": "提交中…",
   "cancel": "取消",
   "validation": {
     "content_required": "请填写反馈内容（至少一句话）",
-    "content_too_short": "反馈内容太短啦，描述清楚一点更容易被处理",
     "email_invalid": "邮箱格式看起来不对"
   },
   "toast": {

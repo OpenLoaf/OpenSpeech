@@ -16,6 +16,18 @@ export type SettingsTabId =
   | "AI"
   | "ABOUT";
 
+/** 统计 Dialog 打开时聚焦的指标；null 表示无侧重，默认走 duration。 */
+export type StatsMetric = "duration" | "words" | "wpm" | "saved";
+
+export interface HotkeyConflict {
+  id: string;
+  error: string;
+}
+
+// boot 时多个 binding 同时注册失败会按顺序连发 register-failed 事件——这里聚合
+// 一个短窗口内的 push，让 Dialog 只弹一次列出全部冲突，而不是连弹 N 次。
+const HOTKEY_CONFLICT_FLUSH_MS = 200;
+
 interface UIStore {
   loginOpen: boolean;
   settingsOpen: boolean;
@@ -32,15 +44,32 @@ interface UIStore {
    */
   feedbackOpen: boolean;
   /**
+   * 反馈关闭后要回跳的设置 tab。从设置 Dialog 进入反馈时设上，关闭反馈
+   * 时自动重开设置；其它入口（托盘等）保持 null，关闭后不重开设置。
+   */
+  feedbackReturnToSettingsTab: SettingsTabId | null;
+  /** 统计 Dialog 是否打开。 */
+  statsOpen: boolean;
+  /** 打开时聚焦的指标。默认 duration。 */
+  statsFocusMetric: StatsMetric;
+  /**
    * 启动 / 托盘 / 关于页 check 到的待安装更新。在用户点击 toast 上的"立即安装"
    * 之前，更新对象只保存在 store 里，不阻塞 boot 流程；安装由用户主动触发以
    * 避免下载途中 LoadingScreen 一直转。一次只保留一个最新发现的版本。
    */
   pendingUpdate: { version: string; update: Update } | null;
+  /**
+   * 当前未消费的快捷键注册冲突列表。Rust `apply_bindings` 注册失败时按 binding 维度
+   * 单条 emit，前端聚合成数组让 HotkeyConflictDialog 一次列出全部。
+   */
+  hotkeyConflicts: HotkeyConflict[];
   setLoginOpen: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
   setNoInternetOpen: (v: boolean) => void;
   setFeedbackOpen: (v: boolean) => void;
+  setStatsOpen: (v: boolean) => void;
+  /** 拉回主窗口 + 打开统计弹窗，可指定首屏聚焦的指标（默认 duration）。 */
+  openStats: (metric?: StatsMetric) => void;
   setPendingUpdate: (v: { version: string; update: Update } | null) => void;
   /** 拉回主窗口 + 打开登录弹窗。供 recording gate / sidebar account 按钮调用。 */
   openLogin: () => void;
@@ -48,8 +77,16 @@ interface UIStore {
   openSettings: (tab?: SettingsTabId) => void;
   /** 拉回主窗口 + 打开"无互联网连接"提示弹窗（recording gate 调用）。 */
   openNoInternet: () => void;
-  /** 拉回主窗口 + 打开反馈弹窗。供托盘 / 设置左侧 menu / 其它入口调用。 */
-  openFeedback: () => void;
+  /** 拉回主窗口 + 打开反馈弹窗。供托盘 / 设置左侧 menu / 其它入口调用。
+   * 传 returnToSettingsTab 时自动关闭设置，反馈关闭后会回跳到该 tab。 */
+  openFeedback: (opts?: { returnToSettingsTab?: SettingsTabId }) => void;
+  /** 收到一条 register-failed；同 id 去重，flush 窗口内累积后由 Dialog 一次展示。 */
+  pushHotkeyConflict: (c: HotkeyConflict) => void;
+  /** 用户在 Binder 里改完某条 binding 时调用，乐观移除该 id 的冲突；若新 binding
+   * 仍冲突，Rust 会重新 emit register-failed 把它推回来。 */
+  clearHotkeyConflict: (id: string) => void;
+  /** Dialog 关闭 / 跳设置后调用，清空 conflicts 让 Dialog 收起。 */
+  clearHotkeyConflicts: () => void;
 }
 
 const ensureMainWindowVisible = () => {
@@ -59,18 +96,42 @@ const ensureMainWindowVisible = () => {
   });
 };
 
+let hotkeyConflictFlushTimer: number | null = null;
+
 export const useUIStore = create<UIStore>((set) => ({
   loginOpen: false,
   settingsOpen: false,
   settingsInitialTab: "GENERAL",
   noInternetOpen: false,
   feedbackOpen: false,
+  feedbackReturnToSettingsTab: null,
+  statsOpen: false,
+  statsFocusMetric: "duration",
   pendingUpdate: null,
+  hotkeyConflicts: [],
 
   setLoginOpen: (v) => set({ loginOpen: v }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
   setNoInternetOpen: (v) => set({ noInternetOpen: v }),
-  setFeedbackOpen: (v) => set({ feedbackOpen: v }),
+  setFeedbackOpen: (v) =>
+    set((s) => {
+      if (v) return { feedbackOpen: true };
+      const ret = s.feedbackReturnToSettingsTab;
+      if (ret) {
+        return {
+          feedbackOpen: false,
+          feedbackReturnToSettingsTab: null,
+          settingsOpen: true,
+          settingsInitialTab: ret,
+        };
+      }
+      return { feedbackOpen: false };
+    }),
+  setStatsOpen: (v) => set({ statsOpen: v }),
+  openStats: (metric) => {
+    ensureMainWindowVisible();
+    set({ statsOpen: true, statsFocusMetric: metric ?? "duration" });
+  },
   setPendingUpdate: (v) => set({ pendingUpdate: v }),
 
   openLogin: () => {
@@ -88,8 +149,42 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ noInternetOpen: true });
   },
 
-  openFeedback: () => {
+  openFeedback: (opts) => {
     ensureMainWindowVisible();
-    set({ feedbackOpen: true });
+    if (opts?.returnToSettingsTab) {
+      set({
+        settingsOpen: false,
+        feedbackOpen: true,
+        feedbackReturnToSettingsTab: opts.returnToSettingsTab,
+      });
+    } else {
+      set({ feedbackOpen: true, feedbackReturnToSettingsTab: null });
+    }
+  },
+
+  pushHotkeyConflict: (c) => {
+    set((s) => {
+      const dedup = s.hotkeyConflicts.filter((x) => x.id !== c.id);
+      return { hotkeyConflicts: [...dedup, c] };
+    });
+    if (hotkeyConflictFlushTimer != null) return;
+    hotkeyConflictFlushTimer = window.setTimeout(() => {
+      hotkeyConflictFlushTimer = null;
+      ensureMainWindowVisible();
+    }, HOTKEY_CONFLICT_FLUSH_MS);
+  },
+
+  clearHotkeyConflict: (id) => {
+    set((s) => ({
+      hotkeyConflicts: s.hotkeyConflicts.filter((c) => c.id !== id),
+    }));
+  },
+
+  clearHotkeyConflicts: () => {
+    if (hotkeyConflictFlushTimer != null) {
+      window.clearTimeout(hotkeyConflictFlushTimer);
+      hotkeyConflictFlushTimer = null;
+    }
+    set({ hotkeyConflicts: [] });
   },
 }));

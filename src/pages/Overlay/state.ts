@@ -38,6 +38,20 @@ export interface DebugState {
   totalMs: number;
 }
 
+/** 翻译听写激活态：activeId=translate 进入 preparing 时主窗推一条 active=true 上来，
+ *  录音流程结束（recording → transcribing/idle/error）时推 active=false。仅做"模式
+ *  指示"用——在 pill 上方挂一个独立轻量 indicator（语种 + Languages 图标），与
+ *  toast 警告语义解耦。lang 是当前界面语言下的目标语言全称（"英文" / "English" 等）。 */
+export interface TranslateState {
+  active: boolean;
+  lang: string;
+}
+
+/** 录音中跨模式切换提示：UTTERANCE 模式下按另一种激活键，pill 中心 wave 临时
+ *  替换为"切换到 X 模式"文字 ~2s。kind=null 表示无 hint；非 null 时 reducer
+ *  会在 setModeSwitchHint 启动 timer 自动回退。 */
+export type ModeSwitchKind = "translate" | "dictation";
+
 export interface OverlayState {
   /** 镜像主窗 RecordingState；overlay 不参与副作用，仅渲染。 */
   main: RecordingState;
@@ -50,6 +64,8 @@ export interface OverlayState {
   /** 注入末尾段 main 窗主动让 pill 提前 exit，比"全部敲完"快一拍。 */
   pillEarlyHide: boolean;
   debug: DebugState;
+  translate: TranslateState;
+  modeSwitchHint: ModeSwitchKind | null;
 }
 
 const INITIAL: OverlayState = {
@@ -61,6 +77,8 @@ const INITIAL: OverlayState = {
   escArmed: false,
   pillEarlyHide: false,
   debug: { active: false, endAtUnixMs: null, totalMs: 0 },
+  translate: { active: false, lang: "" },
+  modeSwitchHint: null,
 };
 
 type Action =
@@ -76,7 +94,10 @@ type Action =
   | { type: "toast-dismiss"; id?: number }
   | { type: "esc-armed" }
   | { type: "esc-disarmed" }
-  | { type: "debug"; debug: DebugState };
+  | { type: "debug"; debug: DebugState }
+  | { type: "translate"; translate: TranslateState }
+  | { type: "mode-switch-show"; kind: ModeSwitchKind }
+  | { type: "mode-switch-clear" };
 
 function reduce(s: OverlayState, a: Action): OverlayState {
   switch (a.type) {
@@ -108,6 +129,12 @@ function reduce(s: OverlayState, a: Action): OverlayState {
       };
     case "debug":
       return { ...s, debug: a.debug };
+    case "translate":
+      return { ...s, translate: a.translate };
+    case "mode-switch-show":
+      return { ...s, modeSwitchHint: a.kind };
+    case "mode-switch-clear":
+      return { ...s, modeSwitchHint: null };
   }
 }
 
@@ -124,9 +151,12 @@ export interface OverlayMachine {
     pillEarlyHide: boolean,
   ) => void;
   setDebug: (debug: DebugState) => void;
+  setTranslate: (translate: TranslateState) => void;
+  showModeSwitchHint: (kind: ModeSwitchKind) => void;
 }
 
 const DEFAULT_TOAST_AUTO_DISMISS_MS = 2000;
+const MODE_SWITCH_HINT_MS = 1800;
 
 /** Reducer + 集中 timer。toast 的 auto-dismiss timer 在 show 时启动、dismiss 时清除。 */
 export function useOverlayMachine(): OverlayMachine {
@@ -188,13 +218,42 @@ export function useOverlayMachine(): OverlayMachine {
     dispatch({ type: "debug", debug });
   };
 
+  const setTranslate = (translate: TranslateState) => {
+    dispatch({ type: "translate", translate });
+  };
+
+  const modeSwitchTimerRef = useRef<number | null>(null);
+  const showModeSwitchHint = (kind: ModeSwitchKind) => {
+    if (modeSwitchTimerRef.current !== null) {
+      window.clearTimeout(modeSwitchTimerRef.current);
+    }
+    dispatch({ type: "mode-switch-show", kind });
+    modeSwitchTimerRef.current = window.setTimeout(() => {
+      modeSwitchTimerRef.current = null;
+      dispatch({ type: "mode-switch-clear" });
+    }, MODE_SWITCH_HINT_MS);
+  };
+
   // 卸载时清掉所有 timer，防止 setTimeout 在组件销毁后还派发 dispatch（dev StrictMode
   // 会报"useReducer dispatch called after unmount"，prod 会触发 stale state warning）。
   useEffect(() => {
     return () => {
       clearToastTimer();
+      if (modeSwitchTimerRef.current !== null) {
+        window.clearTimeout(modeSwitchTimerRef.current);
+        modeSwitchTimerRef.current = null;
+      }
     };
   }, []);
 
-  return { state, showToast, dismissToast, setEscArmed, applyFsm, setDebug };
+  return {
+    state,
+    showToast,
+    dismissToast,
+    setEscArmed,
+    applyFsm,
+    setDebug,
+    setTranslate,
+    showModeSwitchHint,
+  };
 }

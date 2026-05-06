@@ -16,12 +16,14 @@
   "email_label": "聯絡信箱（選填）",
   "email_placeholder": "you@example.com",
   "email_hint": "留下信箱方便我們在處理後回覆你；不留也能匿名提交。",
+  "attach_logs_label": "附帶最近日誌",
+  "attach_logs_hint": "勾選後會把最近的應用日誌一起傳給我們，幫助定位問題。Bug 類回饋預設勾選。",
+  "attach_logs_failed": "讀取日誌失敗，將不附帶日誌送出。",
   "submit": "送出回饋",
   "submit_loading": "送出中…",
   "cancel": "取消",
   "validation": {
     "content_required": "請填寫回饋內容（至少一句話）",
-    "content_too_short": "回饋內容太短了，描述清楚更容易被處理",
     "email_invalid": "信箱格式看起來不正確"
   },
   "toast": {

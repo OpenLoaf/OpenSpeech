@@ -1,4 +1,9 @@
 {
+  "hotkey_conflict": {
+    "title": "快速鍵衝突",
+    "description_one": "下面這條快速鍵無法被系統註冊，可能已被其他應用或系統佔用。請在此處直接綁定一個新組合。",
+    "description_other": "以下 {{count}} 條快速鍵無法被系統註冊，可能已被其他應用或系統佔用。請在此處直接綁定新組合。"
+  },
   "login": {
     "title": "登入 OpenLoaf",
     "openloaf_note": "OpenSpeech 屬於 OpenLoaf 產品線，所有產品共用同一個 OpenLoaf 帳號。",
@@ -75,13 +80,17 @@
   },
   "hotkey_field": {
     "press_new": "按下新快速鍵...",
+    "recording_hint": "ESC 取消 · 4 秒後自動退出",
     "clear_title": "清除",
     "clear_aria": "清除快速鍵",
     "error_prefix": "ERROR",
     "error_illegal_combo": "非法組合",
-    "conflict_with": "此組合已被「{{name}}」使用",
+    "conflict_with": "已被「{{name}}」使用",
     "replace": "取代",
-    "cancel": "取消"
+    "rebind": "重新錄入",
+    "cancel": "取消",
+    "replaced_toast": "已取代「{{name}}」原本的繫結",
+    "undo": "撤銷"
   },
   "hotkey_preview": {
     "default_title": "聽寫快速鍵 / PUSH-TO-TALK",

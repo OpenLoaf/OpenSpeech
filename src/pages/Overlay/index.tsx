@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, Check, X } from "lucide-react";
+import { AlertTriangle, Check, Languages, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
@@ -12,22 +12,29 @@ import { useOverlayMachine, type ToastActionKey } from "./state";
 import { useOverlayListeners } from "./listeners";
 import { Waveform, resetWaveform } from "./Waveform";
 
-// 200×36 logical px 胶囊；toast 弹出时窗口高度扩到 EXPANDED_HEIGHT，胶囊位置不变、
-// 提示条向上展开。Rust 端 overlay_set_height 会重新计算底部锚点。
+// 200×36 logical px 胶囊；toast / debug strip 通过 motion 在 pill 上方展开，
+// pill 永远贴 webview 底。webview 窗口尺寸由 Rust 端固定（src-tauri/src/overlay/mod.rs），
+// 内部不再调 set_height ——避免 NSWindow setContentSize 引起整窗一帧重绘的"刷新闪一下"。
 const PILL_HEIGHT = 36;
 const TOAST_HEIGHT = 42;
 const TOAST_GAP = 4;
 const DEBUG_STRIP_HEIGHT = 28;
-const EXPANDED_HEIGHT = TOAST_HEIGHT + TOAST_GAP + PILL_HEIGHT;
-// toast 单独显示（无录音活动）时，整窗只渲染 toast 一行，省得用户被一条空的灰胶囊干扰。
-const TOAST_ONLY_HEIGHT = TOAST_HEIGHT;
+const TRANSLATE_INDICATOR_HEIGHT = 24;
 
 export default function OverlayPage() {
   const { t } = useTranslation();
   const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
   const settingsLoaded = useSettingsStore((s) => s.loaded);
-  const { state, showToast, dismissToast, setEscArmed, applyFsm, setDebug } =
-    useOverlayMachine();
+  const {
+    state,
+    showToast,
+    dismissToast,
+    setEscArmed,
+    applyFsm,
+    setDebug,
+    setTranslate,
+    showModeSwitchHint,
+  } = useOverlayMachine();
 
   // boot IIFE 跑 applyLang 是 race 路径——overlay 第一次拿到 settings 之前可能就
   // 已经渲染过 t()。这里把 i18n 语言绑死到 settings.interfaceLang：mount + 主窗
@@ -66,6 +73,9 @@ export default function OverlayPage() {
         endAtUnixMs: p.active ? p.endAtUnixMs ?? null : null,
         totalMs: p.active ? p.totalMs ?? 0 : 0,
       }),
+    onTranslate: (p) =>
+      setTranslate({ active: p.active, lang: p.active ? p.lang ?? "" : "" }),
+    onModeSwitchHint: (p) => showModeSwitchHint(p.kind),
   });
 
   // DEBUG 倒计时 ticker：每 200ms 重新算 remaining，驱动 strip 文案刷新。
@@ -95,49 +105,39 @@ export default function OverlayPage() {
   // 同时看到悬浮栏退场，比"文字全敲完 + 800ms"再消失节奏快一拍。
   const pillEarlyHide = state.pillEarlyHide;
   const debugActive = state.debug.active;
+  // indicator 显示条件：翻译激活态本身在 || 当前正处于切换过渡（让"切换为听写
+  // 模式"提示有壳子可挂；过渡结束后 modeSwitchHint 清空，若 translate.active
+  // 也是 false（切到听写完成），indicator 自然退场）。
+  const translateIndicatorVisible =
+    state.translate.active || state.modeSwitchHint !== null;
   const visible =
     (state.main !== "idle" && !pillEarlyHide) ||
     state.toast !== null ||
-    debugActive;
-  // 录音活动期 = 胶囊必须显示。idle / error 时若有 toast，就让 toast 独占——
-  // error 状态的红字本来就只是 toast 标题的回显，没必要在底下再挂个胶囊。
-  const pillVisible = pillEarlyHide
-    ? false
-    : state.main !== "idle" && state.main !== "error"
-      ? true
-      : state.toast === null;
+    debugActive ||
+    translateIndicatorVisible;
+  // 底部 shell 共享一个 motion.div，pill / toast 形态在容器内 crossfade，
+  // 容器自身的 height 由 framer-motion layout 自动平滑过渡——避免 pill 退场 +
+  // toast 入场两个独立动画并发引起的"内容跳一下"。
+  // - recordingActive：pill 形态（X / wave / progress / Check / ERROR errorMsg）
+  // - !recordingActive + toast：toast 形态（icon + title + description + action）
+  // - error 无 toast：pill 形态（ERROR + errorMessage 让用户知道为什么）
+  // - idle 无 toast：bottom-shell 不存在
+  const recordingActive =
+    !pillEarlyHide && state.main !== "idle" && state.main !== "error";
+  const hasToast = state.toast !== null;
+  const bottomMode: "pill" | "toast" | null = pillEarlyHide
+    ? null
+    : recordingActive || (state.main === "error" && !hasToast)
+      ? "pill"
+      : hasToast
+        ? "toast"
+        : null;
+  // 录音活跃期 + toast：toast 仍叠加在 pill 上方（保留原行为，让用户既能看到
+  // 录音波形又能看到提示）。其他时机 toast 进入底部 shell。
+  const showToastAbove = recordingActive && hasToast;
 
-  // 窗口尺寸切换走"先涨后缩"两段：要变大时立刻涨（让动画里新元素有地方画），
-  // 要变小时延迟到 framer-motion exit 动画结束（约 160ms）再收，避免窗口先于
-  // toast/胶囊缩掉、把动画半路截断成生硬的 pop。
-  const baseHeight = !visible
-    ? 0
-    : pillVisible
-      ? state.toast
-        ? EXPANDED_HEIGHT
-        : PILL_HEIGHT
-      : TOAST_ONLY_HEIGHT;
-  const targetHeight = baseHeight + (debugActive ? DEBUG_STRIP_HEIGHT + TOAST_GAP : 0);
-  const [appliedHeight, setAppliedHeight] = useState(targetHeight);
-  useEffect(() => {
-    if (targetHeight === appliedHeight) return;
-    if (targetHeight > appliedHeight) {
-      setAppliedHeight(targetHeight);
-      return;
-    }
-    const t = window.setTimeout(() => setAppliedHeight(targetHeight), 200);
-    return () => window.clearTimeout(t);
-  }, [targetHeight, appliedHeight]);
-
-  useEffect(() => {
-    if (!visible || appliedHeight <= 0) return;
-    invoke("overlay_set_height", { height: appliedHeight }).catch((e) =>
-      console.warn("[overlay] set_height failed", e),
-    );
-  }, [appliedHeight, visible]);
-
-  // 不可见时调用 hide。Rust 端 hide 是单 command 串行：先移屏外 → 复位尺寸 → hide，
-  // 不会再有 IPC 顺序竞争留下黑条/旧尺寸。延迟一帧让 motion exit 跑完再 hide。
+  // 不可见时调用 hide。Rust 端 hide 是单 command 串行：先移屏外 → hide，
+  // 不会再有 IPC 顺序竞争留下黑条。延迟一帧让 motion exit 跑完再 hide。
   useEffect(() => {
     if (visible) return;
     const t = window.setTimeout(() => {
@@ -166,27 +166,9 @@ export default function OverlayPage() {
   const isInjecting = state.main === "injecting";
   const isTranslating = state.main === "translating";
   const isError = state.main === "error";
-  const isTranslate = state.activeId === "translate";
-  const translateTargetLang = useSettingsStore(
-    (s) => s.general.translateTargetLang,
-  );
-  const translateLangShort: Record<string, string> = {
-    en: "EN",
-    zh: "中",
-    "zh-TW": "繁",
-    ja: "日",
-    ko: "한",
-    fr: "FR",
-    de: "DE",
-    es: "ES",
-  };
-  // 徽章仅在"录音中/准备中"挂着——进入 transcribing/injecting/error 后中心
-  // 是进度文案 / 错误提示，徽章会挤占宽度让 truncate 截掉首字（"正在思考中…"
-  // 变成 "E在思考中…"）。隐藏后中心区拿回完整宽度，翻译已经隐含于流程。
-  const showTranslateBadge = isTranslate && (isRecording || isPreparing);
-  const translateBadge = showTranslateBadge
-    ? translateLangShort[translateTargetLang] ?? translateTargetLang.toUpperCase()
-    : null;
+  // 翻译目标语言徽章已迁出 pill——改用 toast 显示完整"翻译为<目标语言>"，
+  // 翻译激活时主窗发持续型 toast，录音结束 dismiss。pill 内宽度让回波形使用，
+  // bar count 统一 20 不再按是否翻译模式区分。
   const canFinalize = isRecording || isPreparing;
   const canCancel = isRecording || isPreparing || isError;
 
@@ -198,6 +180,8 @@ export default function OverlayPage() {
   // 中央 AnimatePresence 用 centerKey 切换：同 key 只视作 prop 变化，不会触发动画。
   // transcribing / injecting / translating 共用 "progress" 容器（进度条不重启），
   // 内部的文字标签走另一层 AnimatePresence 单独 crossfade。
+  // 注意：模式切换不抢 pill 中心——会让录音波形断一拍。过渡文字渲染在
+  // translate indicator 框内（见下方 indicator 块），pill 中心保持 wave 连续。
   const centerKey = isTranscribing || isInjecting || isTranslating
     ? "progress"
     : isError
@@ -218,7 +202,10 @@ export default function OverlayPage() {
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.94, y: 4 }}
       transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-      className="flex h-screen w-screen flex-col justify-end"
+      // 容器拦掉 pointer-events——固定窗口尺寸 130px 后，pill 上方约 94px 是
+      // 透明的，整个容器若仍接收事件会吞掉用户点击下方 app 的鼠标。子元素
+      // （pill / toast / debug strip）显式开 pointer-events-auto 接受交互。
+      className="pointer-events-none flex h-screen w-screen flex-col justify-end"
       style={{ transformOrigin: "50% 100%" }}
     >
       <AnimatePresence initial={false}>
@@ -234,7 +221,7 @@ export default function OverlayPage() {
             }}
             exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            className="flex items-center justify-between gap-2 overflow-hidden border border-dashed border-te-accent bg-te-bg px-2 leading-none"
+            className="pointer-events-auto flex items-center justify-between gap-2 overflow-hidden border border-dashed border-te-accent bg-te-bg px-2 leading-none"
           >
             <span className="shrink-0 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
               DEBUG · {Math.ceil(debugRemainingMs / 1000)}s
@@ -246,8 +233,11 @@ export default function OverlayPage() {
         )}
       </AnimatePresence>
 
+      {/* 上方独立 toast：仅录音活跃期共存——临时通知放在最顶层，最显眼。
+          录音波形不被替换，几秒后自动 dismiss。非活跃期 toast 接入底部 shell
+          直接替换 pill 形态，不再两个独立元素并发出生灭。 */}
       <AnimatePresence initial={false}>
-        {state.toast && (
+        {showToastAbove && state.toast && (
           <motion.div
             key={state.toast.id}
             initial={{ opacity: 0, y: 8, height: 0, marginBottom: 0 }}
@@ -255,12 +245,12 @@ export default function OverlayPage() {
               opacity: 1,
               y: 0,
               height: TOAST_HEIGHT,
-              marginBottom: pillVisible ? TOAST_GAP : 0,
+              marginBottom: TOAST_GAP,
             }}
             exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
-              "flex items-center gap-1.5 overflow-hidden border bg-te-bg px-2 py-1",
+              "pointer-events-auto flex items-center gap-1.5 overflow-hidden border bg-te-bg px-2 py-1",
               toastAccent,
             )}
           >
@@ -292,105 +282,219 @@ export default function OverlayPage() {
         )}
       </AnimatePresence>
 
+      {/* 翻译模式指示条：activeId=translate 录音激活时持续挂在 pill 上方，
+          录音流程结束主动收起。同时承载"模式切换过渡文字"——切到听写时 indicator
+          先显示"切换为听写模式" 1.8s 再退场；切到翻译时 indicator 先显示
+          "切换为翻译模式" 1.8s 再回到稳态"翻译模式 · 英文"。pill 中心保持
+          wave 连续，避免录音波形被切换提示打断"断一拍"的体感。 */}
       <AnimatePresence initial={false}>
-      {pillVisible && (
-      <motion.div
-        key="overlay-pill"
-        initial={{ opacity: 0, y: 6, height: 0 }}
-        animate={{ opacity: 1, y: 0, height: PILL_HEIGHT }}
-        exit={{ opacity: 0, y: 6, height: 0 }}
-        transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-        className={cn(
-          "flex w-full items-center gap-2 overflow-hidden border px-1.5 transition-colors",
-          isError ? "border-te-accent bg-te-bg" : "border-te-gray bg-te-bg",
-        )}
-      >
-        <button
-          type="button"
-          onClick={cancel}
-          disabled={!canCancel}
-          className={cn(
-            "flex size-6 shrink-0 items-center justify-center border transition-colors",
-            state.escArmed
-              ? "animate-pulse border-te-accent text-te-accent"
-              : canCancel
-                ? "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent"
-                : "border-te-gray/40 text-te-light-gray/40",
-          )}
-          aria-label={t("overlay:aria.cancel")}
-        >
-          <X className="size-3" />
-        </button>
-
-        {translateBadge ? (
-          <span
-            className="ml-1 inline-flex h-5 shrink-0 items-center gap-1 border border-te-accent bg-te-accent/10 px-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent"
-            aria-label={t("overlay:translate.target", { lang: translateBadge })}
+        {translateIndicatorVisible && (
+          <motion.div
+            key="translate-indicator"
+            initial={{ opacity: 0, y: 6, height: 0, marginBottom: 0 }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              height: TRANSLATE_INDICATOR_HEIGHT,
+              marginBottom: TOAST_GAP,
+            }}
+            exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="pointer-events-auto flex items-center justify-center gap-1.5 overflow-hidden border border-te-accent bg-te-bg px-2 leading-none"
           >
-            <span className="text-[8px]">→</span>
-            {translateBadge}
-          </span>
-        ) : null}
+            <Languages className="size-3 shrink-0 text-te-accent" />
+            <AnimatePresence mode="wait" initial={false}>
+              {state.modeSwitchHint !== null ? (
+                <motion.span
+                  key={`switch-${state.modeSwitchHint}`}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent"
+                >
+                  {t(
+                    state.modeSwitchHint === "translate"
+                      ? "overlay:mode_switch.to_translate"
+                      : "overlay:mode_switch.to_dictation",
+                  )}
+                </motion.span>
+              ) : (
+                <motion.span
+                  key="steady"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex items-center gap-1.5"
+                >
+                  <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.15em] text-te-light-gray">
+                    {t("overlay:translate.mode_label")}
+                  </span>
+                  <span className="text-[10px] text-te-light-gray">·</span>
+                  <span className="truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
+                    {state.translate.lang}
+                  </span>
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        <div className="flex min-w-0 flex-1 items-center justify-center">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={centerKey}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.12 }}
-              className="flex h-full w-full items-center justify-center"
-            >
-              {centerKey === "progress" && (
-                <div className="relative flex h-full w-full flex-col items-center justify-center gap-1 px-2">
-                  <div className="relative h-3 w-full">
-                    <span
-                      key={progressLabelKey}
-                      className="absolute inset-0 flex items-center justify-center truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg"
-                    >
-                      {t(
-                        progressLabelKey === "translating"
-                          ? "overlay:status.translating"
-                          : progressLabelKey === "injecting"
-                            ? "overlay:status.injecting"
-                            : "overlay:status.transcribing",
+      {/* 底部 shell：pill 与 toast 形态共享同一个 motion.div 容器。
+          - 形态切换（pill ↔ toast）走内层 AnimatePresence popLayout，crossfade。
+          - 容器 layout 让 height 跟随内容（pill 36 ↔ toast 46~54）平滑过渡。
+          - 退化为容器自身出生灭只发生在 idle 无 toast → 整窗 visible 切 false 时。 */}
+      <AnimatePresence initial={false}>
+        {bottomMode && (
+          <motion.div
+            key="bottom-shell"
+            layout
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            transition={{
+              duration: 0.18,
+              ease: [0.16, 1, 0.3, 1],
+              layout: { duration: 0.22, ease: [0.16, 1, 0.3, 1] },
+            }}
+            className="pointer-events-auto w-full"
+          >
+            <AnimatePresence mode="popLayout" initial={false}>
+              {bottomMode === "pill" ? (
+                <motion.div
+                  key="form-pill"
+                  layout
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.14 }}
+                  className={cn(
+                    "flex w-full items-center gap-2 overflow-hidden border px-1.5 transition-colors",
+                    isError ? "border-te-accent bg-te-bg" : "border-te-gray bg-te-bg",
+                  )}
+                  style={{ height: PILL_HEIGHT }}
+                >
+                  <button
+                    type="button"
+                    onClick={cancel}
+                    disabled={!canCancel}
+                    className={cn(
+                      "flex size-6 shrink-0 items-center justify-center border transition-colors",
+                      state.escArmed
+                        ? "animate-pulse border-te-accent text-te-accent"
+                        : canCancel
+                          ? "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent"
+                          : "border-te-gray/40 text-te-light-gray/40",
+                    )}
+                    aria-label={t("overlay:aria.cancel")}
+                  >
+                    <X className="size-3" />
+                  </button>
+
+                  <div className="flex min-w-0 flex-1 items-center justify-center">
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.div
+                        key={centerKey}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.12 }}
+                        className="flex h-full w-full items-center justify-center"
+                      >
+                        {centerKey === "progress" && (
+                          <div className="relative flex h-full w-full flex-col items-center justify-center gap-1 px-2">
+                            <div className="relative h-3 w-full">
+                              <span
+                                key={progressLabelKey}
+                                className="absolute inset-0 flex items-center justify-center truncate font-mono text-[10px] uppercase tracking-[0.15em] text-te-fg"
+                              >
+                                {t(
+                                  progressLabelKey === "translating"
+                                    ? "overlay:status.translating"
+                                    : progressLabelKey === "injecting"
+                                      ? "overlay:status.injecting"
+                                      : "overlay:status.transcribing",
+                                )}
+                              </span>
+                            </div>
+                            <div className="relative h-px w-32 overflow-hidden bg-te-gray/40">
+                              <span className="te-progress-bar absolute inset-y-0 left-0 bg-te-accent" />
+                            </div>
+                          </div>
+                        )}
+                        {centerKey === "error" && (
+                          <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
+                            {state.errorMessage ?? "ERROR"}
+                          </span>
+                        )}
+                        {centerKey === "wave" && (
+                          <Waveform barCount={20} />
+                        )}
+                      </motion.div>
+                    </AnimatePresence>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={finalize}
+                    disabled={!canFinalize}
+                    className={cn(
+                      "flex size-6 shrink-0 items-center justify-center border transition-colors",
+                      canFinalize
+                        ? "border-te-accent text-te-accent hover:bg-te-accent hover:text-te-accent-fg"
+                        : "border-te-gray/40 text-te-light-gray/40",
+                    )}
+                    aria-label={t("overlay:aria.confirm")}
+                  >
+                    <Check className="size-3" />
+                  </button>
+                </motion.div>
+              ) : (
+                state.toast && (
+                  <motion.div
+                    key="form-toast"
+                    layout
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.14 }}
+                    className={cn(
+                      "flex items-center gap-1.5 overflow-hidden border bg-te-bg px-2 py-1",
+                      toastAccent,
+                    )}
+                  >
+                    <AlertTriangle className="size-3 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-[10px] uppercase tracking-[0.15em]">
+                        {state.toast.title}
+                      </div>
+                      {state.toast.description && (
+                        <div className="truncate font-mono text-[9px] leading-[1.25] text-te-light-gray">
+                          {state.toast.description}
+                        </div>
                       )}
-                    </span>
-                  </div>
-                  <div className="relative h-px w-32 overflow-hidden bg-te-gray/40">
-                    <span className="te-progress-bar absolute inset-y-0 left-0 bg-te-accent" />
-                  </div>
-                </div>
+                    </div>
+                    {state.toast.action && (
+                      <button
+                        type="button"
+                        onClick={() => runToastAction(state.toast!.action!.key)}
+                        className={cn(
+                          "shrink-0 border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em]",
+                          "hover:bg-te-accent hover:text-te-accent-fg",
+                          toastAccent,
+                        )}
+                      >
+                        {state.toast.action.label}
+                      </button>
+                    )}
+                  </motion.div>
+                )
               )}
-              {centerKey === "error" && (
-                <span className="truncate px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
-                  {state.errorMessage ?? "ERROR"}
-                </span>
-              )}
-              {centerKey === "wave" && (
-                <Waveform barCount={isTranslate ? 16 : 20} />
-              )}
-            </motion.div>
-          </AnimatePresence>
-        </div>
-
-        <button
-          type="button"
-          onClick={finalize}
-          disabled={!canFinalize}
-          className={cn(
-            "flex size-6 shrink-0 items-center justify-center border transition-colors",
-            canFinalize
-              ? "border-te-accent text-te-accent hover:bg-te-accent hover:text-te-accent-fg"
-              : "border-te-gray/40 text-te-light-gray/40",
-          )}
-          aria-label={t("overlay:aria.confirm")}
-        >
-          <Check className="size-3" />
-        </button>
-      </motion.div>
-      )}
+            </AnimatePresence>
+          </motion.div>
+        )}
       </AnimatePresence>
     </motion.div>
       )}

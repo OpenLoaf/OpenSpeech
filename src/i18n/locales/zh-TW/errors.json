@@ -24,6 +24,10 @@
     "realtime_not_started": "即時轉寫尚未啟動",
     "hotkey_sync_failed": "同步快速鍵到 Rust 失敗：{{error}}"
   },
+  "phase": {
+    "refine": "AI 整理",
+    "translate": "翻譯"
+  },
   "stt": {
     "transcribe_failed": "轉寫失敗",
     "transcribe_empty": "未取得轉寫結果",
@@ -44,10 +48,10 @@
   },
   "meetings": {
     "go_to_settings": "前往設定",
-    "meeting_provider_unsupported": "聽寫通道不支援說話人分離",
-    "meeting_provider_unsupported_hint": "請將聽寫通道切換到「自訂 → 騰訊」，並填入 AppID / SecretId / SecretKey。",
+    "meeting_provider_unsupported": "目前通道不支援會議轉錄",
+    "meeting_provider_unsupported_hint": "請到「設定 → 聽寫」切換到「自訂 → 騰訊」。",
     "meeting_provider_not_configured": "尚未設定聽寫通道",
-    "meeting_provider_not_configured_hint": "請先到「設定 → 聽寫」設定自訂供應商。",
+    "meeting_provider_not_configured_hint": "請到「設定 → 聽寫」新增「自訂 → 騰訊」供應商。",
     "network_exit": "連線已中斷",
     "network_exit_hint": "即時語音辨識連線被中斷，請檢查網路後重試。",
     "idle_timeout": "長時間無聲音而被中斷",
@@ -59,8 +63,11 @@
     "history_open_failed": "開啟會議記錄失敗",
     "history_delete_failed": "刪除會議記錄失敗",
     "unauthenticated_byok": "自訂供應商驗證失敗",
-    "unauthenticated_byok_hint": "請確認騰訊供應商的 AppID / SecretId / SecretKey 是否正確。",
+    "unauthenticated_byok_hint": "騰訊回傳了驗證失敗。請到「設定 → 聽寫」確認當前自訂供應商的 AppID / SecretId / SecretKey 是否正確。",
     "insufficient_funds": "供應商餘額不足",
-    "insufficient_funds_hint": "請為騰訊語音辨識帳戶儲值，或切換到其他供應商。"
+    "insufficient_funds_hint": "請為騰訊語音辨識帳戶儲值，或切換到其他供應商。",
+    "engine_not_authorized": "騰訊帳號未開通 16k_zh_en_speaker 引擎",
+    "engine_not_authorized_hint": "「即時說話人分離」是騰訊獨立 SKU，「即時語音辨識大模型」資源包並不涵蓋。請到騰訊雲語音辨識控制台開通該引擎，或提工單確認：",
+    "open_tencent_console": "開啟"
   }
 }

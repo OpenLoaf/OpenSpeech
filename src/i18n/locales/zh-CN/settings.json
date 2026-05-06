@@ -11,7 +11,11 @@
     "description": "{{which}}的自定义供应商未通过测试，已切换到云端服务",
     "dictation": "听写",
     "ai": "AI 改写",
-    "both": "听写与 AI 改写"
+    "both": "听写与 AI 改写",
+    "confirm_title": "自定义供应商未通过测试",
+    "confirm_description": "{{which}}所选的自定义供应商还没有通过测试，无法在此模式下应用。继续关闭设置会自动回退到 OpenLoaf SaaS 云端服务。",
+    "confirm_back_to_test": "返回测试",
+    "confirm_proceed": "回退到 SaaS 并关闭"
   },
   "tabs": {
     "general": "通用",
@@ -41,7 +45,7 @@
     "translate_target_lang": "翻译目标语言",
     "translate_target_lang_hint": "翻译听写快捷键命中后，转写文本会被译成此语言再注入到当前焦点。",
     "translate_output_mode": "翻译输出形态",
-    "translate_output_mode_hint": "「仅目标语言」单次模型调用最快；「双语」会先输出整理后的原文，再追加译文（两次调用，更慢但保留原文）。",
+    "translate_output_mode_hint": "「双语」保留原文并追加译文；「仅目标语言」只输出译文，速度更快。",
     "input_device": "输入设备",
     "input_level": "输入声音",
     "input_level_hint_listening": "实时电平 · 正在监听：{{name}}",
@@ -227,6 +231,7 @@
     "license": "许可证",
     "source": "源代码",
     "check_update": "检查更新",
+    "dev_build": "当前是开发版",
     "rerun_onboarding": "重新运行首次引导",
     "install_now": "立即安装",
     "skip_version": "跳过此版本",

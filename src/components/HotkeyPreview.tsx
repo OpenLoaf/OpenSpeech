@@ -9,6 +9,7 @@ import {
   codeToMod,
   formatCode,
   normalizeMods,
+  type BindingId,
   type HotkeyBinding,
   type HotkeyMod,
 } from "@/lib/hotkey";
@@ -293,6 +294,9 @@ export function HotkeyPreview({
   stack = false,
   hintPlacement = "row",
   fillHeight = false,
+  bindingIds = ["dictate_ptt"],
+  headerExtra,
+  hideHeader = false,
 }: {
   hint?: string;
   index?: string;
@@ -303,13 +307,23 @@ export function HotkeyPreview({
   hintPlacement?: "row" | "header";
   /** 撑满父容器高度，header 顶到顶、按键行垂直居中。Home 页用。 */
   fillHeight?: boolean;
+  /** 显示哪些 binding——多个时按 `/` 分隔成"组1 / 组2"。默认仅听写。 */
+  bindingIds?: BindingId[];
+  /** 替代 hint 在 header 右侧的自定义节点（如 Tab 控件）。优先级高于 hint。 */
+  headerExtra?: React.ReactNode;
+  /** 不渲染 header 行（title / hint / index）。调用方已在外部承担 section 标题时用。 */
+  hideHeader?: boolean;
 }) {
   const { t } = useTranslation();
-  const binding = useHotkeysStore((s) => s.bindings.dictate_ptt);
+  const allBindings = useHotkeysStore((s) => s.bindings);
   const platform = detectPlatform();
-  const tokens = useMemo(
-    () => tokensFromBinding(binding, platform),
-    [binding, platform],
+  const groups = useMemo(
+    () =>
+      bindingIds.map((id) => ({
+        id,
+        tokens: tokensFromBinding(allBindings[id], platform),
+      })),
+    [bindingIds, allBindings, platform],
   );
   const pressed = useKeyPreview();
   const recState = useRecordingStore((s) => s.state);
@@ -319,51 +333,86 @@ export function HotkeyPreview({
     recState === "transcribing";
   const tokenIsHeld = (token: HotkeyToken) =>
     sessionActive || pressed.some((p) => tokenMatches(token, p));
-  const anyMatch = tokens.some(tokenIsHeld);
-  const showBindingRow = pressed.length === 0 || anyMatch || sessionActive;
+  const anyMatchAcrossGroups = groups.some((g) => g.tokens.some(tokenIsHeld));
+  // 多组模式下不再走 "pressed.slice(-4)" 按错回显——一组都不命中时无法决定回显
+  // 挂在哪组旁边，强制保持绑定行视图避免歧义。
+  const multiGroup = groups.length > 1;
+  const showBindingRow =
+    multiGroup || pressed.length === 0 || anyMatchAcrossGroups || sessionActive;
   const resolvedTitle = title ?? t("dialogs:hotkey_preview.default_title");
   const modeHint = hint ?? t("dialogs:hotkey_preview.default_hint");
 
   const hintInHeader = hintPlacement === "header";
 
+  const renderTokens = (tokens: HotkeyToken[]) =>
+    tokens.length === 0 ? (
+      <Kbd size={fillHeight ? "lg" : "md"}>
+        {t("dialogs:hotkey_preview.unbound")}
+      </Kbd>
+    ) : (
+      tokens.map((tok, i) => (
+        <Fragment key={i}>
+          {i > 0 && (
+            <span
+              className={cn(
+                "font-mono text-te-light-gray",
+                fillHeight ? "text-[clamp(1rem,3cqw,2rem)]" : "text-xl",
+              )}
+            >
+              +
+            </span>
+          )}
+          <Kbd highlight={tokenIsHeld(tok)} size={fillHeight ? "lg" : "md"}>
+            {tok.kind !== "prefix" && tok.icon ? (
+              <span aria-hidden className="mr-1.5 opacity-60">
+                {tok.icon}
+              </span>
+            ) : null}
+            {tok.label}
+          </Kbd>
+        </Fragment>
+      ))
+    );
+
   return (
     <div className={cn(fillHeight && "flex h-full min-h-0 flex-col")}>
-      <div className="flex shrink-0 items-start justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
-          {resolvedTitle}
-        </span>
-        {hintInHeader ? (
-          <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
-            {modeHint}
+      {hideHeader ? null : (
+        <div className="flex shrink-0 items-start justify-between gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
+            {resolvedTitle}
           </span>
-        ) : (
-          <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
-            {index}
-          </span>
-        )}
-      </div>
+          {headerExtra ? (
+            headerExtra
+          ) : hintInHeader ? (
+            <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+              {modeHint}
+            </span>
+          ) : (
+            <span className="font-mono text-[10px] text-te-light-gray md:text-xs">
+              {index}
+            </span>
+          )}
+        </div>
+      )}
 
       <div
         className={cn(
-          "mt-3 flex flex-col gap-3",
+          "flex flex-col gap-3",
+          !hideHeader && "mt-3",
           !stack && !hintInHeader && "md:flex-row md:items-center md:justify-between",
           fillHeight && "min-h-0 flex-1 justify-center [container-type:inline-size]",
         )}
       >
         <div
           className={cn(
-            "flex items-center",
+            "flex flex-wrap items-center",
             fillHeight ? "gap-[clamp(0.5rem,2cqw,1.25rem)]" : "gap-3",
           )}
         >
-          {tokens.length === 0 ? (
-            <Kbd size={fillHeight ? "lg" : "md"}>
-              {t("dialogs:hotkey_preview.unbound")}
-            </Kbd>
-          ) : showBindingRow ? (
-            tokens.map((t, i) => (
-              <Fragment key={i}>
-                {i > 0 && (
+          {showBindingRow ? (
+            groups.map((g, gi) => (
+              <Fragment key={g.id}>
+                {gi > 0 && (
                   <span
                     className={cn(
                       "font-mono text-te-light-gray",
@@ -372,17 +421,17 @@ export function HotkeyPreview({
                         : "text-xl",
                     )}
                   >
-                    +
+                    /
                   </span>
                 )}
-                <Kbd highlight={tokenIsHeld(t)} size={fillHeight ? "lg" : "md"}>
-                  {t.kind !== "prefix" && t.icon ? (
-                    <span aria-hidden className="mr-1.5 opacity-60">
-                      {t.icon}
-                    </span>
-                  ) : null}
-                  {t.label}
-                </Kbd>
+                <div
+                  className={cn(
+                    "flex items-center",
+                    fillHeight ? "gap-[clamp(0.5rem,2cqw,1.25rem)]" : "gap-3",
+                  )}
+                >
+                  {renderTokens(g.tokens)}
+                </div>
               </Fragment>
             ))
           ) : (

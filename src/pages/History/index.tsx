@@ -13,6 +13,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
+  BarChart3,
   Check,
   ChevronDown,
   Copy,
@@ -53,6 +54,7 @@ import {
 import { usePlaybackStore } from "@/stores/playback";
 import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
+import { useUIStore } from "@/stores/ui";
 import type { HistoryRetention } from "@/stores/settings";
 
 // ─────────────────────────────────────────────────────────────
@@ -985,6 +987,14 @@ function HistoryDetailDialog({
               {item.error}
             </div>
           )}
+          {!isFailed && item.error && (
+            <div className="mt-4 border-t border-amber-400/30 pt-3 font-mono text-[11px] uppercase tracking-widest break-all text-amber-400/90">
+              <span className="text-amber-400/60">
+                {t("pages:history.detail.meta.warn")}:
+              </span>{" "}
+              {item.error}
+            </div>
+          )}
           </div>
         </div>
 
@@ -1344,6 +1354,11 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
             ERR: {item.error}
           </div>
         )}
+        {!isFailed && item.error && (
+          <div className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-amber-400/80">
+            {t("pages:history.detail.meta.warn")}: {item.error}
+          </div>
+        )}
       </div>
 
       {/* 操作区：复制行外快捷 + "..." 折叠菜单（含播放/重试/下载/删除等）。
@@ -1431,6 +1446,7 @@ export default function HistoryPage() {
   const items = useHistoryStore((s) => s.items);
   const clearAllInDb = useHistoryStore((s) => s.clearAll);
   const reload = useHistoryStore((s) => s.reload);
+  const openStats = useUIStore((s) => s.openStats);
   const [filter, setFilter] = useState<FilterValue>("all");
   const [query, setQuery] = useState("");
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
@@ -1544,6 +1560,15 @@ export default function HistoryPage() {
                 className="flex items-center gap-2"
                 data-tauri-drag-region="false"
               >
+                <button
+                  type="button"
+                  onClick={() => openStats()}
+                  className="inline-flex size-9 items-center justify-center border border-te-gray/40 text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
+                  title={t("pages:history.stats")}
+                  aria-label={t("pages:history.stats")}
+                >
+                  <BarChart3 className="size-4" strokeWidth={2} />
+                </button>
                 <button
                   type="button"
                   onClick={() => void handleRefresh()}

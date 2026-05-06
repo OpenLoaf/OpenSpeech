@@ -1,4 +1,9 @@
 {
+  "hotkey_conflict": {
+    "title": "快捷键冲突",
+    "description_one": "下面这条快捷键无法被系统注册，可能已被其他应用或系统占用。请在此处直接绑定一个新组合。",
+    "description_other": "以下 {{count}} 条快捷键无法被系统注册，可能已被其他应用或系统占用。请在此处直接绑定新组合。"
+  },
   "login": {
     "title": "登录 OpenLoaf",
     "openloaf_note": "OpenSpeech 是 OpenLoaf 旗下产品，所有产品共用同一个 OpenLoaf 账号。",
@@ -75,13 +80,17 @@
   },
   "hotkey_field": {
     "press_new": "按下新快捷键...",
+    "recording_hint": "ESC 取消 · 4 秒后自动退出",
     "clear_title": "清除",
     "clear_aria": "清除快捷键",
     "error_prefix": "ERROR",
     "error_illegal_combo": "非法组合",
-    "conflict_with": "此组合已被「{{name}}」使用",
+    "conflict_with": "已被「{{name}}」使用",
     "replace": "替换",
-    "cancel": "取消"
+    "rebind": "重新录入",
+    "cancel": "取消",
+    "replaced_toast": "已替换「{{name}}」原本的绑定",
+    "undo": "撤销"
   },
   "hotkey_preview": {
     "default_title": "听写快捷键 / PUSH-TO-TALK",

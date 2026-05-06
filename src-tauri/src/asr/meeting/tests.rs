@@ -7,11 +7,16 @@
 use super::provider::{MeetingEvent, MeetingSegment};
 use super::tencent_speaker::{SUPPORTED_LANGUAGES, parse_frame};
 
+fn one(events: Vec<MeetingEvent>) -> MeetingEvent {
+    assert_eq!(events.len(), 1, "expected exactly one event, got {events:?}");
+    events.into_iter().next().unwrap()
+}
+
 /// 文档示例：握手成功响应。
 #[test]
 fn parse_handshake_ok_emits_ready_with_voice_id() {
     let raw = r#"{"code":0,"message":"success","voice_id":"RnKu9FODFHK5FPpsrN"}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(
         ev,
         MeetingEvent::Ready {
@@ -20,11 +25,11 @@ fn parse_handshake_ok_emits_ready_with_voice_id() {
     );
 }
 
-/// 文档示例（修正后的合法 JSON）：稳态结果含 speaker_id。
+/// 文档实测响应：稳态结果含 speaker_id（sentences.sentence_list 包了一层数组）。
 #[test]
 fn parse_final_segment_with_speaker_id() {
-    let raw = r#"{"code":0,"message":"success","voice_id":"vid","message_id":"vid_11_0","sentences":{"sentence":"实时语音识别","sentence_type":1,"sentence_id":1,"speaker_id":0,"start_time":1200,"end_time":2850}}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let raw = r#"{"code":0,"message":"success","voice_id":"vid","message_id":"vid_11_0","sentences":{"sentence_list":[{"sentence":"实时语音识别","sentence_type":1,"sentence_id":1,"speaker_id":0,"start_time":1200,"end_time":2850}]}}"#;
+    let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(
         ev,
         MeetingEvent::SegmentFinal(MeetingSegment {
@@ -40,8 +45,8 @@ fn parse_final_segment_with_speaker_id() {
 /// partial 阶段：sentence_type=0 → SegmentPartial。
 #[test]
 fn parse_partial_segment_with_pending_speaker() {
-    let raw = r#"{"code":0,"sentences":{"sentence":"你好","sentence_type":0,"sentence_id":2,"speaker_id":-1,"start_time":3000,"end_time":3300}}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let raw = r#"{"code":0,"sentences":{"sentence_list":[{"sentence":"你好","sentence_type":0,"sentence_id":2,"speaker_id":-1,"start_time":3000,"end_time":3300}]}}"#;
+    let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(
         ev,
         MeetingEvent::SegmentPartial(MeetingSegment {
@@ -57,12 +62,25 @@ fn parse_partial_segment_with_pending_speaker() {
 /// speaker_id 字段缺失时 default 为 -1，不抛错。
 #[test]
 fn parse_missing_speaker_id_defaults_to_unknown() {
-    let raw = r#"{"code":0,"sentences":{"sentence":"hello","sentence_type":1,"sentence_id":0,"start_time":0,"end_time":500}}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let raw = r#"{"code":0,"sentences":{"sentence_list":[{"sentence":"hello","sentence_type":1,"sentence_id":0,"start_time":0,"end_time":500}]}}"#;
+    let ev = one(parse_frame(raw).expect("parse"));
     let MeetingEvent::SegmentFinal(seg) = ev else {
         panic!("expected SegmentFinal");
     };
     assert_eq!(seg.speaker_id, -1);
+}
+
+/// 一帧带多句：每条 sentence 都要单独 emit，不能丢。
+#[test]
+fn parse_multi_sentences_in_one_frame() {
+    let raw = r#"{"code":0,"sentences":{"sentence_list":[
+        {"sentence":"第一句","sentence_type":1,"sentence_id":1,"speaker_id":0,"start_time":0,"end_time":1000},
+        {"sentence":"第二句","sentence_type":0,"sentence_id":2,"speaker_id":-1,"start_time":1000,"end_time":1500}
+    ]}}"#;
+    let events = parse_frame(raw).expect("parse");
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0], MeetingEvent::SegmentFinal(ref s) if s.sentence_id == 1 && s.text == "第一句"));
+    assert!(matches!(events[1], MeetingEvent::SegmentPartial(ref s) if s.sentence_id == 2 && s.text == "第二句"));
 }
 
 /// final=1 → EndOfStream（与音频流是否还在 buffer 无关）。
@@ -70,7 +88,7 @@ fn parse_missing_speaker_id_defaults_to_unknown() {
 fn parse_final_flag_emits_end_of_stream() {
     let raw =
         r#"{"code":0,"message":"success","voice_id":"vid","message_id":"vid_241","final":1}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(ev, MeetingEvent::EndOfStream);
 }
 
@@ -78,7 +96,7 @@ fn parse_final_flag_emits_end_of_stream() {
 #[test]
 fn parse_4002_maps_to_unauthenticated_byok() {
     let raw = r#"{"code":4002,"message":"signature error","voice_id":"vid"}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(
         ev,
         MeetingEvent::Error {
@@ -93,7 +111,7 @@ fn parse_4002_maps_to_unauthenticated_byok() {
 fn parse_4004_4005_maps_to_insufficient_funds() {
     for code in [4004, 4005] {
         let raw = format!(r#"{{"code":{code},"message":"no funds"}}"#);
-        let ev = parse_frame(&raw).expect("parse");
+        let ev = one(parse_frame(&raw).expect("parse"));
         assert_eq!(
             ev,
             MeetingEvent::Error {
@@ -108,7 +126,7 @@ fn parse_4004_4005_maps_to_insufficient_funds() {
 #[test]
 fn parse_4008_maps_to_idle_timeout() {
     let raw = r#"{"code":4008,"message":"15s idle"}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(
         ev,
         MeetingEvent::Error {
@@ -122,12 +140,41 @@ fn parse_4008_maps_to_idle_timeout() {
 #[test]
 fn parse_unknown_code_passes_through_with_prefix() {
     let raw = r#"{"code":9999,"message":"weird"}"#;
-    let ev = parse_frame(raw).expect("parse");
+    let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(
         ev,
         MeetingEvent::Error {
             code: "tencent_9999".into(),
             message: "weird".into(),
+        }
+    );
+}
+
+/// 4001 + message 含 engine_model_type → engine_not_authorized。
+/// 账号没在腾讯云开通独立 SKU"实时说话人分离"时实际看到的报错原文。
+#[test]
+fn parse_4001_engine_not_supported_maps_to_engine_not_authorized() {
+    let raw = r#"{"code":4001,"message":"参数不合法(Not support [engine_model_type: 16k_zh_en_speaker])","voice_id":"vid"}"#;
+    let ev = one(parse_frame(raw).expect("parse"));
+    assert_eq!(
+        ev,
+        MeetingEvent::Error {
+            code: "engine_not_authorized".into(),
+            message: "参数不合法(Not support [engine_model_type: 16k_zh_en_speaker])".into(),
+        }
+    );
+}
+
+/// 4001 + 不含 engine_model_type → 走通用兜底 tencent_4001，避免误归类。
+#[test]
+fn parse_4001_other_param_keeps_generic_code() {
+    let raw = r#"{"code":4001,"message":"参数不合法(invalid sign)","voice_id":"vid"}"#;
+    let ev = one(parse_frame(raw).expect("parse"));
+    assert_eq!(
+        ev,
+        MeetingEvent::Error {
+            code: "tencent_4001".into(),
+            message: "参数不合法(invalid sign)".into(),
         }
     );
 }

@@ -11,7 +11,11 @@
     "description": "Your {{which}} custom provider didn't pass the test — switched to the cloud service",
     "dictation": "dictation",
     "ai": "AI refine",
-    "both": "dictation and AI refine"
+    "both": "dictation and AI refine",
+    "confirm_title": "Custom provider hasn't passed testing",
+    "confirm_description": "Your {{which}} custom provider hasn't been validated yet, so it can't be applied. Closing now will revert to the OpenLoaf SaaS cloud service.",
+    "confirm_back_to_test": "Back to test",
+    "confirm_proceed": "Revert to SaaS and close"
   },
   "tabs": {
     "general": "General",
@@ -41,7 +45,7 @@
     "translate_target_lang": "Translate target language",
     "translate_target_lang_hint": "When the translate-dictation hotkey fires, the transcript is translated into this language and then injected at the cursor.",
     "translate_output_mode": "Translate output",
-    "translate_output_mode_hint": "\"Target only\" uses one model call (fastest); \"Bilingual\" first outputs the cleaned source, then appends the translation (two calls, slower but keeps the source).",
+    "translate_output_mode_hint": "\"Bilingual\" keeps the source and appends the translation; \"Target only\" outputs just the translation, faster.",
     "input_device": "Input device",
     "input_level": "Input level",
     "input_level_hint_listening": "Live level · listening on: {{name}}",
@@ -227,6 +231,7 @@
     "license": "License",
     "source": "Source code",
     "check_update": "Check for updates",
+    "dev_build": "Development build",
     "rerun_onboarding": "Re-run first-launch onboarding",
     "install_now": "Install now",
     "skip_version": "Skip this version",

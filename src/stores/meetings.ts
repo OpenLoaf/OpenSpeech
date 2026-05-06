@@ -39,7 +39,10 @@ import {
 import { newId } from "@/lib/ids";
 import { useSettingsStore } from "@/stores/settings";
 
-export type MeetingView = "idle" | "live" | "paused" | "review";
+// "starting" 是 idle → live 的过渡态：cpal stream 拉起 + meeting_start
+// (含腾讯握手) 期间停留在这里，按钮显示 loading；任意一步失败直接回 idle，
+// 不让用户先看到 live 视图再被弹回来。
+export type MeetingView = "idle" | "starting" | "live" | "paused" | "review";
 
 export interface MeetingSegment {
   /** sentence_id 作为本地 key（partial→final 同一 sid 会覆盖） */
@@ -70,6 +73,7 @@ interface MeetingsState {
   error: { code: string; message: string } | null;
 
   start: () => Promise<void>;
+  dismissError: () => void;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   stop: () => Promise<void>;
@@ -178,7 +182,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     if (s.view !== "idle") return;
     set({
       ...initialState,
-      view: "live",
+      view: "starting",
       segments: new Map(),
       error: null,
       recentMeetings: s.recentMeetings,
@@ -195,24 +199,32 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     const language = dictationLang === "en" ? "en" : "zh";
 
     const meetingId = newId();
+    let micStarted = false;
+    let recordingStarted = false;
 
     try {
       const ok = await startAudioLevel(inputDevice);
       if (!ok) throw new Error("microphone unavailable");
+      micStarted = true;
       await startRecordingToFile(meetingId);
+      recordingStarted = true;
       await startMeeting({ meetingId, language });
     } catch (e: unknown) {
-      // 回滚：任何一步失败都清场
-      try { await cancelRecording(); } catch { /* noop */ }
-      try { await stopAudioLevel(); } catch { /* noop */ }
-      // Rust 端 build_provider() 的错误 message 形如
-      // "meeting_provider_unsupported: <kind>" 或 "meeting_provider_not_configured: <details>"，
-      // 解出已知前缀映射成可识别的 code 让 i18n + 引导按钮能挂上；其它兜底为 start_failed。
-      const raw = String(e);
-      let code = "start_failed";
-      for (const known of ["meeting_provider_unsupported", "meeting_provider_not_configured"]) {
-        if (raw.includes(known)) { code = known; break; }
+      // 回滚：只清掉已经成功拉起的步骤，避免对未启动的资源调 stop。
+      if (recordingStarted) {
+        try { await cancelRecording(); } catch { /* noop */ }
       }
+      if (micStarted) {
+        try { await stopAudioLevel(); } catch { /* noop */ }
+      }
+      // Rust 端把 vendor 错误 format 成 `<code>: <message>` 透出（含
+      // meeting_provider_unsupported / engine_not_authorized / unauthenticated_byok
+      // / insufficient_funds / idle_timeout / tencent_<n> 等），按这个前缀提
+      // code 让 i18n 命中。原生 Error("microphone unavailable") 之类被 JS 包成
+      // "Error: ..."，首字符大写不会匹配 [a-z_]，所以不会误识别。
+      const raw = String(e);
+      const match = raw.match(/^([a-z_][a-z0-9_]*):\s/);
+      const code = match?.[1] ?? "start_failed";
       set({
         view: "idle",
         meetingId: null,
@@ -223,11 +235,15 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
 
     const now = Date.now();
     elapsedBaseline = 0;
-    set({ meetingId, activeStartedAt: now, elapsedMs: 0 });
+    set({ view: "live", meetingId, activeStartedAt: now, elapsedMs: 0 });
     startTimer(
       (partial) => set(partial),
       () => get().activeStartedAt,
     );
+  },
+
+  dismissError() {
+    set({ error: null });
   },
 
   async pause() {
@@ -404,7 +420,6 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   },
 }));
 
-/** 拍序后的 segments 数组，view 直接消费。 */
-export function selectSortedSegments(s: MeetingsState): MeetingSegment[] {
-  return Array.from(s.segments.values()).sort((a, b) => a.startMs - b.startMs);
-}
+// segments 派生数组的"排序"动作不能放在 zustand selector 里——
+// selector 每次返回新数组会触发 React 19 的 "getSnapshot should be cached" 死循环。
+// 组件应订阅 `s.segments` Map 引用，再 useMemo 派生（见 pages/Meetings/index.tsx）。

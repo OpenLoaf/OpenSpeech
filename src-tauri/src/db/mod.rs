@@ -167,5 +167,19 @@ CREATE INDEX IF NOT EXISTS idx_history_segments_speaker ON history_segments(hist
 "#,
             kind: MigrationKind::Up,
         },
+        // v7：耗时分段统计。
+        // - asr_ms：从 finalize 启动（用户结束录音）到拿到 ASR final transcript 的耗时。
+        //   REALTIME 走 stt_finalize 等 server Final；UTTERANCE 走 transcribe_recording_file 文件转写。
+        // - refine_ms：AI refine chat stream 从首个 chunk 请求到流式完成的耗时。null = 未启用 refine。
+        // 设计取舍：分两个字段而不是合成 total，便于历史详情页区分"是 ASR 慢还是 LLM 慢"。
+        Migration {
+            version: 7,
+            description: "history_add_asr_and_refine_ms",
+            sql: r#"
+ALTER TABLE history ADD COLUMN asr_ms INTEGER;
+ALTER TABLE history ADD COLUMN refine_ms INTEGER;
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

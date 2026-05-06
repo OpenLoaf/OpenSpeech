@@ -16,6 +16,15 @@
       "feature_cross_platform": "// CROSS-PLATFORM WIN · MAC · LINUX"
     },
     "hotkey_hint": "Press the hotkey to start recording, press again to stop and inject the text into the focused field. Press <esc>Esc</esc> to cancel; an editable field must be focused.",
+    "translate_hint": "Press the translate hotkey to start recording, press again to stop. The system transcribes then translates to the target language before injecting into the focused field.",
+    "hotkey_tab": {
+      "dictate": "Dictate",
+      "translate": "Translate"
+    },
+    "hotkey_title": {
+      "dictate": "Dictation hotkey / PUSH-TO-TALK",
+      "translate": "Translate hotkey / TRANSLATE"
+    },
     "stats": {
       "section_title": "Today / This session",
       "section_title_today": "Today's session stats",
@@ -30,7 +39,86 @@
       "wpm_label": "Average speed",
       "wpm_unit": "WPM",
       "saved_label": "Time saved",
-      "saved_unit": "HH:MM"
+      "saved_unit": "HH:MM",
+      "open_dialog_aria": "Open detailed stats for {{label}}"
+    },
+    "stats_dialog": {
+      "title": "Dictation stats",
+      "subtitle": "Local data · nothing leaves this device",
+      "close": "Close",
+      "range": {
+        "today": "Today",
+        "7d": "7d",
+        "30d": "30d",
+        "90d": "90d",
+        "all": "All"
+      },
+      "metric_switcher_label": "Focus",
+      "kpi": {
+        "duration": "Time",
+        "words": "Words",
+        "wpm": "WPM",
+        "saved": "Saved",
+        "sessions": "Sessions"
+      },
+      "main": {
+        "duration": {
+          "title": "Time trend",
+          "hint": "Total recording time per day (HH:MM)"
+        },
+        "words": {
+          "title": "Words cumulative",
+          "hint": "Total words produced over time"
+        },
+        "wpm": {
+          "title": "WPM trend",
+          "hint": "Average speaking speed per day"
+        },
+        "saved": {
+          "title": "Time saved cumulative",
+          "hint": "Saved versus a {{baseline}} WPM typing baseline"
+        }
+      },
+      "facet": {
+        "heatmap": {
+          "title": "When you dictate",
+          "hint": "Mon–Sun × 0–23h; darker means more usage",
+          "weekdays": "M,T,W,T,F,S,S"
+        },
+        "top_apps": {
+          "title": "Top target apps",
+          "hint": "Where you write the most",
+          "unknown": "Unknown app"
+        },
+        "wpm_by_mode": {
+          "title": "WPM × segment mode",
+          "hint": "REALTIME vs UTTERANCE side by side"
+        },
+        "saved_equivalent": {
+          "title": "Worth translation",
+          "hint": "What that saved time looks like in everyday units",
+          "items": {
+            "typing_hours": "≈ {{value}} of typing",
+            "podcasts": "≈ {{value}} podcast episodes",
+            "coffees": "≈ {{value}} cups of coffee",
+            "books_pages": "≈ {{value}} pages of reading"
+          }
+        },
+        "session_dist": {
+          "title": "Session length distribution",
+          "hint": "Short / medium / long mix",
+          "buckets": {
+            "short": "Short ≤ 20 words",
+            "medium": "Medium 21–100 words",
+            "long": "Long > 100 words"
+          }
+        }
+      },
+      "footer": {
+        "open_history": "Open in history →",
+        "privacy": "All numbers computed on this device — no network calls"
+      },
+      "empty": "// No dictation records yet — give it a try //"
     }
   },
   "history": {
@@ -38,6 +126,7 @@
     "subtitle": "History stays on this device.",
     "search_placeholder": "Search history...",
     "more": "More",
+    "stats": "Stats",
     "refresh": "Refresh",
     "retention": {
       "label": "Keep history",
@@ -102,6 +191,7 @@
         "duration": "Duration",
         "target": "Target app",
         "error": "Error",
+      "warn": "Note",
         "asr": "Speech-to-text",
         "ai": "AI refine",
         "segment_mode": "Mode",
@@ -330,6 +420,7 @@
       "empty": "No meetings yet",
       "empty_transcript": "(empty)",
       "loading": "Loading…",
+      "starting": "Connecting to provider…",
       "language_support": "// Currently supports Chinese, English, Cantonese & several Mandarin dialects"
     },
     "live": {
@@ -339,6 +430,10 @@
       "resume": "Resume",
       "stop": "Stop",
       "listening": "Listening..."
+    },
+    "speaker": {
+      "label": "Speaker {{letter}}",
+      "pending": "Speaker …"
     },
     "review": {
       "back": "Back",

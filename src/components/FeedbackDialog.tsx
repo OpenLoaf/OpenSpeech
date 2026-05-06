@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
-import { MessageSquare, Send, ChevronDown } from "lucide-react";
+import { MessageSquare, Send, ChevronDown, Check } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -31,8 +31,6 @@ const TYPE_ORDER: FeedbackType[] = [
   "other",
 ];
 
-const MIN_CONTENT_LEN = 5;
-
 // 微信登录用户后端会合成 `wechat-<openid>@wechat.local` 占位邮箱，不能当真实联系方式。
 function pickContactEmail(...candidates: Array<string | null | undefined>): string {
   for (const raw of candidates) {
@@ -52,6 +50,8 @@ export function FeedbackDialog({ open, onOpenChange }: Props) {
   const [type, setType] = useState<FeedbackType>("bug");
   const [content, setContent] = useState("");
   const [email, setEmail] = useState("");
+  const [attachLogs, setAttachLogs] = useState(true);
+  const [userTouchedAttachLogs, setUserTouchedAttachLogs] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // 每次开弹窗都重置；登录用户默认填账户邮箱，方便不用手敲。
@@ -60,8 +60,16 @@ export function FeedbackDialog({ open, onOpenChange }: Props) {
     setType("bug");
     setContent("");
     setEmail(pickContactEmail(user?.email, profile?.email));
+    setAttachLogs(true);
+    setUserTouchedAttachLogs(false);
     setSubmitting(false);
   }, [open, user?.email, profile?.email]);
+
+  // 用户没手动改过时跟随类型默认值：bug 勾上，其他类型不勾。
+  useEffect(() => {
+    if (userTouchedAttachLogs) return;
+    setAttachLogs(type === "bug");
+  }, [type, userTouchedAttachLogs]);
 
   const typeOptions = useMemo(
     () =>
@@ -79,10 +87,6 @@ export function FeedbackDialog({ open, onOpenChange }: Props) {
       toast.error(t("validation.content_required"));
       return;
     }
-    if (trimmed.length < MIN_CONTENT_LEN) {
-      toast.error(t("validation.content_too_short"));
-      return;
-    }
     const trimmedEmail = email.trim();
     if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       toast.error(t("validation.email_invalid"));
@@ -92,6 +96,15 @@ export function FeedbackDialog({ open, onOpenChange }: Props) {
     setSubmitting(true);
     try {
       const appVersion = await getVersion().catch(() => "");
+      let logTail: string | null = null;
+      if (attachLogs) {
+        try {
+          logTail = await invoke<string>("read_recent_log_tail");
+        } catch (logErr) {
+          console.warn("[feedback] read log tail failed", logErr);
+          toast.warning(t("attach_logs_failed"));
+        }
+      }
       await invoke("openloaf_submit_feedback", {
         payload: {
           type,
@@ -102,6 +115,7 @@ export function FeedbackDialog({ open, onOpenChange }: Props) {
             appVersion,
             userAgent:
               typeof navigator !== "undefined" ? navigator.userAgent : "",
+            ...(logTail ? { logs: logTail } : {}),
           },
         },
       });
@@ -194,6 +208,40 @@ export function FeedbackDialog({ open, onOpenChange }: Props) {
             <p className="mt-1 font-sans text-[11px] text-te-light-gray/80">
               {t("email_hint")}
             </p>
+          </div>
+
+          <div>
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={attachLogs}
+              onClick={() => {
+                setUserTouchedAttachLogs(true);
+                setAttachLogs((v) => !v);
+              }}
+              disabled={submitting}
+              className="group flex w-full items-start gap-3 text-left disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span
+                className={cn(
+                  "mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors",
+                  attachLogs
+                    ? "border-te-accent bg-te-accent text-te-accent-fg"
+                    : "border-te-gray/60 bg-te-surface group-hover:border-te-gray",
+                )}
+                aria-hidden
+              >
+                {attachLogs && <Check className="size-3" strokeWidth={3} />}
+              </span>
+              <span className="flex-1">
+                <span className="block font-mono text-xs text-te-fg">
+                  {t("attach_logs_label")}
+                </span>
+                <span className="mt-1 block font-sans text-[11px] leading-relaxed text-te-light-gray/80">
+                  {t("attach_logs_hint")}
+                </span>
+              </span>
+            </button>
           </div>
 
           <div className="flex flex-row-reverse items-center gap-3 pt-1">

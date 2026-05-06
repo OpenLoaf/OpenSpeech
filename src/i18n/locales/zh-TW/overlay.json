@@ -5,7 +5,22 @@
     "close_result": "關閉結果"
   },
   "translate": {
-    "target": "翻譯目標語言：{{lang}}"
+    "target": "翻譯目標語言：{{lang}}",
+    "mode_label": "翻譯模式",
+    "lang": {
+      "en": "英文",
+      "zh": "中文",
+      "zh-TW": "繁體中文",
+      "ja": "日文",
+      "ko": "韓文",
+      "fr": "法文",
+      "de": "德文",
+      "es": "西班牙文"
+    }
+  },
+  "mode_switch": {
+    "to_translate": "切換為翻譯模式",
+    "to_dictation": "切換為聽寫模式"
   },
   "status": {
     "error_fallback": "錯誤",
@@ -37,6 +52,30 @@
       "result": "或點擊 ✕ 關閉"
     },
     "placeholder": "即時轉寫文字將出現在這裡…",
+    "utterance_timer_label": "整句模式",
+    "result_label": {
+      "original": "原文",
+      "translation": "譯文"
+    },
+    "result_stats": {
+      "recording": "錄音",
+      "response": "回應"
+    },
+    "mode_action": {
+      "dictate": "聽寫",
+      "translate": "翻譯"
+    },
+    "mode_segment": {
+      "utterance": "整句",
+      "realtime": "即時"
+    },
+    "action": {
+      "stop": "結束並轉寫",
+      "stop_translate": "結束並翻譯",
+      "cancel": "取消本次錄音",
+      "retry_hint": "按快捷鍵重試",
+      "kbd_esc": "Esc"
+    },
     "meter": {
       "live": "LIVE",
       "chars": "{{count}} CHARS",
@@ -131,7 +170,6 @@
     "stt_4xx": "SaaS 驗證失敗（4xx）",
     "stt_mic_not_ready": "麥克風尚未就緒",
     "stt_network": "網路不可達",
-    "register_failed": "註冊失敗：{{id}}（{{error}}）",
     "sync_hotkey_failed": "同步快捷鍵到 Rust 失敗：{{error}}",
     "preflight_permission_denied": "未授予麥克風權限",
     "preflight_no_device": "未找到可用麥克風",

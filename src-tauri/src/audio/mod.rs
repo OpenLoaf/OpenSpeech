@@ -83,8 +83,11 @@ const VAD_SAMPLE_RATE: u32 = 16_000;
 const VAD_FRAME_SAMPLES: usize = (VAD_SAMPLE_RATE as usize) * 30 / 1000;
 // 检测到 voice 后保留多久不归零——避免"词与词之间的几十 ms 静默"把波形跌到 0。
 const VAD_VOICE_HANG_MS: u64 = 200;
-// 落盘前的首尾静音裁剪 padding：保留 voice 区前后各 300ms 缓冲，避免吞首字 / 尾字。
-const TRIM_PAD_MS: u32 = 300;
+// 落盘前的首尾静音裁剪 padding。
+// 尾部 2s：句尾衰减 / 闭口辅音的 RMS 常掉到能量门以下被误判为静音，
+// 加上用户在结束按键前可能还在收尾——宁可多留也不能吞字。
+const TRIM_HEAD_PAD_MS: u32 = 300;
+const TRIM_TAIL_PAD_MS: u32 = 2000;
 // 裁剪后真正的语音时长低于该阈值视作"整段无人声"，前端跳过 ASR 与历史。
 const TRIM_MIN_VOICED_MS: u32 = 200;
 // webrtc-vad 在 Aggressive 模式仍会把"低能 babble / HVAC 嗡嗡声"判成 voice。
@@ -478,12 +481,12 @@ enum TrimDecision {
     },
 }
 
-/// 落盘前对整段录音跑一次 webrtc-vad，找出首尾 voice 边界并附 TRIM_PAD_MS padding。
+/// 落盘前对整段录音跑一次 webrtc-vad，找出首尾 voice 边界并附非对称 padding。
 /// 返回相对原 interleaved 缓冲的样本索引区间，调用方据此切片再交给 ogg 编码器。
 ///
 /// 设计要点：
 /// - 只裁首尾，**绝不动中间**——句间停顿对 ASR 是合法分段线索。
-/// - padding 取 TRIM_PAD_MS（300ms），即便 VAD 漏掉首字 50-100ms 也仍在裁切边界内。
+/// - 非对称 padding：头 TRIM_HEAD_PAD_MS / 尾 TRIM_TAIL_PAD_MS，尾部更宽以兜住衰减尾音。
 /// - 整段无 voice → 返回 Empty，调用方跳过编码与历史。
 fn analyze_recording_trim(
     interleaved: &[f32],
@@ -589,9 +592,8 @@ fn analyze_recording_trim(
     let voice_start_ms = (first as u64) * 30;
     let voice_end_ms = ((last + 1) as u64) * 30;
 
-    let pad = TRIM_PAD_MS as u64;
-    let start_ms = voice_start_ms.saturating_sub(pad);
-    let end_ms = (voice_end_ms + pad).min(total_ms);
+    let start_ms = voice_start_ms.saturating_sub(TRIM_HEAD_PAD_MS as u64);
+    let end_ms = (voice_end_ms + TRIM_TAIL_PAD_MS as u64).min(total_ms);
 
     let start_frame =
         ((start_ms as u128) * sample_rate as u128 / 1000) as usize;

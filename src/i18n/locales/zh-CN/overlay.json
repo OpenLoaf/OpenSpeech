@@ -5,7 +5,22 @@
     "close_result": "关闭结果"
   },
   "translate": {
-    "target": "翻译目标语言：{{lang}}"
+    "target": "翻译目标语言：{{lang}}",
+    "mode_label": "翻译模式",
+    "lang": {
+      "en": "英文",
+      "zh": "中文",
+      "zh-TW": "繁体中文",
+      "ja": "日文",
+      "ko": "韩文",
+      "fr": "法文",
+      "de": "德文",
+      "es": "西班牙文"
+    }
+  },
+  "mode_switch": {
+    "to_translate": "切换为翻译模式",
+    "to_dictation": "切换为听写模式"
   },
   "status": {
     "error_fallback": "错误",
@@ -37,6 +52,30 @@
       "result": "或点击 ✕ 关闭"
     },
     "placeholder": "实时转写文字将出现在这里…",
+    "utterance_timer_label": "整句模式",
+    "result_label": {
+      "original": "原文",
+      "translation": "译文"
+    },
+    "result_stats": {
+      "recording": "录音",
+      "response": "响应"
+    },
+    "mode_action": {
+      "dictate": "听写",
+      "translate": "翻译"
+    },
+    "mode_segment": {
+      "utterance": "整句",
+      "realtime": "实时"
+    },
+    "action": {
+      "stop": "结束并转写",
+      "stop_translate": "结束并翻译",
+      "cancel": "取消本次录音",
+      "retry_hint": "按快捷键重试",
+      "kbd_esc": "Esc"
+    },
     "meter": {
       "live": "LIVE",
       "chars": "{{count}} CHARS",
@@ -131,7 +170,6 @@
     "stt_4xx": "SaaS 鉴权失败（4xx）",
     "stt_mic_not_ready": "麦克风未就绪",
     "stt_network": "网络不可达",
-    "register_failed": "注册失败：{{id}}（{{error}}）",
     "sync_hotkey_failed": "同步快捷键到 Rust 失败：{{error}}",
     "preflight_permission_denied": "未授予麦克风权限",
     "preflight_no_device": "未找到可用麦克风",

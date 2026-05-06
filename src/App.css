@@ -193,6 +193,15 @@
   html {
     @apply font-sans;
     }
+
+  /* 原生 <select> 弹出层在 Windows / Linux Chromium 下，<option> 会继承父级
+     color/background；当 <select> 用 bg-transparent + 深色主题白字时，OS 弹层
+     的白底叠加白字 → 不可见。强制给所有 <option> 一对可读配色。
+     macOS 由系统绘制 popup，不吃 CSS，这条规则无副作用。 */
+  option {
+    background-color: var(--te-surface);
+    color: var(--te-fg);
+  }
   html,
   body,
   #root {

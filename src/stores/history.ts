@@ -106,6 +106,10 @@ export interface HistoryItem {
   provider_kind?: ProviderKind | null;
   /** 翻译条目的目标语言代码（如 "en"/"zh"/"ja"）。null = 非翻译条目或 schema v5 之前的老记录。 */
   target_lang?: string | null;
+  /** ASR 耗时（ms）：从结束录音到拿到 final transcript。null = schema v7 之前的老记录或失败。 */
+  asr_ms?: number | null;
+  /** AI refine 耗时（ms）：refine chat stream 整段时长。null = 未启用 refine 或失败。 */
+  refine_ms?: number | null;
 }
 
 /** 新增一条记录时的入参；id 与 created_at 由 store 生成。 */
@@ -123,6 +127,8 @@ export interface HistoryInput {
   segment_mode?: HistorySegmentMode | null;
   provider_kind?: ProviderKind | null;
   target_lang?: string | null;
+  asr_ms?: number | null;
+  refine_ms?: number | null;
 }
 
 // SQLite 取出来的原始行（bind 会回 camelCase 的字段，这里统一保留 snake_case）。
@@ -142,6 +148,8 @@ interface Row {
   segment_mode: HistorySegmentMode | null;
   provider_kind: ProviderKind | null;
   target_lang: string | null;
+  asr_ms: number | null;
+  refine_ms: number | null;
 }
 
 function rowToItem(r: Row): HistoryItem {
@@ -161,6 +169,8 @@ function rowToItem(r: Row): HistoryItem {
     segment_mode: r.segment_mode,
     provider_kind: r.provider_kind,
     target_lang: r.target_lang,
+    asr_ms: r.asr_ms,
+    refine_ms: r.refine_ms,
   };
 }
 
@@ -224,7 +234,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const d = await db();
     // type='meeting' 由 useMeetingsStore 自管列表，不混进听写主历史。
     const rows = await d.select<Row[]>(
-      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang FROM history WHERE type != 'meeting' ORDER BY created_at DESC",
+      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms FROM history WHERE type != 'meeting' ORDER BY created_at DESC",
     );
     set({ items: rows.map(rowToItem) });
   },
@@ -246,6 +256,8 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       segment_mode: input.segment_mode ?? null,
       provider_kind: input.provider_kind ?? null,
       target_lang: input.target_lang ?? null,
+      asr_ms: input.asr_ms ?? null,
+      refine_ms: input.refine_ms ?? null,
     };
 
     // retention='off'：不写 DB，只塞内存；重启后清空，与 docs/history.md 一致。
@@ -264,7 +276,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
     const d = await db();
     await d.execute(
-      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
       [
         item.id,
         item.type,
@@ -281,6 +293,8 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         item.segment_mode,
         item.provider_kind,
         item.target_lang,
+        item.asr_ms,
+        item.refine_ms,
       ],
     );
     set({ items: [item, ...get().items] });

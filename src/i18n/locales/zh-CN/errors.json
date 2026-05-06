@@ -24,6 +24,10 @@
     "realtime_not_started": "实时转写未启动",
     "hotkey_sync_failed": "同步快捷键到 Rust 失败：{{error}}"
   },
+  "phase": {
+    "refine": "AI 整理",
+    "translate": "翻译"
+  },
   "stt": {
     "transcribe_failed": "转写失败",
     "transcribe_empty": "未拿到转写结果",
@@ -44,10 +48,10 @@
   },
   "meetings": {
     "go_to_settings": "前往设置",
-    "meeting_provider_unsupported": "听写通道不支持说话人分离",
-    "meeting_provider_unsupported_hint": "请把听写通道切换到「自定义 → 腾讯」并填好 AppID / SecretId / SecretKey。",
+    "meeting_provider_unsupported": "当前通道不支持会议转录",
+    "meeting_provider_unsupported_hint": "请到「设置 → 听写」切换到「自定义 → 腾讯」。",
     "meeting_provider_not_configured": "未配置听写通道",
-    "meeting_provider_not_configured_hint": "请先到「设置 → 听写」配置自定义供应商。",
+    "meeting_provider_not_configured_hint": "请到「设置 → 听写」新增「自定义 → 腾讯」供应商。",
     "network_exit": "连接已断开",
     "network_exit_hint": "实时语音识别连接被中断，请检查网络后重试。",
     "idle_timeout": "长时间无声音被断开",
@@ -59,8 +63,11 @@
     "history_open_failed": "打开会议记录失败",
     "history_delete_failed": "删除会议记录失败",
     "unauthenticated_byok": "自定义供应商鉴权失败",
-    "unauthenticated_byok_hint": "请检查腾讯供应商的 AppID / SecretId / SecretKey 是否正确。",
+    "unauthenticated_byok_hint": "腾讯返回了鉴权失败。请到「设置 → 听写」检查当前自定义供应商的 AppID / SecretId / SecretKey 是否填写正确。",
     "insufficient_funds": "供应商余额不足",
-    "insufficient_funds_hint": "请充值腾讯语音识别账户，或切换到其他供应商。"
+    "insufficient_funds_hint": "请充值腾讯语音识别账户，或切换到其他供应商。",
+    "engine_not_authorized": "腾讯账号未开通 16k_zh_en_speaker 引擎",
+    "engine_not_authorized_hint": "「实时说话人分离」是腾讯独立 SKU，「实时语音识别大模型」资源包并不覆盖。请到腾讯云语音识别控制台开通该引擎，或提工单确认：",
+    "open_tencent_console": "打开"
   }
 }

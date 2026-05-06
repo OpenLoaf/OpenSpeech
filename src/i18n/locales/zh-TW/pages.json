@@ -16,6 +16,15 @@
       "feature_cross_platform": "// 跨平台 WIN · MAC · LINUX"
     },
     "hotkey_hint": "按一下快捷鍵開始錄音，再按一下結束並把文字寫入目前輸入框。按 <esc>Esc</esc> 取消；焦點必須在可編輯區域。",
+    "translate_hint": "按一下翻譯快捷鍵開始錄音，再按一下結束。系統會先轉寫再翻譯為目標語言，並寫入目前輸入框。",
+    "hotkey_tab": {
+      "dictate": "聽寫",
+      "translate": "翻譯"
+    },
+    "hotkey_title": {
+      "dictate": "聽寫快捷鍵 / PUSH-TO-TALK",
+      "translate": "翻譯快捷鍵 / TRANSLATE"
+    },
     "stats": {
       "section_title": "今日 / 本次工作階段",
       "section_title_today": "今日工作階段統計",
@@ -30,7 +39,86 @@
       "wpm_label": "平均速度",
       "wpm_unit": "字/分鐘",
       "saved_label": "節省時間",
-      "saved_unit": "HH:MM"
+      "saved_unit": "HH:MM",
+      "open_dialog_aria": "查看 {{label}} 詳細統計"
+    },
+    "stats_dialog": {
+      "title": "聽寫統計",
+      "subtitle": "本機資料 · 未上傳任何伺服器",
+      "close": "關閉",
+      "range": {
+        "today": "今日",
+        "7d": "近 7 天",
+        "30d": "近 30 天",
+        "90d": "近 90 天",
+        "all": "全部"
+      },
+      "metric_switcher_label": "聚焦",
+      "kpi": {
+        "duration": "時長",
+        "words": "字數",
+        "wpm": "WPM",
+        "saved": "節省",
+        "sessions": "次數"
+      },
+      "main": {
+        "duration": {
+          "title": "時長走勢",
+          "hint": "每日累計錄音時長（HH:MM）"
+        },
+        "words": {
+          "title": "字數累計",
+          "hint": "隨時間累積的總產出字數"
+        },
+        "wpm": {
+          "title": "WPM 走勢",
+          "hint": "每日平均口述速度"
+        },
+        "saved": {
+          "title": "節省累計",
+          "hint": "相對 {{baseline}} WPM 打字基線累計省下的時間"
+        }
+      },
+      "facet": {
+        "heatmap": {
+          "title": "活躍時段",
+          "hint": "週一–週日 × 0–23 時；色越深用得越多",
+          "weekdays": "一,二,三,四,五,六,日"
+        },
+        "top_apps": {
+          "title": "Top 目標應用程式",
+          "hint": "你最常在哪些應用程式裡寫字",
+          "unknown": "未知應用程式"
+        },
+        "wpm_by_mode": {
+          "title": "WPM × 分段模式",
+          "hint": "REALTIME 與 UTTERANCE 的速度對比"
+        },
+        "saved_equivalent": {
+          "title": "等價換算",
+          "hint": "把節省的時間換算成更直觀的單位",
+          "items": {
+            "typing_hours": "≈ 打字 {{value}}",
+            "podcasts": "≈ 聽 {{value}} 集 podcast",
+            "coffees": "≈ 喝 {{value}} 杯咖啡",
+            "books_pages": "≈ 看 {{value}} 頁書"
+          }
+        },
+        "session_dist": {
+          "title": "單次字數分布",
+          "hint": "短句、中段、長稿各占多少",
+          "buckets": {
+            "short": "短句 ≤ 20 字",
+            "medium": "中段 21–100 字",
+            "long": "長稿 > 100 字"
+          }
+        }
+      },
+      "footer": {
+        "open_history": "在歷史中查看 →",
+        "privacy": "所有統計皆在本機計算，無任何網路傳輸"
+      },
+      "empty": "// 尚無聽寫記錄，去主畫面試試 //"
     }
   },
   "history": {
@@ -38,6 +126,7 @@
     "subtitle": "歷史記錄保存在本裝置。",
     "search_placeholder": "搜尋歷史...",
     "more": "更多",
+    "stats": "統計",
     "refresh": "重新整理",
     "retention": {
       "label": "保留時長",
@@ -102,6 +191,7 @@
         "duration": "時長",
         "target": "目標應用",
         "error": "錯誤",
+      "warn": "備註",
         "asr": "語音辨識",
         "ai": "AI 優化",
         "segment_mode": "模式",
@@ -330,6 +420,7 @@
       "empty": "尚無會議記錄",
       "empty_transcript": "（無內容）",
       "loading": "載入中…",
+      "starting": "正在連線供應商…",
       "language_support": "// 目前僅支援 中文 / 英語 / 粵語 / 多種方言（川、陝、豫、滬、湘、鄂、皖）"
     },
     "live": {
@@ -339,6 +430,10 @@
       "resume": "繼續",
       "stop": "結束",
       "listening": "正在聆聽..."
+    },
+    "speaker": {
+      "label": "用戶 {{letter}}",
+      "pending": "用戶 …"
     },
     "review": {
       "back": "返回",

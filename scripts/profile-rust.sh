@@ -34,14 +34,16 @@ cyn() { printf "\033[36m%s\033[0m\n" "$*"; }
 command -v samply >/dev/null || { red "✗ samply 未安装：cargo install --locked samply"; exit 1; }
 [ -d "$SRC_BUNDLE" ] || { red "✗ 找不到 $SRC_BUNDLE，请先跑 pnpm tauri build 至少一次以生成 Info.plist 模板"; exit 1; }
 
-# ─── 1. 检查前端 dist/ ─────────────────────────────────────
-if [ ! -f dist/index.html ]; then
-  ylw "→ dist/ 不存在，跑 vite build (跳过 tsc 因 Meetings 页未完成)"
-  pnpm exec vite build
-fi
+# ─── 1. 强制重 build 前端 dist/ ────────────────────────────
+# Tauri custom-protocol 模式下，dist/ 是 cargo build 时通过 tauri-build embedded assets
+# 嵌入二进制的——dist 老 → binary 里嵌的就是老 UI。所以每次都跑，不能因 dist 已存在而跳过。
+# 跳过 tsc 是因为 Meetings 页有未完成代码会编译失败。
+ylw "→ vite build (跳 tsc，强制刷新 dist/)"
+pnpm exec vite build
 
 # ─── 2. cargo build --profile profiling ─────────────────────
-ylw "→ cargo build --profile profiling --features custom-protocol"
+PKG_VER=$(node -p "require('./package.json').version" 2>/dev/null || echo "?")
+ylw "→ cargo build --profile profiling --features custom-protocol  (version=$PKG_VER)"
 # 通过本 crate 的 custom-protocol feature 把 tauri/custom-protocol 透传给 tauri：
 # 让 Tauri 走 production 分支 (cfg(dev)=false)，加载嵌入的 dist/ 而非连 localhost:1420。
 # 直接 --features tauri/custom-protocol 不行——cargo 不会让透传给 openspeech_lib 自己的 tauri 依赖。

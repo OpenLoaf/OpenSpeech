@@ -5,6 +5,12 @@
     "show_main_window": "打开主窗口",
     "open_toolbox": "打开 AI 工具"
   },
+  "binding_hint": {
+    "dictate_ptt": "按下开始录音，松开后转写并写入光标处",
+    "translate": "按下开始录音，松开后翻译并写入光标处",
+    "show_main_window": "在任意应用中唤起 OpenSpeech 主窗口",
+    "open_toolbox": "在任意应用中跳到 AI 工具页"
+  },
   "format": {
     "unbound": "未绑定",
     "double_tap": "2× {{mod}}"

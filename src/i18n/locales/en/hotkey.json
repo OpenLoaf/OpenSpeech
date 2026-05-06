@@ -5,6 +5,12 @@
     "show_main_window": "Open main window",
     "open_toolbox": "Open AI Tools"
   },
+  "binding_hint": {
+    "dictate_ptt": "Press to record, release to transcribe and inject at the cursor",
+    "translate": "Press to record, release to translate and inject at the cursor",
+    "show_main_window": "Bring the OpenSpeech main window forward from any app",
+    "open_toolbox": "Jump straight to the AI Tools page from any app"
+  },
   "format": {
     "unbound": "Unbound",
     "double_tap": "2× {{mod}}"

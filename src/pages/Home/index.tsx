@@ -5,6 +5,7 @@ import { PulsarGrid } from "@/components/PulsarGrid";
 import { HotkeyDictationCard } from "@/components/HotkeyDictationCard";
 import { useHistoryStore } from "@/stores/history";
 import { useStatsStore } from "@/stores/stats";
+import { useUIStore, type StatsMetric } from "@/stores/ui";
 
 type StatsView = "today" | "all";
 
@@ -43,22 +44,27 @@ type StatProps = {
   label: string;
   value: string;
   unit?: string;
+  onClick?: () => void;
+  ariaLabel?: string;
 };
 
-function StatCard({ index, label, value, unit }: StatProps) {
+function StatCard({ index, label, value, unit, onClick, ariaLabel }: StatProps) {
   return (
-    <motion.div
+    <motion.button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
       initial={{ opacity: 0, y: 12 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
       transition={{ duration: 0.4 }}
-      className="group flex h-full flex-col justify-between border border-te-gray/60 bg-te-surface p-4 transition-colors hover:border-te-accent"
+      className="group flex h-full cursor-pointer flex-col justify-between border border-te-gray/60 bg-te-surface p-4 text-left transition-colors hover:border-te-accent focus:outline-none focus-visible:border-te-accent"
     >
       <div className="flex items-start justify-between">
         <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
           {label}
         </span>
-        <span className="font-mono text-[10px] text-te-light-gray">
+        <span className="font-mono text-[10px] text-te-light-gray transition-colors group-hover:text-te-accent">
           {index}
         </span>
       </div>
@@ -72,7 +78,7 @@ function StatCard({ index, label, value, unit }: StatProps) {
           </span>
         ) : null}
       </div>
-    </motion.div>
+    </motion.button>
   );
 }
 
@@ -86,7 +92,17 @@ export default function HomePage() {
   const historyItems = useHistoryStore((s) => s.items);
   const cachedDuration = useStatsStore((s) => s.totalDurationMs);
   const cachedWords = useStatsStore((s) => s.totalWords);
+  const openStats = useUIStore((s) => s.openStats);
   const [view, setView] = useState<StatsView>("all");
+
+  const cardLabels: Record<StatsMetric, string> = {
+    duration: t("pages:home.stats.duration_label"),
+    words: t("pages:home.stats.words_label"),
+    wpm: t("pages:home.stats.wpm_label"),
+    saved: t("pages:home.stats.saved_label"),
+  };
+  const aria = (m: StatsMetric) =>
+    t("pages:home.stats.open_dialog_aria", { label: cardLabels[m] });
 
   // "今日"实时扫 historyItems；"历史"= stats 缓存 + 今日实时增量
   // （缓存只到上次 init/bump 时刻，今日新发生的会话也得叠加进来）。
@@ -208,27 +224,35 @@ export default function HomePage() {
             <div className="grid min-h-0 flex-1 grid-cols-4 gap-px bg-te-gray/40">
               <StatCard
                 index="01"
-                label={t("pages:home.stats.duration_label")}
+                label={cardLabels.duration}
                 value={stats.duration}
                 unit={t("pages:home.stats.duration_unit")}
+                onClick={() => openStats("duration")}
+                ariaLabel={aria("duration")}
               />
               <StatCard
                 index="02"
-                label={t("pages:home.stats.words_label")}
+                label={cardLabels.words}
                 value={stats.words}
                 unit={t("pages:home.stats.words_unit")}
+                onClick={() => openStats("words")}
+                ariaLabel={aria("words")}
               />
               <StatCard
                 index="03"
-                label={t("pages:home.stats.wpm_label")}
+                label={cardLabels.wpm}
                 value={stats.wpm}
                 unit={t("pages:home.stats.wpm_unit")}
+                onClick={() => openStats("wpm")}
+                ariaLabel={aria("wpm")}
               />
               <StatCard
                 index="04"
-                label={t("pages:home.stats.saved_label")}
+                label={cardLabels.saved}
                 value={stats.saved}
                 unit={t("pages:home.stats.saved_unit")}
+                onClick={() => openStats("saved")}
+                ariaLabel={aria("saved")}
               />
             </div>
           </div>

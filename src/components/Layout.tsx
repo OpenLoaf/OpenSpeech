@@ -34,6 +34,8 @@ import { CloseToBackgroundDialog } from "@/components/CloseToBackgroundDialog";
 import { LoginDialog } from "@/components/LoginDialog";
 import { NoInternetDialog } from "@/components/NoInternetDialog";
 import { FeedbackDialog } from "@/components/FeedbackDialog";
+import { HotkeyConflictDialog } from "@/components/HotkeyConflictDialog";
+import { StatsDialog } from "@/components/StatsDialog";
 import { WindowControls } from "@/components/WindowControls";
 import { useAuthStore } from "@/stores/auth";
 import { useHistoryStore } from "@/stores/history";
@@ -61,7 +63,15 @@ const MAIN_NAV: NavItem[] = [
   { to: "/dictionary", i18nKey: "dictionary", icon: BookOpen },
 ];
 
-function NavRow({ item, badge = 0 }: { item: NavItem; badge?: number }) {
+function NavRow({
+  item,
+  badge = 0,
+  shortcut,
+}: {
+  item: NavItem;
+  badge?: number;
+  shortcut?: string;
+}) {
   const { t } = useTranslation();
   const Icon = item.icon;
   return (
@@ -90,6 +100,18 @@ function NavRow({ item, badge = 0 }: { item: NavItem; badge?: number }) {
           {badge > 0 ? (
             <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#ff4d4d] px-1 font-mono text-[10px] font-bold leading-none text-white tabular-nums tracking-normal">
               {badge > 99 ? "99+" : badge}
+            </span>
+          ) : shortcut ? (
+            <span
+              aria-hidden
+              className={cn(
+                "pl-4 font-mono text-[10px] normal-case tracking-normal transition-colors",
+                isActive
+                  ? "text-te-accent/35"
+                  : "text-te-light-gray/20 group-hover:text-te-light-gray/40",
+              )}
+            >
+              {shortcut}
             </span>
           ) : null}
         </>
@@ -123,6 +145,9 @@ export default function Layout() {
   const feedbackOpen = useUIStore((s) => s.feedbackOpen);
   const setFeedbackOpen = useUIStore((s) => s.setFeedbackOpen);
   const openFeedback = useUIStore((s) => s.openFeedback);
+  const statsOpen = useUIStore((s) => s.statsOpen);
+  const setStatsOpen = useUIStore((s) => s.setStatsOpen);
+  const statsFocusMetric = useUIStore((s) => s.statsFocusMetric);
   const openLogin = useUIStore((s) => s.openLogin);
   const openSettings = useUIStore((s) => s.openSettings);
   const pendingUpdate = useUIStore((s) => s.pendingUpdate);
@@ -359,7 +384,7 @@ export default function Layout() {
   }, [navigate, openSettings, openFeedback]);
 
   // 全局快捷键：Cmd+, (macOS) / Ctrl+, (Windows/Linux) 打开设置。
-  // 设置已打开时跳过，避免覆盖当前 tab；HotkeyField 录制冲突也由此规避。
+  // 设置已打开时跳过，避免覆盖当前 tab；快捷键录入冲突也由此规避。
   useEffect(() => {
     const isMac = detectPlatform() === "macos";
     const onKeyDown = (e: KeyboardEvent) => {
@@ -388,6 +413,26 @@ export default function Layout() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // ⌘1~N (macOS) / Alt+1~N (Win/Linux) 切到主导航对应路由。任意 base-ui dialog
+  // 打开期间禁用——dialog 自己有同样的 ⌘1~5 切 tab 逻辑，避免双触发；HotkeyBinder
+  // 录入态在 capture 阶段 stopImmediatePropagation 也会拦掉，不会误切。
+  useEffect(() => {
+    const isMac = detectPlatform() === "macos";
+    const onKeyDown = (e: KeyboardEvent) => {
+      const modOk = isMac
+        ? e.metaKey && !e.ctrlKey && !e.altKey
+        : e.altKey && !e.ctrlKey && !e.metaKey;
+      if (!modOk || e.shiftKey) return;
+      const idx = Number.parseInt(e.key, 10);
+      if (Number.isNaN(idx) || idx < 1 || idx > MAIN_NAV.length) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      e.preventDefault();
+      navigate(MAIN_NAV[idx - 1]!.to);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [navigate]);
 
   // 设置页等处改 inputDevice 后通知 Rust 重建托盘菜单，让"选择麦克风"的 ✓
   // 跟随最新选择。空依赖 + subscribe 自带首次调用豁免（prev === next）。
@@ -517,11 +562,18 @@ export default function Layout() {
 
         {/* Main nav */}
         <nav className="flex flex-1 flex-col gap-px overflow-y-auto py-4">
-          {MAIN_NAV.map((item) => (
+          {MAIN_NAV.map((item, idx) => (
             <NavRow
               key={item.to}
               item={item}
               badge={item.to === "/history" ? historyFailedHeadCount : 0}
+              shortcut={
+                idx < 9
+                  ? isMacPlatform
+                    ? `⌘ ${idx + 1}`
+                    : `Alt + ${idx + 1}`
+                  : undefined
+              }
             />
           ))}
         </nav>
@@ -642,6 +694,12 @@ export default function Layout() {
       />
       <NoInternetDialog open={noInternetOpen} onOpenChange={setNoInternetOpen} />
       <FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
+      <StatsDialog
+        open={statsOpen}
+        onOpenChange={setStatsOpen}
+        focusMetric={statsFocusMetric}
+      />
+      <HotkeyConflictDialog />
     </div>
   );
 }

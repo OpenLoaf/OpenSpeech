@@ -16,12 +16,14 @@
   "email_label": "Contact email (optional)",
   "email_placeholder": "you@example.com",
   "email_hint": "Leave an email so we can follow up. Otherwise it's submitted anonymously.",
+  "attach_logs_label": "Include recent app logs",
+  "attach_logs_hint": "Sends the most recent app logs along with your report to help us debug. Enabled by default for bug reports.",
+  "attach_logs_failed": "Couldn't read the log file. Submitting without logs.",
   "submit": "Submit feedback",
   "submit_loading": "Submitting…",
   "cancel": "Cancel",
   "validation": {
     "content_required": "Please write a sentence about what you'd like to share",
-    "content_too_short": "Add a bit more detail so we can act on it",
     "email_invalid": "That email doesn't look right"
   },
   "toast": {

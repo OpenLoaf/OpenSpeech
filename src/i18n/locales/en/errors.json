@@ -24,6 +24,10 @@
     "realtime_not_started": "Realtime transcription didn't start",
     "hotkey_sync_failed": "Failed to sync hotkeys to Rust: {{error}}"
   },
+  "phase": {
+    "refine": "AI refine",
+    "translate": "Translation"
+  },
   "stt": {
     "transcribe_failed": "Transcription failed",
     "transcribe_empty": "No transcript returned",
@@ -44,10 +48,10 @@
   },
   "meetings": {
     "go_to_settings": "Open settings",
-    "meeting_provider_unsupported": "Dictation channel doesn't support speaker diarization",
-    "meeting_provider_unsupported_hint": "Switch the dictation channel to Custom → Tencent and fill in AppID / SecretId / SecretKey.",
-    "meeting_provider_not_configured": "Dictation channel is not configured",
-    "meeting_provider_not_configured_hint": "Open Settings → Dictation and configure a custom provider first.",
+    "meeting_provider_unsupported": "Channel doesn't support meeting transcription",
+    "meeting_provider_unsupported_hint": "Open Settings → Dictation and switch to Custom → Tencent.",
+    "meeting_provider_not_configured": "Dictation channel not configured",
+    "meeting_provider_not_configured_hint": "Open Settings → Dictation and add a Custom → Tencent provider.",
     "network_exit": "Connection lost",
     "network_exit_hint": "The realtime ASR connection was dropped. Check your network and try again.",
     "idle_timeout": "Disconnected due to silence",
@@ -59,8 +63,11 @@
     "history_open_failed": "Failed to open meeting record",
     "history_delete_failed": "Failed to delete meeting record",
     "unauthenticated_byok": "Custom provider authentication failed",
-    "unauthenticated_byok_hint": "Re-check the AppID / SecretId / SecretKey of the active Tencent provider.",
+    "unauthenticated_byok_hint": "Tencent rejected the credentials. Open Settings → Dictation and double-check AppID / SecretId / SecretKey of the active provider.",
     "insufficient_funds": "Provider balance exhausted",
-    "insufficient_funds_hint": "Top up the Tencent ASR account or switch to another provider."
+    "insufficient_funds_hint": "Top up the Tencent ASR account or switch to another provider.",
+    "engine_not_authorized": "Tencent account hasn't enabled engine 16k_zh_en_speaker",
+    "engine_not_authorized_hint": "\"Realtime Speaker Diarization\" is a separate Tencent SKU — the \"Realtime ASR Large Model\" pack does NOT cover it. Enable this engine via the Tencent Cloud ASR console (or open a support ticket):",
+    "open_tencent_console": "Open"
   }
 }

@@ -1,8 +1,15 @@
 //! 腾讯实时语音识别 + 说话人分离的端到端烟雾测试。
 //!
-//! 不依赖 Tauri / SaaS 登录态——直接拿环境变量 + 本地 OGG 文件跑通。
+//! **零环境变量**：默认从 OpenSpeech 已配置的"自定义 → 腾讯"BYOK 自动取凭证：
+//!   - settings.json 里 `dictation.customProviders` 找 vendor=tencent 那条，
+//!     拿 id / tencentAppId
+//!   - macOS Keychain service=`com.openspeech.app` key=`dictation_provider_<id>`
+//!     里取 secretId / secretKey
 //!
-//! 前置条件：
+//! 这样在 dev 环境点过设置 → 听写 → 自定义 → 腾讯 之后，example 直接能跑通，
+//! 不需要再 export 任何东西，也不会把 SecretKey 落到任何文件。
+//!
+//! 旧的环境变量路径仍然 fallback 支持（CI 或没配 BYOK 的人可走 env）：
 //!   export TENCENT_APPID=...
 //!   export TENCENT_SECRET_ID=...
 //!   export TENCENT_SECRET_KEY=...
@@ -12,6 +19,8 @@
 //!   cargo run --example test_meeting_speaker_realtime -- path/to/audio.ogg
 //!
 //! 默认音频用 `.claude/skills/openspeech-prompt-eval/cases/005-history-view-detail/audio.ogg`。
+//!
+//! **首次运行 macOS 会弹 Keychain 授权弹窗**——选「始终允许」。
 
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -22,16 +31,24 @@ use openspeech_lib::asr::meeting::tencent_speaker::TencentSpeakerProvider;
 use openspeech_lib::asr::meeting::{
     MeetingAsrProvider, MeetingEvent, MeetingSessionConfig,
 };
+use openspeech_lib::secrets::{
+    DictationCredentials, load_dictation_provider_credentials_for_rust,
+};
 use opus::{Channels, Decoder};
+use serde::Deserialize;
 
 const TARGET_RATE: u32 = 16_000;
 const FRAME_MS: u64 = 40; // 腾讯说话人分离推荐节奏
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    // 简单初始化日志，让 tencent_speaker 模块的 [ws-debug] / [ws-in] 都打到 stderr。
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
 
-    let provider = TencentSpeakerProvider::from_env()?;
+    let provider = load_provider()?;
     println!("✅ provider id = {}", provider.id());
+    println!("    app_id = {} (secret_id={}***)", provider.app_id, &provider.secret_id[..provider.secret_id.len().min(8)]);
     println!("    capabilities = {:#?}", provider.capabilities());
 
     let audio_path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
@@ -182,4 +199,107 @@ fn decode_ogg_to_pcm16_mono_16k(path: &Path) -> Result<Vec<u8>, Box<dyn std::err
         bytes.extend_from_slice(&s.to_le_bytes());
     }
     Ok(bytes)
+}
+
+// ─── 凭证装载 ─────────────────────────────────────────────────────
+//
+// 优先：从 settings.json + macOS Keychain 取（与 byok_e2e.rs 同一套）。
+// 兜底：env vars TENCENT_APPID / TENCENT_SECRET_ID / TENCENT_SECRET_KEY。
+
+#[derive(Debug, Deserialize)]
+struct PersistRoot {
+    root: PersistInner,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersistInner {
+    dictation: DictationSlice,
+}
+
+#[derive(Debug, Deserialize)]
+struct DictationSlice {
+    #[serde(default, rename = "activeCustomProviderId")]
+    active_custom_provider_id: Option<String>,
+    #[serde(default, rename = "customProviders")]
+    custom_providers: Vec<ProviderEntry>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ProviderEntry {
+    id: String,
+    #[serde(default)]
+    vendor: String,
+    #[serde(rename = "tencentAppId", default)]
+    tencent_app_id: Option<String>,
+}
+
+fn settings_path() -> PathBuf {
+    let home = std::env::var("HOME").expect("HOME env var must be set");
+    PathBuf::from(home)
+        .join("Library/Application Support/com.openspeech.app/settings.json")
+}
+
+fn load_provider() -> Result<TencentSpeakerProvider, Box<dyn std::error::Error>> {
+    if let Ok(p) = TencentSpeakerProvider::from_env() {
+        println!("🔐 凭证来源：环境变量 TENCENT_*");
+        return Ok(p);
+    }
+
+    let path = settings_path();
+    let raw = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "读不到 OpenSpeech 配置：{} ({e})\n\
+             请先在 OpenSpeech 设置 → 听写 中添加并激活一个「自定义 → 腾讯」供应商，\n\
+             或者 export TENCENT_APPID/SECRET_ID/SECRET_KEY 环境变量。",
+            path.display()
+        )
+    })?;
+    let parsed: PersistRoot = serde_json::from_str(&raw).map_err(|e| {
+        format!("解析 settings.json 失败：{e}（路径 {}）", path.display())
+    })?;
+    let dictation = parsed.root.dictation;
+
+    let active_id = dictation.active_custom_provider_id.clone();
+    let active = dictation
+        .custom_providers
+        .iter()
+        .find(|p| Some(&p.id) == active_id.as_ref() && p.vendor == "tencent")
+        .cloned()
+        .or_else(|| {
+            dictation
+                .custom_providers
+                .iter()
+                .find(|p| p.vendor == "tencent")
+                .cloned()
+        })
+        .ok_or("settings.json 里没有 vendor='tencent' 的自定义供应商")?;
+
+    let app_id = active
+        .tencent_app_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or("自定义供应商缺 tencentAppId")?;
+
+    let creds = load_dictation_provider_credentials_for_rust(&active.id)
+        .map_err(|e| format!("Keychain 读取失败：{e}"))?
+        .ok_or_else(|| {
+            format!(
+                "Keychain 里没有 dictation_provider_{} 条目（service=com.openspeech.app）",
+                active.id
+            )
+        })?;
+    let (secret_id, secret_key) = match creds {
+        DictationCredentials::Tencent {
+            secret_id,
+            secret_key,
+        } => (secret_id, secret_key),
+        DictationCredentials::Aliyun { .. } => {
+            return Err("当前激活的自定义供应商是阿里，不是腾讯".into());
+        }
+    };
+    println!(
+        "🔐 凭证来源：Keychain (provider id = {})  app_id={}",
+        active.id, app_id
+    );
+    Ok(TencentSpeakerProvider::new(app_id, secret_id, secret_key))
 }

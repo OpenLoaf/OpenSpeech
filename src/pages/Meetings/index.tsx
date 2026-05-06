@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeft,
+  Loader2,
   Mic,
   Pause,
   Pencil,
@@ -12,13 +13,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  selectSortedSegments,
-  useMeetingsStore,
-  type MeetingSegment,
-} from "@/stores/meetings";
+import { useMeetingsStore, type MeetingSegment } from "@/stores/meetings";
 import type { MeetingHistoryRow } from "@/lib/meetings-history";
-import { useUIStore } from "@/stores/ui";
+import { MeetingErrorDialog } from "@/components/MeetingErrorDialog";
 
 const SPEAKER_COLORS = [
   "text-te-accent",
@@ -28,13 +25,6 @@ const SPEAKER_COLORS = [
   "text-rose-400",
   "text-amber-400",
 ];
-
-// 错误条 → 引导按钮：把这些 code 映射成"前往设置 → 听写"。
-// 其它 code 仅显示文本，不挂引导。
-const ERROR_CODES_OPEN_SETTINGS: ReadonlySet<string> = new Set([
-  "meeting_provider_unsupported",
-  "meeting_provider_not_configured",
-]);
 
 function formatHMS(ms: number): string {
   const total = Math.floor(ms / 1000);
@@ -50,9 +40,29 @@ function speakerColor(speakerId: number): string {
   return SPEAKER_COLORS[speakerId % SPEAKER_COLORS.length];
 }
 
-function speakerLabel(speakerId: number): string {
-  if (speakerId < 0) return "?";
-  return String.fromCharCode(65 + (speakerId % 26));
+function SpeakerLabel({ speakerId, className }: { speakerId: number; className?: string }) {
+  const { t } = useTranslation();
+  const text = speakerId < 0
+    ? t("pages:meetings.speaker.pending")
+    : t("pages:meetings.speaker.label", { letter: String.fromCharCode(65 + (speakerId % 26)) });
+  return <span className={cn("font-mono text-xs", speakerColor(speakerId), className)}>{text}</span>;
+}
+
+/**
+ * 把 store 里的 segments Map 派生成排好序的数组。
+ *
+ * 必须在组件内 useMemo 而不能用 zustand selector 直接 `Array.from(...).sort(...)`
+ * —— selector 每次都返回新数组引用，会让 React 19 的 useSyncExternalStore 抛
+ * "getSnapshot should be cached" 并陷入死循环。
+ *
+ * Map 引用只在 store 里 `set({ segments: new Map(...) })` 时才换，依赖稳定。
+ */
+function useSortedSegments(): MeetingSegment[] {
+  const segmentsMap = useMeetingsStore((s) => s.segments);
+  return useMemo(
+    () => Array.from(segmentsMap.values()).sort((a, b) => a.startMs - b.startMs),
+    [segmentsMap],
+  );
 }
 
 /* ─────────────────────────────────────────────── */
@@ -177,22 +187,13 @@ export default function MeetingsPage() {
   const resumeMeeting = useMeetingsStore((s) => s.resume);
   const stopMeeting = useMeetingsStore((s) => s.stop);
   const back = useMeetingsStore((s) => s.back);
-  const dismissError = () => useMeetingsStore.setState({ error: null });
-  const openSettings = useUIStore((s) => s.openSettings);
+  const dismissError = useMeetingsStore((s) => s.dismissError);
 
   useEffect(() => {
     let off: (() => void) | undefined;
     initSubscriptions().then((u) => { off = u; });
     return () => { off?.(); };
   }, [initSubscriptions]);
-
-  const errorTitle = error
-    ? t(`errors:meetings.${error.code}`, { defaultValue: error.message || error.code })
-    : "";
-  const errorHintKey = error ? `errors:meetings.${error.code}_hint` : "";
-  const errorHint = error
-    ? t(errorHintKey, { defaultValue: "" })
-    : "";
 
   return (
     <section className="relative flex h-full flex-col bg-te-bg">
@@ -228,42 +229,17 @@ export default function MeetingsPage() {
         </div>
       ) : null}
 
-      {error ? (
-        <div className="flex items-start gap-3 border-b border-[#ff4d4d]/40 bg-[#ff4d4d]/10 px-[4vw] py-2 font-mono text-[11px] text-[#ff4d4d]">
-          <div className="min-w-0 flex-1">
-            <div className="font-semibold uppercase tracking-[0.15em]">{errorTitle}</div>
-            {errorHint ? (
-              <div className="mt-1 text-[10px] tracking-[0.05em] opacity-90">{errorHint}</div>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {ERROR_CODES_OPEN_SETTINGS.has(error.code) ? (
-              <button
-                type="button"
-                onClick={() => openSettings("DICTATION")}
-                className="border border-[#ff4d4d]/60 px-2 py-1 text-[10px] uppercase tracking-[0.15em] hover:bg-[#ff4d4d]/20"
-              >
-                {t("errors:meetings.go_to_settings", { defaultValue: "Open settings" })}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={dismissError}
-              className="px-2 py-1 text-[10px] uppercase tracking-[0.15em] opacity-80 hover:opacity-100"
-            >
-              {t("common:actions.close", { defaultValue: "Close" })}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       <div className="min-h-0 flex-1 overflow-hidden">
-        {view === "idle" ? <IdleView onStart={startMeeting} /> : null}
+        {view === "idle" || view === "starting" ? (
+          <IdleView onStart={startMeeting} loading={view === "starting"} />
+        ) : null}
         {view === "live" || view === "paused" ? (
           <LiveView paused={view === "paused"} onPauseToggle={view === "paused" ? resumeMeeting : pauseMeeting} onStop={stopMeeting} />
         ) : null}
         {view === "review" ? <ReviewView onBack={back} /> : null}
       </div>
+
+      <MeetingErrorDialog error={error} onClose={dismissError} />
     </section>
   );
 }
@@ -272,7 +248,7 @@ export default function MeetingsPage() {
 /*  Idle view                                       */
 /* ─────────────────────────────────────────────── */
 
-function IdleView({ onStart }: { onStart: () => void }) {
+function IdleView({ onStart, loading }: { onStart: () => void; loading: boolean }) {
   const { t } = useTranslation();
   const recent = useMeetingsStore((s) => s.recentMeetings);
   const recentLoaded = useMeetingsStore((s) => s.recentLoaded);
@@ -303,15 +279,28 @@ function IdleView({ onStart }: { onStart: () => void }) {
           <button
             type="button"
             onClick={onStart}
+            disabled={loading}
             aria-label={t("pages:meetings.idle.hint")}
-            className="group relative flex size-28 items-center justify-center rounded-full bg-te-accent text-te-accent-fg shadow-[0_0_0_8px_color-mix(in_oklab,var(--te-accent)_18%,transparent)] transition hover:shadow-[0_0_0_14px_color-mix(in_oklab,var(--te-accent)_22%,transparent)]"
+            aria-busy={loading}
+            className={cn(
+              "group relative flex size-28 items-center justify-center rounded-full bg-te-accent text-te-accent-fg transition",
+              loading
+                ? "cursor-progress opacity-80 shadow-[0_0_0_8px_color-mix(in_oklab,var(--te-accent)_18%,transparent)]"
+                : "shadow-[0_0_0_8px_color-mix(in_oklab,var(--te-accent)_18%,transparent)] hover:shadow-[0_0_0_14px_color-mix(in_oklab,var(--te-accent)_22%,transparent)]",
+            )}
           >
-            <Mic className="size-10 transition group-hover:scale-110" strokeWidth={1.75} />
+            {loading ? (
+              <Loader2 className="size-10 animate-spin" strokeWidth={1.75} />
+            ) : (
+              <Mic className="size-10 transition group-hover:scale-110" strokeWidth={1.75} />
+            )}
           </button>
 
           <div className="text-center">
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-te-light-gray">
-              {t("pages:meetings.idle.hint")}
+              {loading
+                ? t("pages:meetings.idle.starting", { defaultValue: "Starting…" })
+                : t("pages:meetings.idle.hint")}
             </div>
             <div className="mt-2 font-mono text-2xl font-bold tabular-nums text-te-fg">
               00:00:00
@@ -428,7 +417,7 @@ function LiveView({
   onStop: () => void;
 }) {
   const { t } = useTranslation();
-  const segments = useMeetingsStore(selectSortedSegments);
+  const segments = useSortedSegments();
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
   // 新片段进来时滚到底（用户主动上滑可中断）
@@ -490,14 +479,7 @@ function SegmentBlock({ seg }: { seg: MeetingSegment }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline gap-3">
-        <span
-          className={cn(
-            "font-mono text-xs uppercase tracking-[0.25em]",
-            speakerColor(seg.speakerId),
-          )}
-        >
-          [{speakerLabel(seg.speakerId)}]
-        </span>
+        <SpeakerLabel speakerId={seg.speakerId} />
         <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
           {formatHMS(seg.startMs)}
         </span>
@@ -521,7 +503,7 @@ function SegmentBlock({ seg }: { seg: MeetingSegment }) {
 
 function ReviewView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
-  const segments = useMeetingsStore(selectSortedSegments);
+  const segments = useSortedSegments();
   const elapsedMs = useMeetingsStore((s) => s.elapsedMs);
   const reviewMeetingId = useMeetingsStore((s) => s.reviewMeetingId);
   const recent = useMeetingsStore((s) => s.recentMeetings);
@@ -634,9 +616,7 @@ function ReviewView({ onBack }: { onBack: () => void }) {
                     className="flex flex-col gap-2 border-l-2 border-transparent px-3 py-1 text-left transition hover:border-te-gray/40 hover:bg-te-surface-hover/50"
                   >
                     <div className="flex items-baseline gap-3">
-                      <span className={cn("font-mono text-xs uppercase tracking-[0.25em]", speakerColor(seg.speakerId))}>
-                        [{speakerLabel(seg.speakerId)}]
-                      </span>
+                      <SpeakerLabel speakerId={seg.speakerId} />
                       <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
                         {formatHMS(seg.startMs)}
                       </span>

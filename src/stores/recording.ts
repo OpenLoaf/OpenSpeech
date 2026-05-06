@@ -38,6 +38,7 @@ import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { newId } from "@/lib/ids";
+import { cuePlay, cueSetActive } from "@/lib/cue";
 
 export type RecordingState =
   | "idle"
@@ -53,9 +54,9 @@ interface HotkeyEvent {
   phase: "pressed" | "released";
 }
 
-// 波形 bar 数量；Overlay 的 Waveform 组件消费这个长度的滑动窗口。
-// 15 × 50ms = 750ms 一个完整流动周期，密度够且肉眼能感受到"流过"。
-const LEVEL_BUFFER_LEN = 20;
+// 波形 bar 数量；Home / Overlay 的 Waveform 消费这个长度的滑动窗口。
+// Rust audio_level emit 频率 = 20Hz（TICK_MS=50ms），60 × 50ms = 3s 一个完整流动周期。
+const LEVEL_BUFFER_LEN = 60;
 
 interface RecordingStore {
   state: RecordingState;
@@ -90,6 +91,13 @@ interface RecordingStore {
    */
   segmentModeOverride: AsrSegmentMode | null;
   setSegmentModeOverride: (mode: AsrSegmentMode | null) => void;
+  /**
+   * ESC 二段确认状态：第一次 ESC 后 500ms 静默期内为 false；静默超时进入
+   * "armed" 阶段为 true；3s prompt 超时或第二次 ESC 取消后回到 false。
+   * Home 页 LiveDictationPanel 据此切换 [Esc] 按键的视觉强调，与 overlay X 按钮的
+   * armed 视觉保持一致。
+   */
+  escArmed: boolean;
   initListeners: () => Promise<void>;
   syncBindings: (
     bindings: Record<BindingId, HotkeyBinding | null>,
@@ -222,6 +230,37 @@ const notifyOverlay = (
     durationMs: options.durationMs,
     dismissOnDisarm: options.dismissOnDisarm,
   });
+};
+
+// 翻译模式指示条状态推送——overlay 端 TranslateIndicator 是独立 motion 元素，
+// 与 toast（警告/错误语义）解耦。lang 在 active=true 时是当前界面语言下的目标
+// 语言简称（"英文" / "Chinese"），active=false 时不带。
+const emitTranslateActive = (active: boolean, lang?: string) => {
+  if (!IS_MAIN_WINDOW) return;
+  void emitTo("overlay", "openspeech://translate-active", { active, lang });
+};
+
+// 录音中跨模式切换提示（dictate_ptt ↔ translate）。overlay 收到后在 pill 中心
+// 临时替换 wave 显示"切换到 X 模式"~2s 再回归正常渲染。
+type ModeSwitchKind = "translate" | "dictation";
+const emitModeSwitchHint = (kind: ModeSwitchKind) => {
+  if (!IS_MAIN_WINDOW) return;
+  void emitTo("overlay", "openspeech://mode-switch-hint", { kind });
+};
+
+// 录音中"另一种激活键"是否能触发跨模式切换——只有 dictate_ptt 与 translate
+// 两个 id 共享一次录音的语义边界（都属于"按一下开始 + 录完出文字"流程），
+// 才能互切；show_main_window / open_toolbox 等无录音流程的快捷键不参与。
+const isModeSwitchTarget = (id: BindingId | null): boolean =>
+  id === "dictate_ptt" || id === "translate";
+
+// 拿当前界面语言下的目标语言简称（"英文" / "Chinese" 等）。i18n 找不到时回退
+// 到目标语言代码大写。
+const resolveTranslateLangLabel = (): string => {
+  const target = useSettingsStore.getState().general.translateTargetLang;
+  const langKey = `overlay:translate.lang.${target}`;
+  const label = i18n.t(langKey);
+  return label === langKey ? target.toUpperCase() : (label as string);
 };
 
 // DashScope qwen3-asr-flash-realtime 的已知模型层 bug：解码 token 复读循环，
@@ -467,11 +506,12 @@ const openLoginAfterSaasAuthLost = () => {
   useUIStore.getState().openLogin();
 };
 
-// 录音都没起来就 401（stt_start 阶段）：内存 PCM 还没攒、history 也没东西可写，
-// 直接清场 + 弹登录。
+// 录音都没起来就 401（stt_start 阶段）：内存 PCM 还没攒、录音文件也没落盘，
+// 直接清场 + 弹登录。但仍写一条 failed history 让用户事后能看到"这次按了快捷键，登录已过期"。
 const discardAndOpenLogin = () => {
   if (!IS_MAIN_WINDOW) return;
   console.warn("[stt] auth lost (401) before recording → discarding session + opening login");
+  recordAbortFailureHistory(i18n.t("overlay:error.stt_not_authenticated"));
   discardRecording();
   stopMic();
   useRecordingStore.setState({
@@ -484,8 +524,12 @@ const discardAndOpenLogin = () => {
   useUIStore.getState().openLogin();
 };
 
+// 录音 / 转写完全没起来就失败：discard 录音 + 写一条 failed history，
+// 让用户事后能在历史里看到"几点几分发生了一次启动失败 + 真实原因"。
+// audio_path / duration_ms 都是 0/null（音频根本没落盘）。
 const abortToIdle = (errorTitle: string, errorDesc: string) => {
   if (!IS_MAIN_WINDOW) return;
+  recordAbortFailureHistory(errorDesc || errorTitle);
   discardRecording();
   stopMic();
   useRecordingStore.setState({
@@ -542,6 +586,28 @@ const startRecordingSession = (id: string) => {
 // 状态：有 Final 文字 → success；空串 → failed（此时 text 用占位，UI 可据 status 分别展示）。
 const transcriptPlaceholder = () => i18n.t("overlay:transcript.placeholder");
 
+// 写一条 audio 已被丢弃的 failed history（duration=0, audio_path=null）。
+// 用于"录音中途出错强制 abort"的事件路径——audio-stream-error / worker_dead /
+// insufficient_credits / startMic 失败 / abortToIdle 等：用户值得在历史里看到
+// "几点几分发生了一次 X 错误"，而不是只看到悬浮条一闪而过。
+const recordAbortFailureHistory = (errorMsg: string) => {
+  if (!IS_MAIN_WINDOW) return;
+  const wasTranslate = useRecordingStore.getState().activeId === "translate";
+  void useHistoryStore
+    .getState()
+    .add({
+      type: wasTranslate ? "translate" : "dictation",
+      text: transcriptPlaceholder(),
+      status: "failed",
+      error: errorMsg,
+      duration_ms: 0,
+      target_lang: wasTranslate
+        ? useSettingsStore.getState().general.translateTargetLang
+        : null,
+    })
+    .catch((e) => console.warn("[recording] recordAbortFailureHistory failed:", e));
+};
+
 type FinalizeOutcome = {
   rec: RecordingResult | null;
   text: string; // 最终转写文字，空串表示失败 / 超时
@@ -559,10 +625,24 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   if (!IS_MAIN_WINDOW) return { rec: null, text: "" };
   const segmentModeAtStop = getEffectiveSegmentMode();
   console.info(`[recording] finalizeAndWriteHistory entering, mode=${segmentModeAtStop}`);
+  // 端到端耗时分段统计（写入 history.asr_ms / refine_ms，UI 可在 result 模式展示）。
+  // asr 起点 = finalize 入口（用户结束录音的瞬间）；终点在拿到 final transcript 时记录。
+  const finalizeStartedAt = performance.now();
+  let asrMsForHistory: number | null = null;
+  let refineMsForHistory: number | null = null;
+  // ASR 路径上的真实错误（人话，已 i18n）。任何"用户能感知到的失败"都要落到这里，
+  // 最终写进 history.error 让用户事后能在历史里看到具体原因，而不是只看到悬浮条一闪而过。
+  let asrErrorMsg: string | null = null;
+  // refine / 翻译 phase2 的错误。raw transcript 已拿到但 AI 整理 / 翻译失败时填这里。
+  // - 听写 + AI refine 失败：status=success，error 仅作备注（用户拿到了 raw 文字）。
+  // - 翻译模式 phase2 失败：status=failed（用户期望的是译文，没拿到 == 未达成意图）。
+  let refineErrorMsg: string | null = null;
   const recSettled = await Promise.allSettled([stopRecordingAndSave()]).then((r) => r[0]);
 
   // 离线 VAD 判定整段无人声：录音文件未落盘（audio_path 空串）、跳过 ASR / 历史 / 注入，
-  // 走 silent 分支让调用方直接回 idle 并 toast 提示。避免"激活后没说话仍上传半小时静音"。
+  // 走 silent 分支让调用方把 pill 切到 error 态显示提示。**不发独立 toast**——
+  // 否则 pill 立即 exit + toast 单独出现，视觉上是"内容跳一下"。让 pill 中心
+  // 从 transcribing 进度条 crossfade 到 ERROR + 提示文字，过渡平滑。
   if (recSettled.status === "fulfilled" && recSettled.value.voiced === false) {
     const recv = recSettled.value;
     console.info(
@@ -570,9 +650,6 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     );
     void cancelSttSession();
     resetIncrementalInject();
-    notifyOverlay("warning", i18n.t("overlay:toast.silent_recording.title"), {
-      durationMs: 3000,
-    });
     return { rec: null, text: "", silent: true };
   }
 
@@ -616,9 +693,11 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         console.warn(
           `[stt] utterance recording too long (${rec.duration_ms}ms) → skip transcribe`,
         );
-        notifyOverlay("error", i18n.t("transcribe.too_long_for_utterance", { ns: "pages" }), {
+        const tooLongMsg = i18n.t("transcribe.too_long_for_utterance", { ns: "pages" });
+        notifyOverlay("error", tooLongMsg, {
           durationMs: 6000,
         });
+        asrErrorMsg = tooLongMsg;
         text = "";
       } else {
         try {
@@ -645,12 +724,15 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
             // SaaS 转写过期：弹登录但保留录音 + 让 finalize 把 history 标 failed
             // 写下去，用户能在历史里看到这次失败 + 录音文件。不再切 idle。
             openLoginAfterSaasAuthLost();
+            asrErrorMsg = i18n.t("overlay:error.stt_not_authenticated");
             text = "";
           } else {
             console.warn("[stt] file transcribe failed:", e);
+            const desc = humanizeSttError(e);
             notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
-              description: humanizeSttError(e),
+              description: desc,
             });
+            asrErrorMsg = desc;
             text = "";
           }
         }
@@ -664,18 +746,26 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     // 这里不重复骚扰。其他错误才弹。
     const reason = String(sttSettled.reason ?? "");
     if (!reason.includes("no active stt session")) {
+      const desc = humanizeSttError(sttSettled.reason);
       notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
-        description: humanizeSttError(sttSettled.reason),
+        description: desc,
       });
+      asrErrorMsg = desc;
+    } else {
+      // start 已经记录过原因（错误已经经 abortToIdle 落 history），但本次 finalize
+      // 还是要给个非空错误码，否则 history.add 会兜底成 "no final transcript"。
+      asrErrorMsg = i18n.t("overlay:error.stt_mic_not_ready");
     }
   } else if (sttSettled.status === "fulfilled" && !sttSettled.value) {
     // 0 段 Final：可能是真静音、也可能是服务端没识别成功。无论哪种用户都该
     // 看到反馈，否则"按了快捷键啥都没发生"比错误提示更糟。toast 几秒自动消失。
     console.warn("[stt] no final transcript (silent or timeout)");
+    const desc = i18n.t("overlay:toast.transcribe_failed.no_transcript");
     notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
-      description: i18n.t("overlay:toast.transcribe_failed.no_transcript"),
+      description: desc,
       durationMs: 5000,
     });
+    asrErrorMsg = desc;
   }
 
   // 拿到 transcript 后切到 "injecting"（"输出中"）的时机分两种：
@@ -683,6 +773,10 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // - refine 启用：模型还在思考、首 token 没到，UI 留在 transcribing
   //   （"思考中"）。等 onDelta 拿到第一个 chunk 再切；catch 路径在 try 块
   //   出来时兜底切，保证非正常路径也能进入"输出中"。
+  // text 已最终敲定（无论 REALTIME finalize 还是 UTTERANCE file transcribe 走完）——
+  // 这一刻就是 ASR 阶段的终点，记录耗时供 history.asr_ms 落库。失败路径同样记录，
+  // 反映"用户从结束录音到响应（哪怕是错误响应）等了多久"。
+  asrMsForHistory = Math.round(performance.now() - finalizeStartedAt);
   const segmentMode = getEffectiveSegmentMode();
   // 翻译听写：activeId === "translate" 时强制走 chat stream 走翻译 prompt，
   // 把 transcript 译成目标语言后再注入；忽略 aiRefine.enabled。
@@ -698,9 +792,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   }
   if (recSettled.status === "rejected") {
     console.error("[recording] stop failed:", recSettled.reason);
+    const desc = String(recSettled.reason);
     notifyOverlay("error", i18n.t("overlay:toast.recording_save_failed.title"), {
-      description: String(recSettled.reason),
+      description: desc,
     });
+    // 录音落盘失败时优先记这个原因——比 "transcribe failed" 更接近根因。
+    asrErrorMsg = `${i18n.t("overlay:toast.recording_save_failed.title")}: ${desc}`;
   }
 
   // refine 启用：拿到原始 transcript 后强制走 AI refine chat stream，每个 Delta 通过
@@ -714,6 +811,10 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   // 流式失败 / auth 异常时 refinedText 保持 null，最终 finalText = text，
   // 走原 UTTERANCE 路径整段贴到光标。
   let refinedText: string | null = null;
+  // 翻译模式专用：phase2 LLM 的 *仅译文* 输出。bilingual 注入/剪贴板用 streamedSoFar
+  // （原文 + 换行 + 译文），但 history.refined_text 只该存译文，让 result 模式能把
+  // 原文（history.text）和译文（history.refined_text）分组渲染、不重复。
+  let translationOnlyText: string | null = null;
   // history 详情底部要显示"实际调用的 AI 模型"。即便 refine 失败也要记录"试过谁"。
   let aiModelLabel: string | null = null;
   console.info(
@@ -785,6 +886,8 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     console.info(
       `[ai-refine] stream start mode=${aiSettings.mode} textLen=${text.length} hotwordsLen=${hotwords.length} historyLen=${historyEntries?.length ?? 0} provider=${activeProvider?.id ?? "saas"}`,
     );
+    // 翻译流程的 phase1（refine）是否完成。catch 块据此区分 phase1 / phase2 失败。
+    let translatePhase1Done = false;
     try {
       if (aiSettings.mode === "custom" && !activeProvider) {
         throw new Error("no_active_custom_provider");
@@ -804,6 +907,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         ) {
           useRecordingStore.setState({ state: "injecting", pillEarlyHide: false });
         }
+        // Home Live 面板也跟着 refine 流式输出；同时让 idle 转换时
+        // lastTranscriptRef 拿到清洗后的最终文本，result 模式才能挂留它。
+        useRecordingStore.setState({ liveTranscript: streamedSoFar });
         injectIncremental(streamedSoFar);
       };
       // phase 1 = refine：处理填充词、撤回信号、长段分段。
@@ -826,6 +932,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         phase1OnChunk,
       );
       const refinedSrc = r.refinedText;
+      translatePhase1Done = true;
       // phase 2 = translate：用独立 translation prompt 翻译 phase 1 的清洗版。
       // bilingual 在原文与译文之间注入空行；target_only 跳过分隔（streamedSoFar 仍是 ""）。
       if (translateMode) {
@@ -868,11 +975,13 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           phase2OnChunk,
         );
         refinedText = bilingual ? streamedSoFar : r2.refinedText;
+        translationOnlyText = r2.refinedText;
       } else {
         refinedText = refinedSrc;
       }
+      refineMsForHistory = Math.round(performance.now() - refineStart);
       console.info(
-        `[ai-refine] stream done refinedLen=${refinedText.length} elapsedMs=${Math.round(performance.now() - refineStart)}`,
+        `[ai-refine] stream done refinedLen=${refinedText.length} elapsedMs=${refineMsForHistory}`,
       );
       flushPendingInject();
       // 流式 token 已全部排队，剩下的只是 injectChain 中的最后几次 paste +
@@ -894,20 +1003,30 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       }
     } catch (e) {
       const raw = String(e ?? "");
+      // 区分 phase1（refine）/ phase2（翻译）失败 — 翻译模式下 phase2 失败的语义
+      // 是"用户期望的译文没拿到"，写 history 时要标 failed；phase1 失败则只是
+      // raw 文字 → 失败 fallback。前缀让用户在历史里一眼看出"是 AI 哪一步出问题"。
+      const phaseLabel = translateMode
+        ? translatePhase1Done
+          ? `${i18n.t("errors:phase.translate")}: `
+          : `${i18n.t("errors:phase.refine")}: `
+        : `${i18n.t("errors:phase.refine")}: `;
       // 优先按 mode 路由：custom 401 是用户自己的 provider key 错，绝不能弹
       // OpenLoaf 登录框；saas 401 才是真过期。
       if (aiSettings.mode === "custom") {
         console.warn(
           `[refine] custom failed after ${Math.round(performance.now() - refineStart)}ms: ${raw}`,
         );
+        const desc = humanizeSttError(e);
         const handled = await handleAiRefineCustomFailure(e);
         if (!handled) {
           notifyOverlay(
             "warning",
             i18n.t("overlay:toast.transcribe_failed.title"),
-            { description: humanizeSttError(e) },
+            { description: desc },
           );
         }
+        refineErrorMsg = `${phaseLabel}${desc}`;
       } else if (isSaasAuthError(raw)) {
         console.warn(
           `[refine] saas auth lost after ${Math.round(performance.now() - refineStart)}ms: ${raw}`,
@@ -915,16 +1034,19 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         // 弹登录，但**不丢录音、不切 idle**：raw text 已拿到，外面会继续走
         // 末尾兜底 paste + history.add（status=success / refined_text=null）。
         openLoginAfterSaasAuthLost();
+        refineErrorMsg = `${phaseLabel}${i18n.t("overlay:error.stt_not_authenticated")}`;
       } else {
         console.warn(
           `[refine] stream failed after ${Math.round(performance.now() - refineStart)}ms, falling back to raw transcript:`,
           e,
         );
+        const desc = humanizeSttError(e);
         notifyOverlay(
           "warning",
           i18n.t("overlay:toast.transcribe_failed.title"),
-          { description: humanizeSttError(e) },
+          { description: desc },
         );
+        refineErrorMsg = `${phaseLabel}${desc}`;
       }
     }
     // refine / translate 一个 chunk 都没到就抛错（network / auth / 0 token） →
@@ -955,12 +1077,33 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     const providerKind =
       resolvedProviderKindForCurrentSession ??
       (segmentMode === "REALTIME" ? "saas-realtime" : "saas-file");
+    // 状态判定优先级：
+    //   1) 没拿到 raw transcript → failed
+    //   2) 拿到 raw 但翻译 phase2 失败 → failed（用户要的是译文，没拿到 = 未达成意图）
+    //   3) 拿到 raw + refine 失败（非 translate）→ success（用户已拿到原文），error 字段记备注
+    //   4) 全成功 → success
+    const translatePhase2Failed = translateMode && refineErrorMsg !== null;
+    let status: "success" | "failed";
+    let errorForHistory: string | undefined;
+    if (!text) {
+      status = "failed";
+      errorForHistory = asrErrorMsg ?? "no final transcript";
+    } else if (translatePhase2Failed) {
+      status = "failed";
+      errorForHistory = refineErrorMsg!;
+    } else if (refineErrorMsg !== null) {
+      status = "success";
+      errorForHistory = refineErrorMsg;
+    } else {
+      status = "success";
+      errorForHistory = undefined;
+    }
     await useHistoryStore.getState().add({
       type: translateMode ? "translate" : "dictation",
       text: text || transcriptPlaceholder(),
-      refined_text: refinedText,
-      status: text ? "success" : "failed",
-      error: text ? undefined : "no final transcript",
+      refined_text: translateMode ? translationOnlyText : refinedText,
+      status,
+      error: errorForHistory,
       duration_ms: rec.duration_ms,
       audio_path: rec.audio_path,
       asr_source: asrSource,
@@ -970,6 +1113,8 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       target_lang: translateMode
         ? useSettingsStore.getState().general.translateTargetLang
         : null,
+      asr_ms: asrMsForHistory,
+      refine_ms: refineMsForHistory,
     });
   }
 
@@ -1202,98 +1347,6 @@ const abortAndSaveHistory = async (): Promise<void> => {
   });
 };
 
-// 听写提示音：Web Audio 即时合成，零素材依赖。
-// 桌面壳 WebView 内不需 user gesture 即可 resume（与浏览器策略不同）。
-//
-// 冷启动延迟根因：macOS WebView 长时间空闲后 audioCtx 自动 suspend，按激活键
-// 那一瞬 resume() 是 async，但 ding 立刻按 currentTime schedule oscillator —— ctx
-// 还在 suspend，schedule 出去的事件被推迟到 resume 完成（实测 50–200ms），听感
-// 就是"提示音慢一拍"。修复：boot 时 warmAudioCtx 把 ctx 起到 running 状态；每次
-// 播 cue 之前再 resume 兜底（用户系统睡眠回来 ctx 又被踢回 suspend 的场景）。
-let audioCtx: AudioContext | null = null;
-const ensureAudioCtx = () => {
-  if (!IS_MAIN_WINDOW) return null;
-  if (!audioCtx) {
-    const Ctor =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!Ctor) return null;
-    audioCtx = new Ctor();
-  }
-  if (audioCtx.state === "suspended") void audioCtx.resume();
-  return audioCtx;
-};
-
-// boot 时调一次：创建 ctx + 触发一次零增益的 oscillator，把 macOS WebView audio
-// 子系统真正起到 running。否则首次按激活键时还要等 ctx 从 lazy/suspended 切到
-// running，提示音永远比触发慢一拍。
-const warmAudioCtx = () => {
-  const ctx = ensureAudioCtx();
-  if (!ctx) return;
-  try {
-    const t0 = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0, t0);
-    osc.connect(g).connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0 + 0.02);
-  } catch (e) {
-    console.warn("[cue] warm failed:", e);
-  }
-};
-
-// 柔和"叮咚"：sine 基频 + 一点八度泛音，串 lowpass 软化高频；30ms attack + 指数衰减，避免敲击的硬边缘
-const ding = (
-  freq: number,
-  durationMs: number,
-  delayMs = 0,
-  peakGain = 0.09,
-) => {
-  const ctx = ensureAudioCtx();
-  if (!ctx) return;
-  // ctx 还 suspended 时 currentTime 会一直停在某个旧值；resume 完成后 currentTime
-  // 才推进。给 schedule 加一个最小 +5ms 的安全 buffer，避免 t0 落在 ctx 真正起来
-  // 之后的"过去时间"，让首发 cue 在 ctx 唤醒同一帧就能开声。
-  const baseT = ctx.currentTime + 0.005;
-  const t0 = baseT + delayMs / 1000;
-  const t1 = t0 + durationMs / 1000;
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = freq * 2.2;
-  filter.Q.value = 0.4;
-  filter.connect(ctx.destination);
-  const partials = [
-    { ratio: 1, gain: 1 },
-    { ratio: 2, gain: 0.18 },
-  ] as const;
-  for (const p of partials) {
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = freq * p.ratio;
-    g.gain.setValueAtTime(0, t0);
-    g.gain.linearRampToValueAtTime(peakGain * p.gain, t0 + 0.03);
-    g.gain.exponentialRampToValueAtTime(0.0001, t1);
-    osc.connect(g).connect(filter);
-    osc.start(t0);
-    osc.stop(t1 + 0.05);
-  }
-};
-
-const playStartCue = () => {
-  ding(440, 280, 0); // A4
-  ding(659.25, 420, 160); // E5，上行纯五度，温暖的"叮咚"
-};
-const playStopCue = () => {
-  ding(523.25, 460, 0); // C5 单音，柔和收尾
-};
-const playCancelCue = () => {
-  ding(659.25, 260, 0); // E5
-  ding(440, 460, 160); // A4，下行表撤回
-};
-
 export const useRecordingStore = create<RecordingStore>((set, get) => {
   const unlistens: UnlistenFn[] = [];
 
@@ -1308,6 +1361,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
     liveTranscript: "",
     pillEarlyHide: false,
     segmentModeOverride: null,
+    escArmed: false,
 
     setSegmentModeOverride: (mode) => set({ segmentModeOverride: mode }),
 
@@ -1327,9 +1381,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         return;
       }
 
-      // 提前把 AudioContext 起到 running，避免首次按激活键时还要等 ctx 从
-      // lazy/suspended 切到 running 导致提示音"慢一拍"。
-      warmAudioCtx();
+      // 提示音子系统在 Rust 侧（src-tauri/src/cue.rs），此处不需要预热 webview
+      // AudioContext —— hotkey 按下时 Rust 直接同帧播 startCue，零 IPC。
 
       // 主窗每次 set 后向 overlay 推送一次 FSM 快照 + 在状态过渡时播放提示音。
       // 20Hz 的 audioLevels 不在这里同步——overlay 自己 listen 'audio-level'，
@@ -1340,17 +1393,34 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       let prevErrorState = get().state === "error";
       let prevErrorMessage: string | null = get().errorMessage;
       useRecordingStore.subscribe((s) => {
-        // 提示音两条 FSM 边触发：stop / cancel。startCue 已经移到 hotkey
-        // press handler 入口（按下瞬间立刻播），避免被 gate / preflight / setState
-        // 链路上的几十~上千 ms 拖成"慢一拍"。
-        // cancelCue 覆盖 ESC 双击、overlay × 按钮、快速双击误触三条收尾路径。
+        // 提示音 FSM：startCue 由 Rust hotkey 派发同帧播；stop / cancel 在状态
+        // 过渡时通过 Rust cue 命令补播，保证音色与 start 一致。cueSetActive 把
+        // "录音流程是否进行中"同步给 Rust，下一次 hotkey 按下时 Rust 据此决定
+        // 是否再播 startCue（toggle off 路径不重复播）。
+        const wasActiveAny = prevState !== "idle" && prevState !== "error";
+        const isActiveAny = s.state !== "idle" && s.state !== "error";
+        if (wasActiveAny !== isActiveAny) {
+          void cueSetActive(isActiveAny);
+        }
         if (prevState === "recording" && s.state === "transcribing") {
-          playStopCue();
+          void cuePlay("stop");
         } else if (
           (prevState === "preparing" || prevState === "recording") &&
           s.state === "idle"
         ) {
-          playCancelCue();
+          void cuePlay("cancel");
+        }
+
+        // 翻译模式 indicator 收起：录音流程结束（preparing/recording → 任意非
+        // 活跃态）时 emit active=false。state 切换时 activeId 可能已被清空，
+        // 这里幂等发送：overlay 端 active 已是 false 时再发一次仍是 false，
+        // 比追踪 prevActiveId 简单可靠。
+        const wasInRecOrPrep =
+          prevState === "preparing" || prevState === "recording";
+        const stillInRecOrPrep =
+          s.state === "preparing" || s.state === "recording";
+        if (wasInRecOrPrep && !stillInRecOrPrep) {
+          emitTranslateActive(false);
         }
 
         // ESC 全局捕获：preparing/recording/transcribing 期间吞掉 Esc，避免
@@ -1520,13 +1590,16 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             stopMic();
             set({ state: "transcribing", audioLevels: emptyLevels() });
             void finalizeAndWriteHistory().then((outcome) => {
-              // silent：用户没说话——直接回 idle，已在 finalize 内 toast 提示，不进 error。
+              // silent：用户没说话——pill 中心 crossfade 到 ERROR + 提示文案，
+              // ERROR_AUTO_DISMISS_MS 后自然回 idle。语义上不是"错误"而是"无内容"，
+              // 但走 error 路径让 pill 内容连续过渡，比独立 toast 体验顺。
               if (outcome.silent) {
                 set({
-                  state: "idle",
+                  state: "error",
                   activeId: null,
                   recordingId: null,
                   liveTranscript: "",
+                  errorMessage: i18n.t("overlay:toast.silent_recording.title"),
                 });
                 return;
               }
@@ -1557,6 +1630,37 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             return;
           }
 
+          // 跨模式切换：录音中按"另一种"激活键（dictate_ptt ↔ translate）。
+          // 仅 UTTERANCE（整句）模式支持——整句模式 finalize 阶段才决定走听写还是
+          // 翻译路径，录音过程纯采集 PCM，切 activeId 没有副作用。REALTIME 边录边
+          // 出字已经把"听写阶段的字"流式注入到光标，半道切翻译会让"已注入听写文本
+          // + 后续翻译输出"拼接成乱码，禁止。判定放在"toggle off (cur.activeId===id)"
+          // 之后、"非 idle 忽略"之前——前者已捕获同 id 二次按下的结束语义，本分支
+          // 处理 cur.activeId !== id 的真正跨模式按键。
+          if (
+            cur.activeId !== id &&
+            isModeSwitchTarget(cur.activeId) &&
+            isModeSwitchTarget(id) &&
+            (cur.state === "recording" || cur.state === "preparing") &&
+            getEffectiveSegmentMode() === "UTTERANCE"
+          ) {
+            console.log("[recording] mode switch:", cur.activeId, "→", id);
+            // 切 activeId + 重置 lastPressAt（让下一次"同 id toggle off"以新激活
+            // 时间为准，避免按了切换键立刻被 too-short 判定丢弃）。
+            set({ activeId: id, lastPressAt: now });
+            // translate indicator 跟随 activeId：切到 translate → 出现；切到
+            // dictate_ptt → 退场。indicator 独立元素自己 motion 渐变。
+            if (id === "translate") {
+              emitTranslateActive(true, resolveTranslateLangLabel());
+            } else {
+              emitTranslateActive(false);
+            }
+            // pill 中心临时显示"切换到 X 模式"提示几秒——overlay 收到 hint 自管
+            // timer，到点回退到 wave 渲染。
+            emitModeSwitchHint(id === "translate" ? "translate" : "dictation");
+            return;
+          }
+
           // error 态：把"再按一次激活快捷键"当作用户主动放弃当前失败提示、
           // 立刻发起下一次录音。dismissError 把 state 切回 idle，继续 fall through
           // 到 gate / preflight / startMic 正常流程。配套：ESC 在 error 态也会
@@ -1577,12 +1681,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             return;
           }
 
-          // 提示音"按下即响"：这里才进入"新一次录音"的真实路径，不再等
-          // gate / preflight / setState=preparing 之后由 subscriber 触发，避免
-          // openloaf_try_recover (1.5s)、preflightMic 列设备、AudioContext 冷启动
-          // 几条慢路径叠加之后才出声的"慢一拍"体感。gate 拒了也不补偿——原本
-          // 就有 toast 通知用户为什么没起，多一次 cue 反而干扰。
-          playStartCue();
+          // 提示音"按下即响"：startCue 由 Rust hotkey dispatch 在收到按键
+          // 同帧播放（src-tauri/src/cue.rs），此处无需再触发——避免 IPC 往返
+          // + WebView AudioContext 冷启动叠加成的"慢一拍"。
 
           // Gate：转写后端必须至少一条可用，否则录了一段没人转的废录音是浪费。
           // saas 路径：已登录 OpenLoaf；custom 路径：BYOK 自带凭证，跳过登录 gate。
@@ -1667,6 +1768,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                 const s = get();
                 if (s.state === "preparing" || s.state === "recording") {
                   console.warn("[recording] health check failed → cancelling silently");
+                  recordAbortFailureHistory(
+                    i18n.t("errors:network.service_unreachable_desc"),
+                  );
                   discardRecording();
                   stopMic();
                   set({
@@ -1694,6 +1798,23 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               i18n.t("overlay:toast.preflight_failed.title"),
               { description: pre.reason },
             );
+            // preflight 阶段 activeId 还没设到 store 里，先打上当前按键的 type 再写。
+            const isTranslateBinding = id === "translate";
+            void useHistoryStore
+              .getState()
+              .add({
+                type: isTranslateBinding ? "translate" : "dictation",
+                text: transcriptPlaceholder(),
+                status: "failed",
+                error: pre.reason,
+                duration_ms: 0,
+                target_lang: isTranslateBinding
+                  ? useSettingsStore.getState().general.translateTargetLang
+                  : null,
+              })
+              .catch((e) =>
+                console.warn("[recording] preflight: history.add failed:", e),
+              );
             return;
           }
 
@@ -1711,6 +1832,12 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             pillEarlyHide: false,
             liveTranscript: "",
           });
+          // 翻译听写：emit 持续型 indicator 状态——overlay 端独立组件渲染
+          // "翻译为<目标语言>"，与 toast 警告语义解耦。subscriber 在录音流程
+          // 结束边沿 emit active=false。
+          if (id === "translate") {
+            emitTranslateActive(true, resolveTranslateLangLabel());
+          }
           // Rust audio_level_start 现在同步等到 cpal stream 真正起来才返回。
           // 失败 / 超时 → 直接退回 idle 并提示，不再走 stt_start 撞 "audio
           // stream not running"。中途用户若再按一次（state 已变），下方守卫会 skip。
@@ -1734,6 +1861,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               return;
             }
             if (!ok) {
+              const desc = i18n.t("overlay:error.stt_mic_not_ready");
+              recordAbortFailureHistory(desc);
               set({
                 state: "idle",
                 activeId: null,
@@ -1742,7 +1871,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
                 liveTranscript: "",
               });
               notifyOverlay("error", i18n.t("overlay:toast.recording_start_failed.title"), {
-                description: i18n.t("overlay:error.stt_mic_not_ready"),
+                description: desc,
               });
               return;
             }
@@ -1752,25 +1881,6 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           return;
         }
       });
-
-      const u2 = await listen<{ id: string; error: string }>(
-        "openspeech://hotkey/register-failed",
-        (evt) => {
-          console.warn("[recording] register-failed:", evt.payload);
-          discardRecording();
-          stopMic();
-          set({
-            state: "error",
-            errorMessage: i18n.t("overlay:error.register_failed", {
-              id: evt.payload.id,
-              error: evt.payload.error,
-            }),
-            audioLevels: emptyLevels(),
-            recordingId: null,
-            liveTranscript: "",
-          });
-        },
-      );
 
       const u3 = await listen<number>(
         "openspeech://audio-level",
@@ -1799,18 +1909,20 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             cur.state === "recording" ||
             cur.state === "transcribing"
           ) {
+            const desc = i18n.t("overlay:error.stt_mic_not_ready");
+            recordAbortFailureHistory(desc);
             discardRecording();
             stopMic();
             set({
               state: "error",
               activeId: null,
-              errorMessage: i18n.t("overlay:error.stt_mic_not_ready"),
+              errorMessage: desc,
               audioLevels: emptyLevels(),
               recordingId: null,
               liveTranscript: "",
             });
             notifyOverlay("error", i18n.t("overlay:toast.recording_start_failed.title"), {
-              description: i18n.t("overlay:error.stt_mic_not_ready"),
+              description: desc,
             });
           } else {
             stopMic();
@@ -1890,6 +2002,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         (evt) => {
           const { reason } = evt.payload ?? { reason: "unknown", totalCredits: 0 };
           if (reason === "insufficient_credits") {
+            recordAbortFailureHistory(
+              i18n.t("overlay:toast.insufficient_credits.error_message"),
+            );
             discardRecording();
             stopMic();
             notifyOverlay("error", i18n.t("overlay:toast.insufficient_credits.title"), {
@@ -1907,6 +2022,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             // 不能等用户松手再走 finalize —— 那条路只会拿到 segs=0 + 整段音频白录。
             // 立即停止音频流、丢弃当前录音、切 error 让 UI 解锁。
             console.warn("[stt] worker_dead, aborting recording", evt.payload);
+            recordAbortFailureHistory(i18n.t("overlay:toast.worker_dead.error_message"));
             discardRecording();
             stopMic();
             notifyOverlay("error", i18n.t("overlay:toast.worker_dead.title"), {
@@ -2010,6 +2126,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         console.log("[recording] Esc confirmed, cancelling", { state: s });
         clearEscTimers();
         escFirstAt = 0;
+        set({ escArmed: false });
         void emitTo("overlay", "openspeech://esc-disarmed", null);
         // DEBUG 模拟：没有真 mic / STT 会话，跳过 abort/discard/stopMic 那一整套，
         // 只清 debug 标志 + FSM 切 idle，注入回路靠 isInjectFlowActive() 短路。
@@ -2079,6 +2196,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             // 即便 toast 略迟，X 按钮的描边变化也已经先到，没有"先红一下再变黄"
             // 的视觉错觉。
             console.log("[recording] Esc pending timeout → prompt");
+            set({ escArmed: true });
             void emitTo("overlay", "openspeech://esc-armed", null);
             // info 风格：te-light-gray 描边 + 白字，与 te-accent（黄）/ 任何
             // 错误（红）风格都拉开距离，避免被误读为"录音条出错了"。
@@ -2089,6 +2207,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             escPromptTimer = window.setTimeout(() => {
               escPromptTimer = null;
               escFirstAt = 0;
+              set({ escArmed: false });
               void emitTo("overlay", "openspeech://esc-disarmed", null);
               console.log("[recording] Esc prompt timeout → disarmed");
             }, ESC_PROMPT_MS);
@@ -2096,9 +2215,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         },
       );
 
-      unlistens.push(u1, u2, u3, u4, u5, u6, u7, u7r, u7p, u7f, u8, u9);
+      unlistens.push(u1, u3, u4, u5, u6, u7, u7r, u7p, u7f, u8, u9);
       console.log(
-        "[recording] listeners attached (hotkey + register-failed + audio-level + asr-* + stream-error)",
+        "[recording] listeners attached (hotkey + audio-level + asr-* + stream-error)",
       );
       // 主窗自身 listeners 全部就绪后也广播一次 overlay-ready ——overlay 已经
       // 在更早时间发过的话，主窗那时还没挂 ur 听不到；这里反向重补一次让 overlay
