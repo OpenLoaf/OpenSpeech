@@ -21,6 +21,7 @@ export interface UserProfile {
   avatarUrl: string | null;
   name: string | null;
   email: string | null;
+  provider: string;
 }
 
 export type LoginProvider = "google" | "wechat";

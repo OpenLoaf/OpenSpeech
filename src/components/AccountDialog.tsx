@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Gift, LogOut, Mail, Sparkles } from "lucide-react";
+import { Gift, LogOut, Mail, Sparkles, User } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -45,11 +45,11 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-te-gray/30 py-3 last:border-b-0">
-      <span className="font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray">
+    <div className="flex items-start justify-between gap-4 border-b border-te-gray/30 py-3 last:border-b-0">
+      <span className="shrink-0 pt-0.5 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray">
         {label}
       </span>
-      <div className="min-w-0 shrink-0 text-right">{children}</div>
+      <div className="min-w-0 flex-1 text-right">{children}</div>
     </div>
   );
 }
@@ -92,11 +92,18 @@ export function AccountDialog({ open, onOpenChange }: Props) {
     }
   };
 
-  const emailDisplay = user?.email ?? user?.name ?? "—";
+  const isWechat = (profile?.provider ?? "").toLowerCase() === "wechat";
+  const identityLabel = isWechat
+    ? t("dialogs:account.row.wechat")
+    : t("dialogs:account.row.email");
+  const identityValue = isWechat
+    ? (profile?.name ?? user?.name ?? "—")
+    : (user?.email ?? profile?.email ?? user?.name ?? "—");
+  const IdentityIcon = isWechat ? User : Mail;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88vh] min-h-[640px] w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0">
+      <DialogContent className="flex max-h-[88vh] w-[92vw] max-w-md flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0">
         <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
           <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
             {t("dialogs:account.title")}
@@ -121,10 +128,10 @@ export function AccountDialog({ open, onOpenChange }: Props) {
                     {t("dialogs:account.section.identity")}
                   </span>
                 </div>
-                <Row label={t("dialogs:account.row.email")}>
-                  <span className="inline-flex items-center gap-2 font-mono text-sm text-te-fg">
-                    <Mail className="size-3.5 text-te-light-gray" />
-                    {emailDisplay}
+                <Row label={identityLabel}>
+                  <span className="inline-flex max-w-full items-start gap-2 font-mono text-sm text-te-fg">
+                    <IdentityIcon className="mt-[3px] size-3.5 shrink-0 text-te-light-gray" />
+                    <span className="break-all text-left">{identityValue}</span>
                   </span>
                 </Row>
                 <Row label={t("dialogs:account.row.subscription")}>

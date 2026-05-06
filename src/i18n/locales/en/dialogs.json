@@ -39,6 +39,7 @@
     },
     "row": {
       "email": "Email",
+      "wechat": "WeChat",
       "subscription": "Plan",
       "credits_balance": "Credit balance"
     },

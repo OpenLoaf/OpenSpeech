@@ -39,6 +39,7 @@
     },
     "row": {
       "email": "電子郵件",
+      "wechat": "微信帳戶",
       "subscription": "訂閱",
       "credits_balance": "剩餘積分"
     },
