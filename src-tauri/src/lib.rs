@@ -433,7 +433,14 @@ fn hide_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
 /// 全局 toggle：可见 + 已聚焦 → 隐藏；其它一律 show + focus。
 /// 拆出来给 ShowMainWindow hotkey 用——单一入口避免和 show_main_window
 /// / hide_main_window 各自的竞态走两套路径。
+#[track_caller]
 pub(crate) fn toggle_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let caller = std::panic::Location::caller();
+    log::debug!(
+        "[main_window] toggle_main_window called from {}:{}",
+        caller.file(),
+        caller.line()
+    );
     let Some(window) = app.get_webview_window("main") else {
         show_main_window(app);
         return;
@@ -447,15 +454,38 @@ pub(crate) fn toggle_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+#[track_caller]
 pub(crate) fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let caller = std::panic::Location::caller();
+    log::debug!(
+        "[main_window] show_main_window called from {}:{}",
+        caller.file(),
+        caller.line()
+    );
     // macOS：按用户偏好切换 activation policy——默认 Regular（Dock 显示图标），
     // 若设置里关了 showDockIcon 则切 Accessory（纯菜单栏应用）。前一次隐藏时
     // hide_main_window 已统一切到 Accessory，这里必须再读一次用户设定重新 apply。
+    // 幂等检查（下面的 visible+focused+!minimized 短路）之前先 apply：dock 图标
+    // 状态独立于窗口可见性，跳过 set_focus 不代表跳过 dock policy 同步。
     #[cfg(target_os = "macos")]
     {
         apply_dock_icon_policy(app);
     }
     if let Some(window) = app.get_webview_window("main") {
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        let minimized = window.is_minimized().unwrap_or(false);
+        log::debug!(
+            "[main_window] show_main_window pre-state visible={visible} focused={focused} minimized={minimized}"
+        );
+        // 幂等短路：窗口已经在前台 + 已聚焦 + 未最小化 → 这三个 API 调下去都是
+        // 状态不变的 no-op，但 set_focus 在 Windows 上即便对已聚焦窗口也会触发
+        // foreground 抢占副作用（任务栏图标闪烁、SetForegroundWindow 重新激活）。
+        // 未登录 gate 在 PTT cycle 期间会高频调本函数，跳过抢焦点是核心修复。
+        if visible && focused && !minimized {
+            log::debug!("[main_window] show_main_window already foreground, skip");
+            return;
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -651,6 +681,13 @@ pub fn run() {
                     "enigo::platform::macos_impl",
                     tauri_plugin_log::log::LevelFilter::Off,
                 )
+                // symphonia probe 每次 decode WAV 都会刷 "found a possible format marker" /
+                // "found the format marker"，跟启动音 / 提示音播放频率成正比。Info 关掉。
+                .level_for("symphonia_core", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("symphonia_bundle_mp3", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("symphonia_format_wav", tauri_plugin_log::log::LevelFilter::Info)
+                // tao 的 NewEvents/RedrawEventsCleared/MainEventsCleared 在 Windows 下偶发刷屏。
+                .level_for("tao", tauri_plugin_log::log::LevelFilter::Info)
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Stdout,
                 ))
