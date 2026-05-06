@@ -1,16 +1,10 @@
 import { create } from "zustand";
 import { Store } from "@tauri-apps/plugin-store";
 import { useHistoryStore } from "@/stores/history";
+import { countWords } from "@/lib/wordCount";
 
 const STORE_FILE = "stats.json";
 const SCHEMA_VERSION = 1;
-
-// 中英文混合字数（与 Home 页同口径）：中文逐字算 1，连续拉丁/数字序列算 1 个词。
-function countWords(text: string): number {
-  if (!text) return 0;
-  const matches = text.match(/[一-鿿]|[A-Za-z0-9][A-Za-z0-9'_-]*/g);
-  return matches ? matches.length : 0;
-}
 
 interface StatsSnapshot {
   totalDurationMs: number;

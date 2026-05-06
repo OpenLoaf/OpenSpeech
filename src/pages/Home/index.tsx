@@ -4,27 +4,16 @@ import { useTranslation } from "react-i18next";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { HotkeyDictationCard } from "@/components/HotkeyDictationCard";
 import { useHistoryStore } from "@/stores/history";
+import { countWords, TYPING_BASELINE_WPM } from "@/lib/wordCount";
 import { useStatsStore } from "@/stores/stats";
 import { useUIStore, type StatsMetric } from "@/stores/ui";
 
 type StatsView = "today" | "all";
 
-// 假设打字基线速度：用于"节省时间"估算。40 WPM 是普通用户中位打字速度。
-// （专业打字员 ~70+，纯中文拼音 ~30，混合 ~40）；该值为粗估，未来可放设置项。
-const TYPING_BASELINE_WPM = 40;
-
 function todayMidnightLocal(): number {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d.getTime();
-}
-
-// 中英文混合字数：中文逐字算 1，连续拉丁/数字序列算 1 个词。
-// 注意 WPM 也用同一口径，避免单位不一致。
-function countWords(text: string): number {
-  if (!text) return 0;
-  const matches = text.match(/[一-鿿]|[A-Za-z0-9][A-Za-z0-9'_-]*/g);
-  return matches ? matches.length : 0;
 }
 
 function formatHHMM(ms: number): string {

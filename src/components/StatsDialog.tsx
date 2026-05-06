@@ -11,14 +11,22 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { StatsMetric } from "@/stores/ui";
+import { useHistoryStore } from "@/stores/history";
+import {
+  aggregate,
+  type AppRow,
+  type HeatCell,
+  type Range,
+  type StatsBundle,
+  type WpmByMode,
+} from "@/lib/statsAggregator";
+import { TYPING_BASELINE_WPM } from "@/lib/wordCount";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   focusMetric: StatsMetric;
 };
-
-const TYPING_BASELINE_WPM = 40;
 
 const METRIC_INDEX: Record<StatsMetric, string> = {
   duration: "01",
@@ -28,7 +36,6 @@ const METRIC_INDEX: Record<StatsMetric, string> = {
   sessions: "05",
 };
 
-type Range = "today" | "7d" | "30d" | "90d" | "all";
 const RANGE_ORDER: Range[] = ["today", "7d", "30d", "90d", "all"];
 const RANGE_DAYS: Record<Range, number> = {
   today: 1,
@@ -37,142 +44,6 @@ const RANGE_DAYS: Record<Range, number> = {
   "90d": 90,
   all: 365,
 };
-
-type DailyPoint = {
-  daysAgo: number;
-  durationMs: number;
-  words: number;
-  sessions: number;
-};
-
-type HeatCell = { weekday: number; hour: number; value: number };
-
-type AppRow = { name: string; durationMs: number; words: number };
-
-type WpmByMode = {
-  mode: "REALTIME" | "UTTERANCE";
-  wpm: number;
-  sessions: number;
-};
-
-interface MockStats {
-  daily: DailyPoint[];
-  heat: HeatCell[];
-  topApps: AppRow[];
-  wpmByMode: WpmByMode[];
-  sessionDist: { short: number; medium: number; long: number };
-  totals: {
-    durationMs: number;
-    words: number;
-    sessions: number;
-    wpm: number;
-    savedMs: number;
-  };
-}
-
-// ────────────────────────────────────────────────────────────────
-// Mock data — deterministic seeded RNG so the UI doesn't flicker
-// ────────────────────────────────────────────────────────────────
-
-function makeRng(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 0x100000000;
-  };
-}
-
-function buildMock(range: Range): MockStats {
-  const days = RANGE_DAYS[range];
-  const rng = makeRng(0x5eed + days * 17);
-
-  const daily: DailyPoint[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const trend = 1 + (days - i) / Math.max(1, days * 1.6);
-    const weekendBoost = i % 7 === 0 || i % 7 === 6 ? 1.25 : 1;
-    const noise = 0.5 + rng();
-    const sessions = Math.round(2 + 8 * trend * weekendBoost * noise);
-    const avgSec = 30 + rng() * 60;
-    const durationMs = Math.round(sessions * avgSec * 1000);
-    const wpm = 70 + rng() * 50;
-    const minutes = durationMs / 60_000;
-    const words = Math.round(minutes * wpm);
-    daily.push({ daysAgo: i, durationMs, words, sessions });
-  }
-
-  const heat: HeatCell[] = [];
-  for (let w = 0; w < 7; w++) {
-    for (let h = 0; h < 24; h++) {
-      const workHours = h >= 9 && h <= 18 ? 1 : 0.15;
-      const morning = h >= 7 && h <= 9 ? 0.6 : 0;
-      const evening = h >= 20 && h <= 23 ? 0.5 : 0;
-      const weekendDamp = w >= 5 ? 0.55 : 1;
-      const base = (workHours + morning + evening) * weekendDamp;
-      const value = Math.max(0, Math.min(1, base * (0.7 + rng() * 0.6)));
-      heat.push({ weekday: w, hour: h, value });
-    }
-  }
-
-  const topApps: AppRow[] = [
-    { name: "VS Code", durationMs: 0, words: 0 },
-    { name: "Chrome", durationMs: 0, words: 0 },
-    { name: "Slack", durationMs: 0, words: 0 },
-    { name: "Notion", durationMs: 0, words: 0 },
-    { name: "Mail", durationMs: 0, words: 0 },
-    { name: "Figma", durationMs: 0, words: 0 },
-  ].map((row, idx) => {
-    const factor = 1 - idx * 0.13;
-    return {
-      ...row,
-      durationMs: Math.round(180 * 60_000 * factor * (0.6 + rng() * 0.7)),
-      words: Math.round(2400 * factor * (0.6 + rng() * 0.7)),
-    };
-  });
-
-  const wpmByMode: WpmByMode[] = [
-    {
-      mode: "REALTIME",
-      wpm: Math.round(110 + rng() * 18),
-      sessions: Math.round(60 + rng() * 30),
-    },
-    {
-      mode: "UTTERANCE",
-      wpm: Math.round(95 + rng() * 14),
-      sessions: Math.round(40 + rng() * 30),
-    },
-  ];
-
-  const totalSessions = daily.reduce((a, b) => a + b.sessions, 0);
-  const sessionDist = {
-    short: Math.round(totalSessions * 0.42),
-    medium: Math.round(totalSessions * 0.43),
-    long: Math.max(0, totalSessions - Math.round(totalSessions * 0.85)),
-  };
-
-  const totals = daily.reduce(
-    (acc, d) => ({
-      durationMs: acc.durationMs + d.durationMs,
-      words: acc.words + d.words,
-      sessions: acc.sessions + d.sessions,
-    }),
-    { durationMs: 0, words: 0, sessions: 0 },
-  );
-  const minutes = totals.durationMs / 60_000;
-  const wpm = minutes > 0 ? Math.round(totals.words / minutes) : 0;
-  const savedMs = Math.max(
-    0,
-    (totals.words / TYPING_BASELINE_WPM) * 60_000 - totals.durationMs,
-  );
-
-  return {
-    daily,
-    heat,
-    topApps: topApps.sort((a, b) => b.durationMs - a.durationMs),
-    wpmByMode,
-    sessionDist,
-    totals: { ...totals, wpm, savedMs },
-  };
-}
 
 // ────────────────────────────────────────────────────────────────
 // Format helpers
@@ -212,7 +83,13 @@ export function StatsDialog({ open, onOpenChange, focusMetric }: Props) {
     if (open) setMetric(focusMetric);
   }, [open, focusMetric]);
 
-  const stats = useMemo(() => buildMock(range), [range]);
+  const items = useHistoryStore((s) => s.items);
+  const unknownLabel = t("pages:home.stats_dialog.facet.top_apps.unknown");
+  const stats = useMemo(
+    () => aggregate(items, range, unknownLabel),
+    [items, range, unknownLabel],
+  );
+  const empty = stats.totals.sessions === 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -244,19 +121,27 @@ export function StatsDialog({ open, onOpenChange, focusMetric }: Props) {
 
           {/* Main + facets */}
           <div className="flex flex-col gap-4 px-5 py-5">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={metric}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.2 }}
-                className="flex flex-col gap-4"
-              >
-                <MainPanel metric={metric} stats={stats} range={range} />
-                <FacetPanel metric={metric} stats={stats} />
-              </motion.div>
-            </AnimatePresence>
+            {empty ? (
+              <div className="flex min-h-[20rem] items-center justify-center border border-dashed border-te-gray/40 bg-te-surface/30">
+                <span className="font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray">
+                  {t("pages:home.stats_dialog.empty")}
+                </span>
+              </div>
+            ) : (
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={metric}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex flex-col gap-4"
+                >
+                  <MainPanel metric={metric} stats={stats} range={range} />
+                  <FacetPanel metric={metric} stats={stats} />
+                </motion.div>
+              </AnimatePresence>
+            )}
           </div>
         </div>
 
@@ -274,7 +159,7 @@ function KpiStrip({
   focused,
   onSelect,
 }: {
-  stats: MockStats;
+  stats: StatsBundle;
   focused: StatsMetric;
   onSelect: (m: StatsMetric) => void;
 }) {
@@ -403,7 +288,7 @@ function MainPanel({
   range,
 }: {
   metric: StatsMetric;
-  stats: MockStats;
+  stats: StatsBundle;
   range: Range;
 }) {
   const { t } = useTranslation();
@@ -448,7 +333,7 @@ function FacetPanel({
   stats,
 }: {
   metric: StatsMetric;
-  stats: MockStats;
+  stats: StatsBundle;
 }) {
   if (metric === "duration") {
     return (
@@ -558,7 +443,7 @@ function DailyBars({
   stats,
   field,
 }: {
-  stats: MockStats;
+  stats: StatsBundle;
   field: "duration" | "words" | "saved" | "sessions";
 }) {
   const data = stats.daily;
@@ -622,7 +507,7 @@ function DailyBars({
   );
 }
 
-function WpmLine({ stats }: { stats: MockStats }) {
+function WpmLine({ stats }: { stats: StatsBundle }) {
   const data = stats.daily;
   const wpms = data.map((d) =>
     d.durationMs > 0 ? d.words / (d.durationMs / 60_000) : 0,
