@@ -33,7 +33,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "deb", "rpm", "nsis"],
+    "targets": ["app", "deb", "rpm", "appimage", "nsis"],
     "createUpdaterArtifacts": false,
     "category": "Productivity",
     "shortDescription": "Voice to text — speech, dictation, transcription",
