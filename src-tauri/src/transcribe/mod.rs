@@ -136,6 +136,21 @@ fn default_saas_provider_ref() -> ProviderRef {
     }
 }
 
+/// 截取 system_prompt 的前 N 字（按 char）做日志预览。换行替成 ⏎ 让一行能看清结构。
+fn system_prompt_preview(s: &str, max_chars: usize) -> String {
+    let mut buf = String::with_capacity(max_chars * 4);
+    for ch in s.chars().take(max_chars) {
+        if ch == '\n' {
+            buf.push_str("⏎");
+        } else if ch == '\r' {
+            // skip
+        } else {
+            buf.push(ch);
+        }
+    }
+    buf
+}
+
 #[tauri::command]
 pub async fn transcribe_recording_file<R: Runtime>(
     app: AppHandle<R>,
@@ -143,6 +158,7 @@ pub async fn transcribe_recording_file<R: Runtime>(
     duration_ms: u64,
     lang: Option<String>,
     provider: Option<ProviderRef>,
+    system_prompt: Option<String>,
 ) -> Result<TranscribeFileResult, String> {
     let provider_ref = provider.unwrap_or_else(default_saas_provider_ref);
     let backend = match dispatch(&provider_ref, DictationModality::File) {
@@ -170,9 +186,21 @@ pub async fn transcribe_recording_file<R: Runtime>(
     log::info!(
         "[transcribe] dispatch → provider_kind={kind} audio={audio_path} duration_ms={duration_ms}"
     );
+    let system_prompt = system_prompt.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() { None } else { Some(s) }
+    });
     match backend {
         DictationBackend::SaasFile => {
-            transcribe_recording_file_impl_async(app, audio_path, duration_ms, lang, kind).await
+            transcribe_recording_file_impl_async(
+                app,
+                audio_path,
+                duration_ms,
+                lang,
+                kind,
+                system_prompt,
+            )
+            .await
         }
         DictationBackend::TencentFile {
             app_id,
@@ -182,6 +210,12 @@ pub async fn transcribe_recording_file<R: Runtime>(
             cos_bucket,
             name,
         } => {
+            if let Some(ref sp) = system_prompt {
+                log::warn!(
+                    "[transcribe] tencent file ignores system_prompt (chars={})",
+                    sp.chars().count(),
+                );
+            }
             let bucket = cos_bucket
                 .as_deref()
                 .map(str::trim)
@@ -217,6 +251,12 @@ pub async fn transcribe_recording_file<R: Runtime>(
             .map_err(|e| e.to_string())
         }
         DictationBackend::AliyunFile { api_key, name } => {
+            if let Some(ref sp) = system_prompt {
+                log::warn!(
+                    "[transcribe] aliyun file ignores system_prompt (chars={})",
+                    sp.chars().count(),
+                );
+            }
             let bytes = read_recording_bytes(&app, &audio_path)?;
             log::info!(
                 "[transcribe] aliyun file vendor=aliyun name={name} model=paraformer-v2 lang={:?}",
@@ -547,6 +587,7 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     duration_ms: u64,
     lang: Option<String>,
     provider_kind: String,
+    system_prompt: Option<String>,
 ) -> Result<TranscribeFileResult, String> {
     let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
 
@@ -563,6 +604,12 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     let media_type = media_type_for(&audio_path);
 
     if duration_ms > SHORT_AUDIO_LIMIT_MS {
+        if let Some(ref sp) = system_prompt {
+            log::warn!(
+                "[transcribe] asr_long (OL-TL-004) ignores system_prompt (chars={}); only OL-TL-003 short path supports it",
+                sp.chars().count(),
+            );
+        }
         let lang_long = parse_lang_long(lang.as_deref());
         return tauri::async_runtime::spawn_blocking(move || {
             let input = AsrLongOlTl004Input::from_base64(b64, Some(media_type));
@@ -575,7 +622,15 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     let lang_short = parse_lang_short(lang.as_deref());
 
     // 第一次尝试。spawn_blocking 包同步 SDK 调用，避免阻塞 tauri 主异步执行器。
-    match run_asr_short_blocking(&ol, &b64, media_type, lang_short.clone()).await? {
+    match run_asr_short_blocking(
+        &ol,
+        &b64,
+        media_type,
+        lang_short.clone(),
+        system_prompt.clone(),
+    )
+    .await?
+    {
         AsrShortAttempt::Ok(r) => Ok(TranscribeFileResult {
             text: r.data.text,
             variant: "asrShort".into(),
@@ -590,7 +645,7 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
                 handle_session_expired(&app, &ol);
                 return Err(ERR_UNAUTHORIZED.to_string());
             }
-            match run_asr_short_blocking(&ol, &b64, media_type, lang_short).await? {
+            match run_asr_short_blocking(&ol, &b64, media_type, lang_short, system_prompt).await? {
                 AsrShortAttempt::Ok(r) => {
                     log::info!("[transcribe] asr_short retry after refresh succeeded");
                     Ok(TranscribeFileResult {
@@ -625,17 +680,44 @@ async fn run_asr_short_blocking(
     b64: &str,
     media_type: &'static str,
     lang_short: Option<String>,
+    system_prompt: Option<String>,
 ) -> Result<AsrShortAttempt, String> {
     let client = ol.authenticated_client().ok_or_else(|| {
         log::warn!("[transcribe] authenticated_client() returned None right before dispatch");
         ERR_NOT_AUTHENTICATED.to_string()
     })?;
     let b64_owned = b64.to_string();
+    match system_prompt.as_deref() {
+        Some(sp) => {
+            let chars = sp.chars().count();
+            let bytes = sp.len();
+            let lines = sp.lines().count();
+            let preview = system_prompt_preview(sp, 200);
+            log::info!(
+                "[transcribe] asr_short with system_prompt: chars={chars} bytes={bytes} lines={lines} lang={lang_short:?} preview={preview:?}"
+            );
+            // dev/debug 等级才输出全文，避免线上日志被几千字提示词刷屏。
+            log::debug!(
+                "[transcribe] asr_short system_prompt full body ({chars} chars):\n{sp}"
+            );
+            if chars > 2000 {
+                log::warn!(
+                    "[transcribe] asr_short system_prompt chars={chars} exceeds the SDK-recommended 2000-char soft limit; upstream may truncate or refuse"
+                );
+            }
+        }
+        None => {
+            log::info!(
+                "[transcribe] asr_short without system_prompt lang={lang_short:?}"
+            );
+        }
+    }
     let task = tokio::task::spawn_blocking(move || {
         let input = AsrShortOlTl003Input::from_base64(b64_owned, media_type);
         let params = AsrShortOlTl003Params {
             language: lang_short,
             enable_itn: Some(true),
+            system_prompt,
         };
         client.tools_v4().asr_short_ol_tl_003(&input, &params)
     });
