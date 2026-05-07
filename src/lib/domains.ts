@@ -79,12 +79,19 @@ export function getDomainName(id: DomainId): string {
 }
 
 export function getDomainNamesForPrompt(ids: readonly string[]): string[] {
+  return getDomainEntriesForPrompt(ids).map((e) => e.name);
+}
+
+/** 同 getDomainNamesForPrompt，但返回 id+name 元组让 ASR 路径能查 DOMAIN_KEYWORDS。 */
+export function getDomainEntriesForPrompt(
+  ids: readonly string[],
+): { id: DomainId; name: string }[] {
   const seen = new Set<string>();
-  const out: string[] = [];
+  const out: { id: DomainId; name: string }[] = [];
   for (const id of ids) {
     if (!isDomainId(id) || seen.has(id)) continue;
     seen.add(id);
-    out.push(getDomainName(id));
+    out.push({ id, name: getDomainName(id) });
     if (out.length >= DOMAIN_LIMIT) break;
   }
   return out;

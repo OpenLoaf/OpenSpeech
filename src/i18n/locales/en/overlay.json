@@ -173,6 +173,11 @@
     "placeholder": "(Transcript unavailable)",
     "aborted_placeholder": "(Cancelled, not transcribed)"
   },
+  "result": {
+    "title": "Couldn't auto-insert",
+    "copy": "Copy",
+    "copied": "Copied"
+  },
   "error": {
     "stt_not_authenticated": "Not signed in to OpenLoaf",
     "stt_5xx": "SaaS server error (5xx)",

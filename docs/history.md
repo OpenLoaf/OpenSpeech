@@ -23,6 +23,9 @@
 | segment_mode | 该次记录使用的分段模式：`REALTIME` / `UTTERANCE`。schema v4 之前的老记录为 NULL |
 | provider_kind | 实际承载本次转写的供应商通道。命名规则 `<vendor>-<channel>`：`saas-realtime` / `saas-file` / `tencent-realtime` / `tencent-file` / `aliyun-realtime` / `aliyun-file`。schema v4 之前的老记录为 NULL |
 | debug_payload | DEV 构建下捕获的 LLM 请求快照（URL / model / body 的 pretty JSON 字符串；refine + 翻译 phase2 累积成 JSON 数组）。仅在 `import.meta.env.DEV` 路径写入；正式版恒为 NULL。复制 Debug 信息按钮直接读这一列，不再实时拼接。schema v10 之前的老记录为 NULL |
+| text_edited | 用户在历史详情里手动改写后的最终文本；NULL = 没改过。**与 `text` / `refined_text` 并存不互覆盖**：原始 ASR 与原 refine 结果作为 diff 基线保留下来，便于后续异步词典分析任务比对。schema v11 之前的老记录为 NULL |
+| text_edited_at | 上次手动编辑时间戳（ms）。后续异步 AI 词典分析任务挑"近期编辑"喂模型时按这列排序。NULL = 未编辑过 |
+| focus_title | 录音瞬间的前台窗口标题（如 "main.rs — vscode"）。与 `target_app` 同生命周期采集；拼到 ConversationHistory 段每条历史里给模型做窗口/任务级偏置。schema v12 之前的老记录、retry、拿不到 title 时为 NULL |
 
 **不保存**：模型请求/响应的完整内容（仅保留最终 `text`）。
 
@@ -35,6 +38,8 @@
 | v3 | 加 `audio_path` / `asr_source` / `ai_model` | 同上 |
 | v4 | 加 `segment_mode` / `provider_kind` | `migrate_to_v4`（追加 PR-8） |
 | v10 | 加 `debug_payload` | `src-tauri/src/db/mod.rs` |
+| v11 | 加 `text_edited` / `text_edited_at` | 同上 |
+| v12 | 加 `focus_title` | 同上 |
 
 老记录这两列回填策略：保持 NULL，UI 详情页按 i18n key `history.detail.{segment_mode,provider_kind}.<value>` 翻译，命中 NULL 时显示 "—"。
 
@@ -73,9 +78,22 @@
 每条记录支持：
 - **播放原始录音**（仅当 `audio_path` 非空）：直接在列表内播放本机 WAV 文件；同一时刻最多只有一条录音在播，切到别的行会自动暂停当前。右侧的状态图标（✓）在有录音时替换为 Play/Pause 按钮。
 - **复制**：复制 text 到剪贴板。
+- **修改**（仅 success / cancelled-with-text）：弹编辑 Dialog，把识别错的地方改对；详见下方"编辑规则"。
 - **重新注入**：把 text 写入当前焦点输入框。
 - **重试**（仅 failed 记录）：重新发送原始请求到大模型。
 - **删除**：单条删除，无需二次确认。
+
+## 编辑规则
+
+用户可以在历史列表 / 详情里手动改一条记录的最终文本：
+
+1. 编辑入口：行上下文菜单的「修改」、详情 Dialog footer 的「修改」按钮。失败记录不允许编辑（无可改的内容）。
+2. 编辑基线 = `refined_text ?? text`——用户在详情里看到的"AI 给的最终版"。Dialog 上方 readonly 显示基线，下方 textarea 给用户改。
+3. 保存时写 `text_edited` + `text_edited_at`。如果用户改完后内容与基线完全一致，按"撤销编辑"处理（落 NULL），避免脏列。
+4. 「撤销修改」按钮：直接清空 `text_edited`（落 NULL），列表恢复显示基线。
+5. 列表 / 详情默认显示优先级：`text_edited > refined_text > text`。`text_edited` 存在时加一枚黄色「已修改」chip。「原始文本」切换按钮始终显示原 ASR `text`。
+6. 写入后 emit `openspeech://history-text-edited` 事件，payload `{ id, original, edited, at }`：后续**异步 AI 词典分析任务**订阅此事件消费 diff，由 LLM 决定是否把修改写入词典。本期只落数据 + 广播事件，订阅方不在范围。
+7. retention=`off` 时不写 DB，仅更新内存（与 add 一致）；下次启动后编辑信息一并消失。
 
 ## Cancelled 状态规则
 

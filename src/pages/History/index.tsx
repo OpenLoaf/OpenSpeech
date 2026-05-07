@@ -23,6 +23,7 @@ import {
   Loader2,
   MoreHorizontal,
   Pause,
+  Pencil,
   Play,
   RefreshCw,
   RotateCcw,
@@ -35,6 +36,7 @@ import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { exportRecordingTo } from "@/lib/audio";
 import { AudioWavePlayer } from "@/components/AudioWavePlayer";
+import { HistoryEditDialog } from "@/components/HistoryEditDialog";
 import {
   Dialog,
   DialogContent,
@@ -317,19 +319,23 @@ function RowActions({
   retrying,
   onRetry,
   onCopy,
+  onEdit,
   onMore,
   retryDisabled,
   retryTitle,
   copied,
+  canEdit,
 }: {
   status: HistoryStatus;
   retrying: boolean;
   onRetry: () => void;
   onCopy: () => void;
+  onEdit: () => void;
   onMore: (e: React.MouseEvent<HTMLButtonElement>) => void;
   retryDisabled: boolean;
   retryTitle: string;
   copied: boolean;
+  canEdit: boolean;
 }) {
   const { t } = useTranslation();
   const isFailed = status === "failed";
@@ -377,9 +383,20 @@ function RowActions({
     );
   }
 
-  // 成功态 hover 时显示：复制 + "..."（其它操作都进菜单 / 右键）。
+  // 成功态 hover 时显示：编辑 + 复制 + "..."（其它操作都进菜单 / 右键）。
   return (
     <div className="pointer-events-none flex items-center gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+      {canEdit && (
+        <button
+          type="button"
+          className={baseBtn}
+          title={t("pages:history.edit.edit_tooltip")}
+          aria-label={t("pages:history.edit.edit_button")}
+          onClick={onEdit}
+        >
+          <Pencil className="size-3.5" />
+        </button>
+      )}
       <button
         type="button"
         className={baseBtn}
@@ -711,6 +728,7 @@ function HistoryDetailDialog({
   onRetry,
   onExport,
   onDelete,
+  onEdit,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -726,6 +744,7 @@ function HistoryDetailDialog({
   onRetry: () => void;
   onExport: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   const { t } = useTranslation();
   const isFailed = item.status === "failed";
@@ -733,16 +752,21 @@ function HistoryDetailDialog({
 
   const rawText = item.text?.trim() ?? "";
   const refinedText = (item.refined_text ?? "").trim();
-  const showingRefined = hasRefined && !showRaw;
+  const editedText = (item.text_edited ?? "").trim();
+  const hasEdited = !isFailed && editedText.length > 0;
+  // 默认视图（非 raw）：用户编辑后的最终值 > refined_text > raw text
+  const defaultView = editedText || refinedText || rawText;
+  const showingRefined = (hasRefined || hasEdited) && !showRaw;
   const mainText = isFailed
     ? t("pages:history.row.failed_placeholder")
-    : isCancelled
+    : isCancelled && !hasEdited
       ? t("pages:history.row.cancelled_placeholder", {
           duration: formatDuration(item.duration_ms),
         })
       : showingRefined
-        ? refinedText || rawText
+        ? defaultView
         : rawText;
+  const canEdit = !isFailed && (rawText.length > 0 || refinedText.length > 0);
 
   const handleDeleteClick = () => {
     onOpenChange(false);
@@ -820,15 +844,24 @@ function HistoryDetailDialog({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
-          {!isFailed && !isCancelled && (hasRefined || rawText) && (
+          {!isFailed && (hasRefined || hasEdited || rawText) && (
             <div className="mb-3 flex shrink-0 items-center gap-2">
-              {hasRefined && (
+              {(hasRefined || hasEdited) && (
                 <RefinedToggle
                   showRaw={showRaw}
                   onToggle={setShowRaw}
                   type={item.type}
                   targetLang={item.target_lang}
                 />
+              )}
+              {hasEdited && (
+                <span
+                  className="inline-flex items-center gap-1 border border-te-accent/50 bg-te-accent/10 px-1.5 py-px font-mono text-[10px] uppercase tracking-widest text-te-accent"
+                  title={t("pages:history.edit.edited_tooltip")}
+                >
+                  <Pencil className="size-2.5" strokeWidth={2} />
+                  {t("pages:history.edit.edited_chip")}
+                </span>
               )}
               {rawText && (
                 <button
@@ -928,6 +961,14 @@ function HistoryDetailDialog({
               }
             />
           )}
+          {canEdit && (
+            <DetailActionButton
+              onClick={onEdit}
+              icon={<Pencil />}
+              label={t("pages:history.edit.edit_button")}
+              title={t("pages:history.edit.edit_tooltip")}
+            />
+          )}
           {item.audio_path && (
             <DetailActionButton
               onClick={onExport}
@@ -994,23 +1035,29 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
   const togglePlay = usePlaybackStore((s) => s.toggle);
   const isPlaying = playingId === item.id && playbackPlaying;
   const hasRefined = !isFailed && !isCancelled && !!item.refined_text;
-  // 默认显示 refined（AI 优化后的书面化文本）；用户可切回原始 ASR 文本对照。
+  const hasEdited = !isFailed && !!item.text_edited;
+  // 默认显示用户编辑后的最终值 > refined（AI 优化）> 原始 ASR；用户可切回原始 ASR 对照。
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState(false);
   const [menuPos, setMenuPos] = useState<
     { x: number; y: number; align: "start" | "end" } | null
   >(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const defaultText =
+    item.text_edited ?? (item.refined_text ?? item.text ?? "");
   const displayText = isFailed
     ? t("pages:history.row.failed_placeholder")
-    : isCancelled
+    : isCancelled && !hasEdited
       ? t("pages:history.row.cancelled_placeholder", {
           duration: formatDuration(item.duration_ms),
         })
-      : hasRefined && !showRaw
-        ? (item.refined_text as string)
+      : (hasRefined || hasEdited) && !showRaw
+        ? defaultText
         : item.text;
   const copyableText = displayText;
+  const canEdit =
+    !isFailed && ((item.text?.length ?? 0) > 0 || (item.refined_text?.length ?? 0) > 0);
 
   const handleRetry = async () => {
     try {
@@ -1133,6 +1180,14 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
       icon: <Eye />,
       onSelect: () => setDetailOpen(true),
     });
+    if (canEdit) {
+      items.push({
+        key: "edit",
+        label: t("pages:history.edit.edit_button"),
+        icon: <Pencil />,
+        onSelect: () => setEditOpen(true),
+      });
+    }
     if (!isFailed && !isCancelled) {
       items.push({
         key: "copy",
@@ -1252,7 +1307,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
         >
           {displayText}
         </p>
-        {hasRefined && (
+        {(hasRefined || hasEdited) && (
           <div className="mt-1.5 flex items-center gap-3">
             <RefinedToggle
               showRaw={showRaw}
@@ -1260,6 +1315,15 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
               type={item.type}
               targetLang={item.target_lang}
             />
+            {hasEdited && (
+              <span
+                className="inline-flex items-center gap-1 border border-te-accent/50 bg-te-accent/10 px-1.5 py-px font-mono text-[10px] uppercase tracking-widest text-te-accent"
+                title={t("pages:history.edit.edited_tooltip")}
+              >
+                <Pencil className="size-2.5" strokeWidth={2} />
+                {t("pages:history.edit.edited_chip")}
+              </span>
+            )}
             {item.duration_ms > 0 && (
               <span className="font-mono text-[10px] tracking-widest text-te-light-gray/50">
                 {formatDuration(item.duration_ms)}
@@ -1274,6 +1338,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
           </div>
         )}
         {!hasRefined &&
+          !hasEdited &&
           !isFailed &&
           (item.duration_ms > 0 || item.target_app) && (
             <div className="mt-1.5 flex items-center gap-3">
@@ -1311,8 +1376,10 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
           retryDisabled={!canRetry}
           retryTitle={retryTitle}
           copied={copied}
+          canEdit={canEdit}
           onRetry={() => void handleRetry()}
           onCopy={() => void handleCopy()}
+          onEdit={() => setEditOpen(true)}
           onMore={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             // 菜单从 "..." 按钮的右边对齐向左展开，避免被屏幕边或滚动条压住。
@@ -1346,7 +1413,19 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
         onRetry={() => void handleRetry()}
         onExport={() => void handleExport()}
         onDelete={() => void handleDelete()}
+        onEdit={() => {
+          setDetailOpen(false);
+          setEditOpen(true);
+        }}
       />
+
+      {canEdit && (
+        <HistoryEditDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          item={item}
+        />
+      )}
     </motion.div>
   );
 }
@@ -1417,6 +1496,7 @@ export default function HistoryPage() {
     return base.filter((it) => {
       if (it.text.toLowerCase().includes(q)) return true;
       if (it.refined_text?.toLowerCase().includes(q)) return true;
+      if (it.text_edited?.toLowerCase().includes(q)) return true;
       if (it.target_app?.toLowerCase().includes(q)) return true;
       if (it.error?.toLowerCase().includes(q)) return true;
       return false;

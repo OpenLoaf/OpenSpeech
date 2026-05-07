@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { info as logInfo } from "@tauri-apps/plugin-log";
 import type { BindingId } from "@/lib/hotkey";
 import type { RecordingState } from "@/stores/recording";
 import type { ToastPayload } from "./state";
@@ -37,6 +38,10 @@ interface ModeSwitchHintPayload {
   kind: "translate" | "dictation";
 }
 
+interface TranscriptResultPayload {
+  text: string;
+}
+
 export interface OverlayHandlers {
   onFsm: (p: FsmPayload) => void;
   onToast: (p: ToastPayload) => void;
@@ -49,6 +54,8 @@ export interface OverlayHandlers {
   onTranslate: (p: TranslatePayload) => void;
   /** 录音中跨模式切换提示——overlay pill 中心临时显示"切换到 X 模式" ~2s。 */
   onModeSwitchHint: (p: ModeSwitchHintPayload) => void;
+  /** 注入兜底：目标 app 已切走 / 不可写时挂结果面板让用户手动复制。 */
+  onTranscriptResult: (p: TranscriptResultPayload) => void;
 }
 
 /**
@@ -122,6 +129,19 @@ export function useOverlayListeners(handlers: OverlayHandlers) {
       }),
     );
 
+    pending.push(
+      listen<TranscriptResultPayload>(
+        "openspeech://overlay-show-result",
+        (e) => {
+          void logInfo(
+            `[overlay] received show-result text.len=${e.payload?.text?.length ?? 0} alive=${alive}`,
+          );
+          if (alive) handlersRef.current.onTranscriptResult(e.payload);
+        },
+      ),
+    );
+
+    void logInfo("[overlay] listeners mounted, emitting overlay-ready");
     void emit("openspeech://overlay-ready");
 
     return () => {

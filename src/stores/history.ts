@@ -1,14 +1,14 @@
 import { create } from "zustand";
+import { runDictionaryAgent } from "@/lib/dictionaryAgent";
 import { db } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { deleteRecordingFile } from "@/lib/audio";
 import { transcribeRecordingFile } from "@/lib/stt";
-import { buildAsrSystemPrompt } from "@/lib/asrSystemPrompt";
+import { ASR_CORE_RULES, buildSpeechSystemPrompt } from "@/lib/asrSystemPrompt";
 import { buildProviderRef } from "@/lib/dictation-provider-ref";
 import { resolveDictationLang } from "@/lib/dictation-lang";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
 import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
-import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { useAuthStore } from "@/stores/auth";
 import {
   useSettingsStore,
@@ -16,7 +16,6 @@ import {
   type HistoryRetention,
 } from "@/stores/settings";
 import { resolveLang } from "@/i18n";
-import i18n from "@/i18n";
 import { useUIStore } from "@/stores/ui";
 import { useStatsStore } from "@/stores/stats";
 
@@ -118,6 +117,31 @@ export interface HistoryItem {
    * 历史详情 / 复制按钮直接消费这一列，不再前端实时拼接。
    */
   debug_payload?: string | null;
+  /**
+   * 用户在历史详情里手动修正后的文本；null = 未编辑过。
+   * 保留 text / refined_text 不动，编辑值落到独立列，便于后续异步 AI 词典分析任务读 diff 基线。
+   */
+  text_edited?: string | null;
+  /** 上次手动编辑时间戳（ms）；用于挑选"近期编辑"喂给词典分析任务。 */
+  text_edited_at?: number | null;
+  /**
+   * 录音瞬间的前台窗口标题快照。比 target_app 信号强（含具体文件名 / 联系人 / 任务）。
+   * 拼到 ConversationHistory 段的每条历史里，让模型区分"在 main.rs 里聊代码"和
+   * "在 README 里写文档"等同 app 不同任务的偏置。retry / 老记录 / 拿不到 title 时为 NULL。
+   */
+  focus_title?: string | null;
+}
+
+/** history.text_edited 写入后广播的事件名；后续异步 AI 词典分析任务订阅此事件消费 diff。 */
+export const HISTORY_TEXT_EDITED_EVENT = "openspeech://history-text-edited";
+
+export interface HistoryTextEditedPayload {
+  id: string;
+  /** 编辑前的基线（refined_text ?? text）；上次有过编辑则为上次的 text_edited。 */
+  original: string;
+  /** 用户保存后的新值；null = 用户清空回基线（撤销编辑）。 */
+  edited: string | null;
+  at: number;
 }
 
 /** 新增一条记录时的入参；id 与 created_at 由 store 生成。 */
@@ -138,6 +162,7 @@ export interface HistoryInput {
   asr_ms?: number | null;
   refine_ms?: number | null;
   debug_payload?: string | null;
+  focus_title?: string | null;
 }
 
 // SQLite 取出来的原始行（bind 会回 camelCase 的字段，这里统一保留 snake_case）。
@@ -160,6 +185,9 @@ interface Row {
   asr_ms: number | null;
   refine_ms: number | null;
   debug_payload: string | null;
+  text_edited: string | null;
+  text_edited_at: number | null;
+  focus_title: string | null;
 }
 
 function rowToItem(r: Row): HistoryItem {
@@ -182,6 +210,9 @@ function rowToItem(r: Row): HistoryItem {
     asr_ms: r.asr_ms,
     refine_ms: r.refine_ms,
     debug_payload: r.debug_payload,
+    text_edited: r.text_edited,
+    text_edited_at: r.text_edited_at,
+    focus_title: r.focus_title,
   };
 }
 
@@ -194,6 +225,12 @@ interface HistoryStore {
   reload: () => Promise<void>;
   add: (input: HistoryInput) => Promise<HistoryItem>;
   setRefinedText: (id: string, refined: string) => Promise<void>;
+  /**
+   * 用户在历史详情里手动改文本：写 text_edited + text_edited_at，并同步触发字典
+   * agent。传 null 表示撤销编辑（清空 text_edited）。当 newText 与基线
+   * (refined_text ?? text) 完全相等时也按"撤销"处理，避免脏列。
+   */
+  updateText: (id: string, newText: string | null) => Promise<void>;
   /** DEV 模式：把已捕获的请求 envelope JSON 串落到 history.debug_payload。 */
   setDebugPayload: (id: string, payload: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
@@ -247,7 +284,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const d = await db();
     // type='meeting' 由 useMeetingsStore 自管列表，不混进听写主历史。
     const rows = await d.select<Row[]>(
-      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms, debug_payload FROM history WHERE type != 'meeting' ORDER BY created_at DESC",
+      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms, debug_payload, text_edited, text_edited_at, focus_title FROM history WHERE type != 'meeting' ORDER BY created_at DESC",
     );
     set({ items: rows.map(rowToItem) });
   },
@@ -272,6 +309,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       asr_ms: input.asr_ms ?? null,
       refine_ms: input.refine_ms ?? null,
       debug_payload: input.debug_payload ?? null,
+      focus_title: input.focus_title ?? null,
     };
 
     // retention='off'：不写 DB，只塞内存；重启后清空，与 docs/history.md 一致。
@@ -290,7 +328,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
     const d = await db();
     await d.execute(
-      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms, debug_payload) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms, debug_payload, focus_title) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
       [
         item.id,
         item.type,
@@ -310,6 +348,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         item.asr_ms,
         item.refine_ms,
         item.debug_payload,
+        item.focus_title,
       ],
     );
     set({ items: [item, ...get().items] });
@@ -325,6 +364,46 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       items: get().items.map((it) =>
         it.id === id ? { ...it, refined_text: refined } : it,
       ),
+    });
+  },
+
+  updateText: async (id: string, newText: string | null) => {
+    const target = get().items.find((it) => it.id === id);
+    if (!target) return;
+    const baseline = target.refined_text ?? target.text ?? "";
+    const original = target.text_edited ?? baseline;
+    const trimmed = newText === null ? null : newText;
+    // 与基线完全一致 → 按撤销编辑处理，落 NULL；避免历史里堆"看起来没变"的脏列
+    const isRevert = trimmed !== null && trimmed === baseline;
+    const finalEdited = isRevert ? null : trimmed;
+    const at = Date.now();
+
+    const retention = useSettingsStore.getState().general.historyRetention;
+    if (retention !== "off") {
+      const d = await db();
+      await d.execute(
+        "UPDATE history SET text_edited = $1, text_edited_at = $2 WHERE id = $3",
+        [finalEdited, finalEdited === null ? null : at, id],
+      );
+    }
+    set({
+      items: get().items.map((it) =>
+        it.id === id
+          ? {
+              ...it,
+              text_edited: finalEdited,
+              text_edited_at: finalEdited === null ? null : at,
+            }
+          : it,
+      ),
+    });
+    // 同步触发字典 agent：写完 DB 立即调，不走事件总线（更可见、可调）。
+    // 不 await ——保存按钮立即返回 / dialog 关闭；agent 跑完命中 add/update/delete
+    // 自己弹 toast 通知用户。失败已在内部 swallow，不会影响保存。
+    void runDictionaryAgent({
+      historyId: id,
+      baseline: original,
+      edited: finalEdited,
     });
   },
 
@@ -385,15 +464,17 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     markRetry(true);
     try {
       const settings = useSettingsStore.getState();
-      const retrySystemPrompt = buildAsrSystemPrompt({
+      const retrySystemPrompt = buildSpeechSystemPrompt({
+        corePrompt: ASR_CORE_RULES[resolveLang(settings.general.interfaceLang)],
         items: get().items,
         targetApp: target.target_app ?? null,
         excludeHistoryId: id,
+        audioDurationMs: target.duration_ms,
+        expandDomainKeywords: true,
+        includeUserCorrections: true,
       });
       console.info(
-        `[history] retry transcribe system_prompt: ${
-          retrySystemPrompt ? `len=${retrySystemPrompt.length} chars` : "<none>"
-        }`,
+        `[history] retry transcribe system_prompt: len=${retrySystemPrompt.length} chars`,
       );
       const r = await transcribeRecordingFile({
         audioPath: target.audio_path,
@@ -420,36 +501,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       if (text && refineEnabled) {
         const aiSettings = useSettingsStore.getState().aiRefine;
         const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
-        const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
-        const hotwords = getHotwordsArray();
-        const requestTimeMs = Date.now();
-        const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
-        let historyEntries: string[] | undefined;
-        if (aiSettings.includeHistory) {
-          const minutesAgoLabel = i18n.t("ai.minutes_ago", {
-            ns: "settings",
-            defaultValue: "minutes ago",
-          });
-          // retry 当前这条历史所在的目标应用即作为"当前会话"应用：相同 app 的历史才进上下文。
-          // target.target_app 为空（老记录或 OS 没拿到）时不过滤，避免一刀切清空上下文。
-          const currentTarget = target.target_app ?? null;
-          const lines = get()
-            .items.filter((it) => it.id !== id && it.status === "success")
-            .filter((it) => !currentTarget || it.target_app === currentTarget)
-            .slice(0, 5)
-            .reverse()
-            .map((it) => {
-              const content = (it.refined_text ?? it.text ?? "").trim();
-              if (!content) return "";
-              const mins = Math.max(
-                1,
-                Math.floor((requestTimeMs - it.created_at) / 60000),
-              );
-              return `[${mins} ${minutesAgoLabel}] ${content}`;
-            })
-            .filter((s) => s.length > 0);
-          if (lines.length > 0) historyEntries = lines;
-        }
+        const refineCorePrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
         let activeProvider = null as
           | { id: string; name: string; baseUrl: string; model: string }
           | null;
@@ -469,14 +521,21 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
           if (aiSettings.mode === "custom" && !activeProvider) {
             throw new Error("no_active_custom_provider");
           }
+          const retryRefineSystemPrompt = buildSpeechSystemPrompt({
+            corePrompt: refineCorePrompt,
+            items: get().items,
+            targetApp: target.target_app ?? null,
+            excludeHistoryId: id,
+            audioDurationMs: target.duration_ms,
+          });
+          console.info(
+            `[history] retry refine system_prompt: len=${retryRefineSystemPrompt.length} chars`,
+          );
           const rr = await refineTextViaChatStream(
             {
               mode: aiSettings.mode,
-              systemPrompt,
+              systemPrompt: retryRefineSystemPrompt,
               userText: text,
-              hotwords: hotwords.length > 0 ? hotwords : undefined,
-              historyEntries,
-              requestTime,
               customBaseUrl: activeProvider?.baseUrl,
               customModel: activeProvider?.model,
               customKeyringId: activeProvider

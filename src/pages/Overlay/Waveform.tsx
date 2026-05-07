@@ -79,7 +79,7 @@ export const Waveform = memo(function Waveform({
         return (
           <span
             key={i}
-            className="inline-block origin-center bg-te-fg"
+            className="inline-block origin-center bg-te-accent"
             style={{
               width: BAR_WIDTH_PX,
               height: BAR_MAX_H,

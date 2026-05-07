@@ -15,7 +15,6 @@ import {
   RotateCcw,
   Sparkles,
   Trash2,
-  Volume2,
   Wand2,
   X,
 } from "lucide-react";
@@ -591,9 +590,8 @@ type ToolTabsProps = {
 function ToolTabs({ tool, onChange }: ToolTabsProps) {
   const { t } = useTranslation();
   const items: { key: ToolKey; icon: typeof Languages }[] = [
-    { key: "translate", icon: Languages },
     { key: "polish", icon: Wand2 },
-    { key: "tts", icon: Volume2 },
+    { key: "translate", icon: Languages },
   ];
   return (
     <div className="flex shrink-0 items-stretch gap-px self-end border border-te-gray/40 bg-te-gray/40">
@@ -890,7 +888,7 @@ export default function ToolboxPage() {
   const [voice, setVoice] = useState<(typeof TTS_VOICES)[number]>("natural_f");
   const [speed, setSpeed] = useState<(typeof TTS_SPEEDS)[number]>(1.0);
 
-  const [activeTool, setActiveTool] = useState<ToolKey>("translate");
+  const [activeTool, setActiveTool] = useState<ToolKey>("polish");
   const [status, setStatus] = useState<ToolStatus>({ kind: "idle" });
   const [runMeta, setRunMeta] = useState<RunMeta | null>(null);
 

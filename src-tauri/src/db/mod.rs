@@ -214,5 +214,39 @@ DROP TABLE IF EXISTS history_segments;
             sql: "ALTER TABLE history ADD COLUMN debug_payload TEXT;",
             kind: MigrationKind::Up,
         },
+        // v11：用户对一条 history 的手动修正落库。
+        // - text_edited：用户在历史详情里改完后的最终文本；NULL = 未编辑过。
+        // - text_edited_at：编辑时间戳（ms），用于后续异步 AI 词典分析任务挑"近期编辑"。
+        // 故意不覆盖 text / refined_text——保留原始 ASR / 原 refine 结果作为 diff 基线。
+        Migration {
+            version: 11,
+            description: "history_add_text_edited",
+            sql: r#"
+ALTER TABLE history ADD COLUMN text_edited TEXT;
+ALTER TABLE history ADD COLUMN text_edited_at INTEGER;
+"#,
+            kind: MigrationKind::Up,
+        },
+        // v12：录音瞬间的前台窗口标题。和 target_app 同生命周期采集（getActiveWindowInfo
+        // 一次 invoke 拿全），用于在 ConversationHistory 段每条历史后显式拼出标题，
+        // 让模型区分"在 main.rs 里聊"和"在 README 里聊"——同 app 不同任务的偏置。
+        Migration {
+            version: 12,
+            description: "history_add_focus_title",
+            sql: "ALTER TABLE history ADD COLUMN focus_title TEXT;",
+            kind: MigrationKind::Up,
+        },
+        // v13：dictionary 增加 updated_at（异步 AI agent 改写后的时间戳）和 created_by
+        // （'manual' / 'agent'，老行 = NULL 视为 manual）。区分"用户手动添加"与"agent 决策
+        // 添加/更新"，便于词典页 UI 标注与未来排序。
+        Migration {
+            version: 13,
+            description: "dictionary_add_updated_at_and_created_by",
+            sql: r#"
+ALTER TABLE dictionary ADD COLUMN updated_at INTEGER;
+ALTER TABLE dictionary ADD COLUMN created_by TEXT;
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

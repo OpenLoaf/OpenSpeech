@@ -166,8 +166,10 @@
     "polish_scenario_instruction_placeholder": "例如：目标场景是商务邮件，语气正式，按问候 / 正文 / 结尾分段。",
     "prompt_reset": "恢复默认",
     "section_history": "上下文",
-    "include_history": "把最近 5 条历史一起发送",
+    "include_history": "把最近的历史一起发送",
     "include_history_hint": "把最近的 transcript 作为参考上下文，帮助模型沿用一致的语气与术语。",
+    "recent_history_count": "携带条数",
+    "recent_history_count_hint": "AI 上下文最多带最近多少条历史；条数越多偏置越强，但 token 消耗也更多。",
     "minutes_ago": "分钟前",
     "history_truncated": "省略 {{count}} 字"
   },

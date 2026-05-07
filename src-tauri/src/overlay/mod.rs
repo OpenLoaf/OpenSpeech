@@ -59,7 +59,10 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     position_to_bottom_center(&window)?;
 
     #[cfg(target_os = "macos")]
-    enable_accepts_first_mouse(&window);
+    {
+        enable_accepts_first_mouse(&window);
+        promote_to_nonactivating_panel(&window);
+    }
 
     log::warn!("[overlay] window created (hidden, transparent)");
     Ok(())
@@ -215,14 +218,68 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 }
 
 // hide 单 command：先移屏外再 hide，避免 hide 完成前的最后一帧露馅。
-// 不再 set_size——窗口尺寸固定。
 pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
         let _ = w.set_position(LogicalPosition::new(OFFSCREEN_POSITION, OFFSCREEN_POSITION));
         w.hide()?;
-        log::debug!("[overlay] hide");
+        log::info!("[overlay] hide invoked");
     }
     Ok(())
+}
+
+// 根因修复：把 overlay 的 NSWindow isa 切到系统 NSPanel + 加 nonactivating panel
+// styleMask。这是 macOS 处理 spotlight / 状态栏 popover 类悬浮窗的标准方式（社区
+// tauri-nspanel plugin 用同样手法）。
+//
+// 为什么这是根因——NSApp.deactivate / hide-before-deactivate 都救不回来：
+//   T0:    user click overlay button (mouseDown)
+//   T0+ε:  overlay NSWindow becomeKeyWindow → NSApp 被 AppKit 设为 active
+//   T0+ε:  AppKit 立即把同 app 的 main window raise 到前面 ← 主窗在这一瞬已经露脸
+//   T0+ε:  webview button onClick 才轮到执行
+//   T1+:   我们才能 invoke overlay_hide
+// 等我们能 deactivate 时主窗早就被顶上来了，靠 hide 路径救不回来。
+//
+// NSWindowStyleMaskNonactivatingPanel (1 << 7) 仅对 NSPanel 类型生效——AppKit 看
+// 到这位会把 click 当成「不抢 key window 不激活 app」处理，鼠标事件仍照常派发
+// 给 contentView。所以必须先把这个 NSWindow 实例的 isa 换成 NSPanel。
+//
+// object_setClass 切到 system 的 NSPanel（不是动态创建子类），不会撞 wry 内部
+// KVO（之前 objc_allocateClassPair(wry_class) 创建子类才会撞）。NSPanel 是
+// NSWindow 的子类，dealloc 链 / observer 链都还能正常走完。
+#[cfg(target_os = "macos")]
+fn promote_to_nonactivating_panel<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    use objc::runtime::{Class, Object};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe extern "C" {
+        fn object_setClass(obj: *mut Object, cls: *mut Class) -> *mut Class;
+    }
+
+    const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: u64 = 1 << 7;
+
+    let ns_window_ptr = match window.ns_window() {
+        Ok(p) => p as *mut Object,
+        Err(e) => {
+            log::warn!("[overlay] ns_window() failed (panel promote): {e:?}");
+            return;
+        }
+    };
+    if ns_window_ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let panel_class: *mut Class = class!(NSPanel) as *const _ as *mut Class;
+        let _: *mut Class = object_setClass(ns_window_ptr, panel_class);
+
+        let current_mask: u64 = msg_send![ns_window_ptr, styleMask];
+        let new_mask = current_mask | NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL;
+        let _: () = msg_send![ns_window_ptr, setStyleMask: new_mask];
+
+        log::info!(
+            "[overlay] promoted to NSPanel + nonactivating panel (styleMask {:#x} -> {:#x})",
+            current_mask, new_mask
+        );
+    }
 }
 
 #[tauri::command]

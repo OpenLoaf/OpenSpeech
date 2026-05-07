@@ -173,6 +173,11 @@
     "placeholder": "（未能获取转写结果）",
     "aborted_placeholder": "（已取消，未转录）"
   },
+  "result": {
+    "title": "未自动输入",
+    "copy": "复制",
+    "copied": "已复制"
+  },
   "error": {
     "stt_not_authenticated": "未登录 OpenLoaf",
     "stt_5xx": "SaaS 服务端错误（5xx）",

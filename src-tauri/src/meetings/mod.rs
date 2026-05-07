@@ -35,7 +35,7 @@ use crate::asr::meeting::{
 };
 use crate::audio::is_valid_date_segment;
 use crate::db;
-use crate::openloaf::{DEFAULT_BASE_URL, SharedOpenLoaf, handle_session_expired};
+use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
 
 /// 前端订阅的事件名。
 pub const EVENT_READY: &str = "meetings://ready";
@@ -178,7 +178,7 @@ fn build_provider<R: Runtime>(
                 // i18n errors:meetings.not_authenticated{,_hint} 才能渲染。
                 format!("{ERR_NOT_AUTHENTICATED}: SaaS not authenticated")
             })?;
-            Ok(Arc::new(SaasMeetingProvider::new(client, DEFAULT_BASE_URL)))
+            Ok(Arc::new(SaasMeetingProvider::new(client)))
         }
         DictationBackend::TencentRealtime {
             app_id,
@@ -223,6 +223,12 @@ pub async fn meeting_start<R: Runtime>(
 }
 
 fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<(), String> {
+    log::info!(
+        "[meetings] meeting_start id={} lang={} provider_mode={:?}",
+        args.meeting_id,
+        args.language,
+        args.provider.mode,
+    );
     // 自愈：dev HMR / 错误路径 / 弹窗关闭都可能让前端 store 回到 idle，但后端
     // active_slot 还留着上一场——上一版直接报 "another meeting is already active"
     // 死路一条，用户必须重启 app。这里把 stale slot 直接 take 掉：drop 后旧的
@@ -238,8 +244,12 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         }
     }
 
-    let provider = build_provider(&app, &args.provider)?;
+    let provider = build_provider(&app, &args.provider).map_err(|e| {
+        log::warn!("[meetings] build_provider failed: {e}");
+        e
+    })?;
     let provider_id = provider.id().to_string();
+    log::info!("[meetings] provider_id={provider_id}");
     let session_config = MeetingSessionConfig {
         language: args.language.clone(),
         sample_rate: 16_000,
@@ -269,8 +279,13 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         }
     }
     if !got_ready {
+        log::warn!("[meetings] handshake timeout: no Ready within 8s");
         return Err("handshake timeout: no Ready within 8s".into());
     }
+    log::info!(
+        "[meetings] handshake ok session_id={:?} provider={provider_id}",
+        session_id,
+    );
 
     let _ = app.emit(
         EVENT_READY,
@@ -338,6 +353,21 @@ pub fn try_send_audio_pcm16(pcm16: Vec<u8>) {
     let Some(a) = slot.as_ref() else { return };
     if a.paused.load(Ordering::Relaxed) {
         return;
+    }
+    // 累计帧/字节，每 ~1 秒 (96 帧 ≈ 1024ms 取整) 打一行，让肉眼能看到流量节奏。
+    // 静音帧也照样灌（cpal callback 不区分），所以即使没说话这里也会持续累计。
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
+    static FRAMES: AtomicUsize = AtomicUsize::new(0);
+    static BYTES: AtomicU64 = AtomicU64::new(0);
+    let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+    BYTES.fetch_add(pcm16.len() as u64, Ordering::Relaxed);
+    if n == 1 {
+        log::info!("[meetings] first PCM16 frame fanout to meeting session ({}B)", pcm16.len());
+    } else if n % 96 == 0 {
+        log::info!(
+            "[meetings] audio progress frames={n} bytes={}",
+            BYTES.load(Ordering::Relaxed)
+        );
     }
     let _ = a.audio_tx.send(pcm16);
 }

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { newId } from "@/lib/ids";
 
 export type DictSource = "manual" | "auto";
+export type DictCreatedBy = "manual" | "agent";
 
 export interface DictEntry {
   id: string;
@@ -11,12 +12,21 @@ export interface DictEntry {
   source: DictSource;
   enabled: boolean;
   created_at: number;
+  updated_at?: number | null;
+  created_by?: DictCreatedBy | null;
 }
 
 export interface DictInput {
   term: string;
   aliases?: string[];
   source?: DictSource;
+  enabled?: boolean;
+  created_by?: DictCreatedBy;
+}
+
+export interface DictPatch {
+  term?: string;
+  aliases?: string[];
   enabled?: boolean;
 }
 
@@ -29,6 +39,8 @@ interface Row {
   source: DictSource;
   enabled: number;
   created_at: number;
+  updated_at: number | null;
+  created_by: DictCreatedBy | null;
 }
 
 function rowToEntry(r: Row): DictEntry {
@@ -49,6 +61,8 @@ function rowToEntry(r: Row): DictEntry {
     source: r.source,
     enabled: r.enabled === 1,
     created_at: r.created_at,
+    updated_at: r.updated_at,
+    created_by: r.created_by,
   };
 }
 
@@ -58,6 +72,7 @@ interface DictStore {
   init: () => Promise<void>;
   reload: () => Promise<void>;
   add: (input: DictInput) => Promise<DictEntry>;
+  update: (id: string, patch: DictPatch) => Promise<DictEntry>;
   remove: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
 }
@@ -78,7 +93,7 @@ export const useDictionaryStore = create<DictStore>((set, get) => ({
   reload: async () => {
     const d = await db();
     const rows = await d.select<Row[]>(
-      "SELECT id, term, aliases, source, enabled, created_at FROM dictionary ORDER BY created_at DESC",
+      "SELECT id, term, aliases, source, enabled, created_at, updated_at, created_by FROM dictionary ORDER BY created_at DESC",
     );
     set({ entries: rows.map(rowToEntry) });
   },
@@ -97,9 +112,11 @@ export const useDictionaryStore = create<DictStore>((set, get) => ({
       source: input.source ?? "manual",
       enabled: input.enabled ?? true,
       created_at: Date.now(),
+      updated_at: null,
+      created_by: input.created_by ?? "manual",
     };
     await d.execute(
-      "INSERT INTO dictionary (id, term, aliases, source, enabled, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+      "INSERT INTO dictionary (id, term, aliases, source, enabled, created_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
       [
         entry.id,
         entry.term,
@@ -107,10 +124,41 @@ export const useDictionaryStore = create<DictStore>((set, get) => ({
         entry.source,
         entry.enabled ? 1 : 0,
         entry.created_at,
+        entry.created_by,
       ],
     );
     set({ entries: [entry, ...get().entries] });
     return entry;
+  },
+
+  update: async (id, patch) => {
+    const cur = get().entries.find((e) => e.id === id);
+    if (!cur) throw new Error(`dictionary entry not found: ${id}`);
+    const nextTerm = patch.term !== undefined ? patch.term.trim().replace(/\s+/g, " ") : cur.term;
+    if (!nextTerm) throw new Error("term 不能为空");
+    const nextAliases = patch.aliases !== undefined ? patch.aliases : cur.aliases;
+    const nextEnabled = patch.enabled !== undefined ? patch.enabled : cur.enabled;
+    const updated_at = Date.now();
+    const d = await db();
+    await d.execute(
+      "UPDATE dictionary SET term = $1, aliases = $2, enabled = $3, updated_at = $4 WHERE id = $5",
+      [
+        nextTerm,
+        nextAliases.length ? JSON.stringify(nextAliases) : null,
+        nextEnabled ? 1 : 0,
+        updated_at,
+        id,
+      ],
+    );
+    const next: DictEntry = {
+      ...cur,
+      term: nextTerm,
+      aliases: nextAliases,
+      enabled: nextEnabled,
+      updated_at,
+    };
+    set({ entries: get().entries.map((e) => (e.id === id ? next : e)) });
+    return next;
   },
 
   remove: async (id) => {

@@ -166,8 +166,10 @@
     "polish_scenario_instruction_placeholder": "例如：目標場景是商務郵件，語氣正式，依問候 / 正文 / 結尾分段。",
     "prompt_reset": "恢復預設",
     "section_history": "上下文",
-    "include_history": "把最近 5 條歷史一同送出",
+    "include_history": "把最近的歷史一同送出",
     "include_history_hint": "把最近的 transcript 作為參考上下文，協助模型沿用一致的語氣與術語。",
+    "recent_history_count": "攜帶筆數",
+    "recent_history_count_hint": "AI 上下文最多攜帶最近多少筆歷史；筆數越多偏置越強，但 token 消耗也越多。",
     "minutes_ago": "分鐘前",
     "history_truncated": "省略 {{count}} 字"
   },

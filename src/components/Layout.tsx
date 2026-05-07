@@ -142,6 +142,10 @@ export default function Layout() {
   const settingsOpen = useUIStore((s) => s.settingsOpen);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const settingsInitialTab = useUIStore((s) => s.settingsInitialTab);
+  // dialog stack：AI 提示词 Dialog 是从 Settings AI tab 进的二级 Dialog，
+  // 打开时把 SettingsDialog 视觉上隐藏掉避免两层 backdrop + popup 重叠；
+  // closeAiPromptDialog 后 settingsOpen 仍为 true，SettingsDialog 自动复现。
+  const aiPromptDialog = useUIStore((s) => s.aiPromptDialog);
   const noInternetOpen = useUIStore((s) => s.noInternetOpen);
   const setNoInternetOpen = useUIStore((s) => s.setNoInternetOpen);
   const feedbackOpen = useUIStore((s) => s.feedbackOpen);
@@ -697,7 +701,7 @@ export default function Layout() {
       <AccountDialog open={accountOpen} onOpenChange={setAccountOpen} />
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
       <SettingsDialog
-        open={settingsOpen}
+        open={settingsOpen && aiPromptDialog === null}
         onOpenChange={setSettingsOpen}
         initialTab={settingsInitialTab}
       />

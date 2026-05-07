@@ -21,6 +21,7 @@ import { useUIStore } from "@/stores/ui";
 import { syncAutostart } from "@/lib/autostart";
 import { auditBindings } from "@/lib/hotkey";
 import { detectPlatform } from "@/lib/platform";
+import { loadMachineInfo } from "@/lib/machineInfo";
 import i18n, { resolveLang } from "@/i18n";
 import "./i18n";
 import {
@@ -34,6 +35,11 @@ import "./App.css";
 // 禁用 WebView 的默认右键菜单（"后退 / 刷新"等），桌面应用不需要浏览器级菜单。
 // 如果未来某些输入框需要原生上下文菜单（如右键粘贴），在该元素上 stopPropagation。
 window.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// 全局禁用 HTML5 原生拖拽：按住元素拖动会出 ghost 微缩图，桌面应用不需要这种浏览器
+// 行为；窗口拖动走 Tauri 的 data-tauri-drag-region，跟 dragstart 不冲突。
+// 未来真要做应用内 DnD（如文件投递）再在该元素 stopPropagation 或换 pointer 事件。
+window.addEventListener("dragstart", (e) => e.preventDefault());
 
 // 每个 WebviewWindow 独立 JS 运行时；用 label 分流主窗口 vs 悬浮条。
 const WINDOW_LABEL = getCurrentWebviewWindow().label;
@@ -98,6 +104,10 @@ const bootPromise = (async () => {
     // settings 必须在 history 之前 ready：history.init 会读 historyRetention 决定
     // 启动期 sweep 删多少。其它 store 与之无依赖，并行即可。
     await useSettingsStore.getState().init();
+
+    // 机器信息（hostname / deviceName / username）启动时拉一次缓存，给 buildSpeechSystemPrompt
+    // 同步读用。失败 fallback 为空串，不阻断 boot。
+    void loadMachineInfo();
 
     // 语言同步必须独立 try：之前与下面 hotkeys/history/dictionary init 共用一个
     // try-catch，sqlite 还没 ready 时 history/dictionary reload SELECT 抛错会把

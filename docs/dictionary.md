@@ -11,9 +11,11 @@
 | id | 唯一 ID |
 | term | 正确写法（目标输出） |
 | aliases | 可选的发音近似词 / 常见错写（供模型匹配） |
-| source | `manual`（手动）/ `auto`（自动建议） |
+| source | `manual`（手动）/ `auto`（异步 AI agent 决策） |
 | enabled | 是否参与提示（默认 true） |
 | created_at | 创建时间 |
+| updated_at | 上次修改时间（手动改 / agent update）；老条目为 NULL |
+| created_by | `manual` / `agent`；区分手动添加与 AI 决策添加。schema v13 之前的老条目为 NULL，按 `manual` 处理 |
 
 ## 分类
 
@@ -41,8 +43,29 @@
 4. 词典为**每用户独立**，不跨设备同步（本地存储）。
 5. 导出/导入：支持 JSON 格式导出与导入，用于备份与迁移。
 
-## 自动收录（迭代）
+## 自动收录（异步 AI Agent）
 
-- 触发条件：用户在注入后 30 秒内手动编辑了某段文字的特定词汇，且该编辑与原文字差异 ≤ 2 字符。
-- 系统记录为候选词，进入"自动添加"标签页，等待用户确认后才正式启用。
-- 自动候选不直接进入发送给模型的 hints，避免错误放大。
+用户在历史记录里手动改写一条 ASR 结果时，系统异步把 `(原文 baseline, 用户改后 edited, 当前字典)` 喂给 LLM，由模型决定是否更新字典。**入库即生效**，不进候选区，不需要用户二次确认——交给模型把控宁缺勿滥。
+
+- **触发**：history 写入 `text_edited` 后 emit `openspeech://history-text-edited`，前端订阅器调 Rust `analyze_dictionary_correction`（见 `src/lib/dictionaryAgent.ts` / `src-tauri/src/dictionary_agent/mod.rs`）。
+- **链路**：Rust 复用 `ai_refine::resolve_saas` 拿到 SaaS chat completions 端点 + fast_chat_variant；走 `/api/v1/chat/completions`，body 加 `response_format: { "type": "json_object" }` 强制模型出 JSON。
+- **Prompt 输入**：BaselineText / EditedText / CurrentDictionary（前 200 条 enabled=true，按 created_at DESC）。`docs/ai-refine.md` 里那一条 `<system-tag type="ConversationHistory">` 的格式不在此处复用，agent 用自己的 `<BaselineText> / <EditedText> / <CurrentDictionary>` 三段格式。
+- **输出 schema**：
+
+```json
+{
+  "decisions": [
+    { "action": "add",    "term": "<正确写法>", "aliases": ["<原错词>"] },
+    { "action": "update", "id": "<dict id>", "addAliases": ["<新别名>"] },
+    { "action": "delete", "id": "<dict id>", "reason": "..." },
+    { "action": "noop",   "reason": "..." }
+  ]
+}
+```
+
+`update` 走**增量加别名**（`addAliases`），不会替换原 aliases，避免模型抹掉用户手动加过的。`delete` 默认不会触发，模型 prompt 里被强制约束为"罕见操作"。
+
+- **失败容忍**：未登录 / 网络失败 / JSON 解析失败 / 模型返回 `noop` —— 一律静默跳过，console.warn 而已，不打扰用户。**永远不会因为 agent 失败把已经保存的 `text_edited` 回滚**。
+- **去重**：`add` 命中已存（`LOWER(term)` 唯一索引）会自动退化成 `update` 加别名。
+- **限额**：`DICT_LIMIT = 2000`（同手动添加），到顶时 `add` 跳过；`update` 不受限。
+- **入库标记**：agent 添加的条目 `source = 'auto'` + `created_by = 'agent'`，便于词典页 UI 视觉区分。

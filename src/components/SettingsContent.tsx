@@ -844,6 +844,7 @@ function AiTab() {
   const removeAiProvider = useSettingsStore((s) => s.removeAiProvider);
   const setActiveAiProvider = useSettingsStore((s) => s.setActiveAiProvider);
   const setAiIncludeHistory = useSettingsStore((s) => s.setAiIncludeHistory);
+  const setAiRecentHistoryCount = useSettingsStore((s) => s.setAiRecentHistoryCount);
 
   return (
     <div>
@@ -930,6 +931,23 @@ function AiTab() {
         <Switch
           checked={aiRefine.includeHistory}
           onChange={(v) => void setAiIncludeHistory(v)}
+        />
+      </Row>
+      <Row
+        label={t("ai.recent_history_count")}
+        hint={t("ai.recent_history_count_hint")}
+      >
+        <Select
+          value={String(aiRefine.recentHistoryCount)}
+          onChange={(v) => void setAiRecentHistoryCount(Number(v))}
+          options={[
+            { value: "3", label: "3" },
+            { value: "5", label: "5" },
+            { value: "10", label: "10" },
+            { value: "15", label: "15" },
+            { value: "20", label: "20" },
+            { value: "30", label: "30" },
+          ]}
         />
       </Row>
     </div>

@@ -53,6 +53,13 @@ export interface TranslateState {
  *  会在 setModeSwitchHint 启动 timer 自动回退。 */
 export type ModeSwitchKind = "translate" | "dictation";
 
+/** 注入降级到"剪贴板兜底"时由主窗推过来的转录结果。目标 app 已切走 / 不可写
+ *  / 用户关掉了自动注入时弹出。pill 已 idle，结果面板独立挂在底部 shell，让
+ *  用户能看到内容并一键复制。 */
+export interface TranscriptResultState {
+  text: string;
+}
+
 export interface OverlayState {
   /** 镜像主窗 RecordingState；overlay 不参与副作用，仅渲染。 */
   main: RecordingState;
@@ -67,6 +74,8 @@ export interface OverlayState {
   debug: DebugState;
   translate: TranslateState;
   modeSwitchHint: ModeSwitchKind | null;
+  /** 注入失败兜底：展示最终转录文本 + 复制 / 关闭按钮。null = 不显示。 */
+  transcriptResult: TranscriptResultState | null;
 }
 
 const INITIAL: OverlayState = {
@@ -80,6 +89,7 @@ const INITIAL: OverlayState = {
   debug: { active: false, endAtUnixMs: null, totalMs: 0 },
   translate: { active: false, lang: "" },
   modeSwitchHint: null,
+  transcriptResult: null,
 };
 
 type Action =
@@ -98,7 +108,9 @@ type Action =
   | { type: "debug"; debug: DebugState }
   | { type: "translate"; translate: TranslateState }
   | { type: "mode-switch-show"; kind: ModeSwitchKind }
-  | { type: "mode-switch-clear" };
+  | { type: "mode-switch-clear" }
+  | { type: "result-show"; text: string }
+  | { type: "result-dismiss" };
 
 function reduce(s: OverlayState, a: Action): OverlayState {
   switch (a.type) {
@@ -106,6 +118,7 @@ function reduce(s: OverlayState, a: Action): OverlayState {
       // error → 非 error 切换时一起清 toast：用户按激活快捷键 / ESC 主动放弃
       // 失败提示时，pill 立即变 idle，伴生的失败 toast 不该再多停 0.x 秒。
       // 自然超时（ERROR_AUTO_DISMISS_MS）回 idle 也走这条路径，体感更整齐。
+      // 进入 preparing/recording 视为新一轮听写，把上一次残留的兜底结果面板清掉。
       return {
         ...s,
         main: a.state,
@@ -114,6 +127,10 @@ function reduce(s: OverlayState, a: Action): OverlayState {
         liveTranscript: a.liveTranscript,
         pillEarlyHide: a.pillEarlyHide,
         toast: s.main === "error" && a.state !== "error" ? null : s.toast,
+        transcriptResult:
+          a.state === "preparing" || a.state === "recording"
+            ? null
+            : s.transcriptResult,
       };
     case "toast-show":
       return { ...s, toast: { ...a.payload, id: a.id } };
@@ -136,6 +153,10 @@ function reduce(s: OverlayState, a: Action): OverlayState {
       return { ...s, modeSwitchHint: a.kind };
     case "mode-switch-clear":
       return { ...s, modeSwitchHint: null };
+    case "result-show":
+      return { ...s, transcriptResult: { text: a.text } };
+    case "result-dismiss":
+      return { ...s, transcriptResult: null };
   }
 }
 
@@ -154,6 +175,8 @@ export interface OverlayMachine {
   setDebug: (debug: DebugState) => void;
   setTranslate: (translate: TranslateState) => void;
   showModeSwitchHint: (kind: ModeSwitchKind) => void;
+  showTranscriptResult: (text: string) => void;
+  dismissTranscriptResult: () => void;
 }
 
 const DEFAULT_TOAST_AUTO_DISMISS_MS = 2000;
@@ -247,6 +270,14 @@ export function useOverlayMachine(): OverlayMachine {
     };
   }, []);
 
+  const showTranscriptResult = (text: string) => {
+    dispatch({ type: "result-show", text });
+  };
+
+  const dismissTranscriptResult = () => {
+    dispatch({ type: "result-dismiss" });
+  };
+
   return {
     state,
     showToast,
@@ -256,5 +287,7 @@ export function useOverlayMachine(): OverlayMachine {
     setDebug,
     setTranslate,
     showModeSwitchHint,
+    showTranscriptResult,
+    dismissTranscriptResult,
   };
 }

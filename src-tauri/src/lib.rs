@@ -26,6 +26,8 @@ pub mod asr;
 mod audio;
 mod cue;
 mod db;
+mod dictionary_agent;
+mod focus_check;
 mod hotkey;
 mod http;
 mod idle;
@@ -125,10 +127,18 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 fn get_platform_info() -> serde_json::Value {
+    // hostname / devicename / username 来自 whoami；获取失败（罕见，如 sandbox 限制）走空串兜底——
+    // 前端按空字符串视作"不可用"，省掉 Result 一路 await 错误处理。
+    let hostname = whoami::hostname().unwrap_or_default();
+    let device_name = whoami::devicename().unwrap_or_default();
+    let username = whoami::username().unwrap_or_default();
     serde_json::json!({
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "family": std::env::consts::FAMILY,
+        "hostname": hostname,
+        "deviceName": device_name,
+        "username": username,
     })
 }
 
@@ -162,8 +172,8 @@ fn hide_to_tray(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn get_active_app_name_cmd() -> Option<String> {
-    active_app::get_active_app_name()
+fn get_active_window_info_cmd() -> Option<active_app::ActiveWindowInfo> {
+    active_app::get_active_window_info()
 }
 
 #[tauri::command]
@@ -960,7 +970,8 @@ pub fn run() {
             app_emergency_reset,
             relaunch_app,
             hide_to_tray,
-            get_active_app_name_cmd,
+            get_active_window_info_cmd,
+            focus_check::focus_is_editable_cmd,
             show_main_window_cmd,
             tray_refresh,
             update_tray_labels,
@@ -1018,6 +1029,7 @@ pub fn run() {
             meetings::meeting_summary_load,
             meetings::meeting_summary_delete,
             ai_refine::refine_text_via_chat_stream,
+            dictionary_agent::analyze_dictionary_correction,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
             asr::test_provider::dictation_test_provider,

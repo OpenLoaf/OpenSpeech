@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { emit, emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { info as logInfo, warn as logWarn } from "@tauri-apps/plugin-log";
 import {
   writeText as writeClipboard,
   readText as readClipboard,
@@ -41,11 +42,11 @@ import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { getDomainNamesForPrompt } from "@/lib/domains";
-import { clipHistoryEntry } from "@/lib/historyClip";
-import { buildAsrSystemPrompt } from "@/lib/asrSystemPrompt";
+import { ASR_CORE_RULES, buildSpeechSystemPrompt } from "@/lib/asrSystemPrompt";
 import { newId } from "@/lib/ids";
 import { cuePlay, cueSetActive } from "@/lib/cue";
-import { getActiveAppName } from "@/lib/activeApp";
+import { getActiveWindowInfo } from "@/lib/activeApp";
+import { isFocusEditable } from "@/lib/focus";
 
 export type RecordingState =
   | "idle"
@@ -240,6 +241,36 @@ const notifyOverlay = (
   });
 };
 
+// 注入兜底：目标 app 已切走 / 不可写 / 自动粘贴失败时，把最终转写文字推到悬浮条
+// 上方的"复制最后的转录"面板，让用户能看到完整内容并一键复制。pill 已 idle，
+// 面板独立挂在底部 shell 直到用户主动关闭或下一次录音覆盖。
+const showOverlayResult = (text: string) => {
+  if (!IS_MAIN_WINDOW) {
+    void logInfo("[overlay] showOverlayResult skipped: not main window");
+    return;
+  }
+  if (!text) {
+    void logInfo("[overlay] showOverlayResult skipped: empty text");
+    return;
+  }
+  void logInfo(
+    `[overlay] showOverlayResult emit → text.len=${text.length} preview=${JSON.stringify(text.slice(0, 32))}`,
+  );
+  void emitTo("overlay", "openspeech://overlay-show-result", { text }).then(
+    () => void logInfo("[overlay] showOverlayResult emit ok"),
+    (e) => void logWarn(`[overlay] showOverlayResult emit failed: ${String(e)}`),
+  );
+};
+
+// 录音开始时抓的前台 app 与当前 finalize 瞬间是否一致。getActiveWindowInfo 失败
+// 或开始时没抓到都返回 false（无可靠依据时不触发降级，避免误把正常注入当失败）。
+const targetAppChangedAtFinalize = async (): Promise<boolean> => {
+  if (!currentSessionTargetApp) return false;
+  const cur = await getActiveWindowInfo();
+  if (!cur) return false;
+  return cur.name !== currentSessionTargetApp;
+};
+
 // 翻译模式指示条状态推送——overlay 端 TranslateIndicator 是独立 motion 元素，
 // 与 toast（警告/错误语义）解耦。lang 在 active=true 时是当前界面语言下的目标
 // 语言简称（"英文" / "Chinese"），active=false 时不带。
@@ -376,6 +407,16 @@ let resolvedProviderKindForCurrentSession:
 // 录音开始瞬间抓的前台应用名，best-effort：invoke 异步返回，结束时若已回填就写
 // history.target_app；超快录音 / 失败时 null，由 add() 接受 null。
 let currentSessionTargetApp: string | null = null;
+// 同一次 invoke 顺手拿到的窗口标题，喂给 buildSpeechSystemPrompt 的 focusTitle 段。
+// 不进 history（schema 里没列），仅用于本会话的 prompt 上下文。
+let currentSessionFocusTitle: string | null = null;
+// 录音开始瞬间 macOS AX 查到的"focused 元素是否文本输入区域"。
+// - true：可编辑（正常 inject）
+// - false：明确不可编辑（finalize 时跳过 inject，直接走结果面板让用户复制）
+// - null：拿不到结论（AX 权限缺失 / Win / Linux），保守按可注入处理
+// silent fail（enigo 在 Finder/桌面 type 不抛错也不写字）的根因是按下时焦点本来
+// 就不在文本框；这里在源头判好，避免到 finalize 才发现"已经发空"。
+let currentSessionFocusEditable: boolean | null = null;
 
 // 本次 finalize 是否撞过 SaaS 401。文件转写或 refine 抛出 isSaasAuthError 时置 true，
 // 等 finalize 末尾 history.add 落库拿到 id 再把 id 推给 ui store，让 main.tsx 在
@@ -491,6 +532,9 @@ const humanizeSttError = (raw: unknown): string => {
   if (msg.includes("tencent_cos_unknown")) {
     return i18n.t("overlay:error.tencent_cos_unknown");
   }
+  // network_unavailable 是 Rust 侧"SaaS 不可达但登录态保留"的稳定串。**必须**排在
+  // not authenticated 前面，避免子串误命中（虽然当前两串不重合，留个防御保险）。
+  if (msg.includes("network_unavailable")) return i18n.t("overlay:error.stt_network");
   if (msg.includes("not authenticated")) return i18n.t("overlay:error.stt_not_authenticated");
   if (msg.includes("HTTP error: 5")) return i18n.t("overlay:error.stt_5xx");
   if (msg.includes("HTTP error: 4")) return i18n.t("overlay:error.stt_4xx");
@@ -606,8 +650,19 @@ const startRecordingSession = (id: string) => {
   // 全局快捷键不会改变前台焦点，此刻拿到的就是用户原本在用的 app。invoke 通常
   // < 100ms 完成，录音持续 1s+，结束时大概率已回填；超短录音兜底为 null。
   currentSessionTargetApp = null;
-  void getActiveAppName().then((name) => {
-    currentSessionTargetApp = name;
+  currentSessionFocusTitle = null;
+  currentSessionFocusEditable = null;
+  void getActiveWindowInfo().then((info) => {
+    if (!info) return;
+    currentSessionTargetApp = info.name;
+    currentSessionFocusTitle = info.title || null;
+  });
+  // focus role snapshot 与 active window 一起 best-effort 异步抓。常规录音 1s+
+  // 比 invoke 慢，足够回填；finalize 看到 false 就跳过 inject 走结果面板。
+  void logInfo("[focus] session start: scheduling isFocusEditable snapshot");
+  void isFocusEditable().then((v) => {
+    currentSessionFocusEditable = v;
+    void logInfo(`[focus] session snapshot stored: ${v}`);
   });
   void startRecordingToFile(id)
     .then(() => {
@@ -773,16 +828,17 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
             "duration=",
             rec.duration_ms,
           );
-          const fileSystemPrompt = buildAsrSystemPrompt({
+          const fileSystemPrompt = buildSpeechSystemPrompt({
+            corePrompt: ASR_CORE_RULES[resolveLang(useSettingsStore.getState().general.interfaceLang)],
             items: useHistoryStore.getState().items,
             targetApp: currentSessionTargetApp,
+            focusTitle: currentSessionFocusTitle,
+            audioDurationMs: rec.duration_ms,
+            expandDomainKeywords: true,
+            includeUserCorrections: true,
           });
           console.info(
-            `[stt] file transcribe system_prompt: ${
-              fileSystemPrompt
-                ? `len=${fileSystemPrompt.length} chars`
-                : "<none>"
-            }`,
+            `[stt] file transcribe system_prompt: len=${fileSystemPrompt.length} chars`,
           );
           const r = await transcribeRecordingFile({
             audioPath: rec.audio_path,
@@ -933,35 +989,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       : null;
     const bilingual =
       translateMode && generalSettings.translateOutputMode === "bilingual";
-    const HISTORY_TURNS = 5;
-    const requestTimeMs = Date.now();
-    const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
-    let historyEntries: string[] | undefined;
-    if (aiSettings.includeHistory) {
-      const items = useHistoryStore.getState().items;
-      // 当前会话的目标应用已知时，仅取在同一应用里发生的历史，避免把"在 VSCode 里说的代码段"
-      // 当成"在微信里说话"的上下文。target_app 拿不到（null）时不过滤，保留原行为。
-      const currentTarget = currentSessionTargetApp;
-      const picked = items
-        .filter((it) => it.status === "success")
-        .filter((it) => !currentTarget || it.target_app === currentTarget)
-        .slice(0, HISTORY_TURNS)
-        .reverse();
-      const minutesAgoLabel = i18n.t("ai.minutes_ago", {
-        ns: "settings",
-        defaultValue: "minutes ago",
-      });
-      const lines = picked
-        .map((it) => {
-          const content = (it.refined_text ?? it.text ?? "").trim();
-          if (!content) return "";
-          const clipped = clipHistoryEntry(content);
-          const mins = Math.max(1, Math.floor((requestTimeMs - it.created_at) / 60000));
-          return `[${mins} ${minutesAgoLabel}] ${clipped}`;
-        })
-        .filter((s) => s.length > 0);
-      if (lines.length > 0) historyEntries = lines;
-    }
+    // refine 走 buildSpeechSystemPrompt 把上下文段（Domains/HotWords/History/MessageContext/TargetApp）
+    // 合并到 system_prompt 里，跟 ASR 共用同一份组装逻辑——前端不再单独传 hotwords / historyEntries
+    // / requestTime / targetApp / domains 给 Rust，build_context_message 走全 None 路径不插 context message。
     let activeProvider = null as
       | { id: string; name: string; baseUrl: string; model: string }
       | null;
@@ -978,7 +1008,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           ? "OpenLoaf SaaS"
           : null;
     console.info(
-      `[ai-refine] stream start mode=${aiSettings.mode} textLen=${text.length} hotwordsLen=${hotwords.length} historyLen=${historyEntries?.length ?? 0} provider=${activeProvider?.id ?? "saas"}`,
+      `[ai-refine] stream start mode=${aiSettings.mode} textLen=${text.length} hotwordsLen=${hotwords.length} provider=${activeProvider?.id ?? "saas"}`,
     );
     // 翻译流程的 phase1（refine）是否完成。catch 块据此区分 phase1 / phase2 失败。
     let translatePhase1Done = false;
@@ -1012,17 +1042,21 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       const noopChunk = (_chunk: string) => {};
       const phase1OnChunk =
         translateMode && !bilingual ? noopChunk : onChunk;
-      const domainsForPrompt = getDomainNamesForPrompt(aiSettings.selectedDomains);
+      const refineFullSystemPrompt = buildSpeechSystemPrompt({
+        corePrompt: refineSystemPrompt,
+        items: useHistoryStore.getState().items,
+        targetApp: currentSessionTargetApp,
+        focusTitle: currentSessionFocusTitle,
+        audioDurationMs: rec?.duration_ms,
+      });
+      console.info(
+        `[ai-refine] phase1 system_prompt: len=${refineFullSystemPrompt.length} chars`,
+      );
       const r = await refineTextViaChatStream(
         {
           mode: aiSettings.mode,
-          systemPrompt: refineSystemPrompt,
+          systemPrompt: refineFullSystemPrompt,
           userText: text,
-          hotwords: hotwords.length > 0 ? hotwords : undefined,
-          historyEntries,
-          requestTime,
-          targetApp: currentSessionTargetApp ?? undefined,
-          domains: domainsForPrompt.length > 0 ? domainsForPrompt : undefined,
           ...customParams,
           taskId: currentSttSessionId ?? undefined,
         },
@@ -1062,14 +1096,22 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           }
           onChunk(chunk);
         };
+        const translationFullSystemPrompt = buildSpeechSystemPrompt({
+          corePrompt: translationSystemPrompt!,
+          items: useHistoryStore.getState().items,
+          targetApp: currentSessionTargetApp,
+          focusTitle: currentSessionFocusTitle,
+          audioDurationMs: rec?.duration_ms,
+          skipHistory: true,
+        });
+        console.info(
+          `[ai-refine] phase2 system_prompt: len=${translationFullSystemPrompt.length} chars`,
+        );
         const r2 = await refineTextViaChatStream(
           {
             mode: aiSettings.mode,
-            systemPrompt: translationSystemPrompt!,
+            systemPrompt: translationFullSystemPrompt,
             userText: refinedSrc,
-            hotwords: hotwords.length > 0 ? hotwords : undefined,
-            requestTime,
-            domains: domainsForPrompt.length > 0 ? domainsForPrompt : undefined,
             ...customParams,
             taskId: currentSttSessionId ?? undefined,
           },
@@ -1243,6 +1285,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       asr_ms: asrMsForHistory,
       refine_ms: refineMsForHistory,
       debug_payload: debugPayload,
+      focus_title: currentSessionFocusTitle,
     });
 
     // 401 路径只对"raw STT 都没跑通"的情形挂 pending —— text 是空、status=failed、
@@ -1281,6 +1324,32 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       resetIncrementalInject();
       return { rec, text: finalText };
     }
+    // 跳过 inject 直接走结果面板的两个触发：
+    //  a) 录音起点 AX 已确认 focused 元素不是文本输入（macOS only；Win/Linux 看不到，
+    //     null 不触发）。silent fail（enigo 在 Finder/桌面 type 不抛错也不写字）的
+    //     根因，源头拦下避免发空。
+    //  b) 录音期间用户切走 / 最小化原 app，前台已不是按下快捷键时的目标。继续 paste
+    //     会把文字塞到无关 app（Finder / 桌面 / 其他工具）。
+    // 满足任一条件：写剪贴板（L1103 不一定走过，比如 refine 失败回退到 raw 的路径）+
+    // 推面板让用户手动决定。
+    const focusNotEditable = currentSessionFocusEditable === false;
+    const appChanged = await targetAppChangedAtFinalize();
+    void logInfo(
+      `[inject] tail gate check focusEditable=${currentSessionFocusEditable} focusNotEditable=${focusNotEditable} appChanged=${appChanged} recordedApp=${currentSessionTargetApp ?? "null"}`,
+    );
+    if (focusNotEditable || appChanged) {
+      void logWarn(
+        `[inject] tail skipped → result panel focusEditable=${currentSessionFocusEditable} appChanged=${appChanged}`,
+      );
+      try {
+        await writeClipboard(finalText);
+      } catch (e) {
+        console.warn("[clipboard] fallback write failed:", e);
+      }
+      showOverlayResult(finalText);
+      resetIncrementalInject();
+      return { rec, text: finalText };
+    }
     console.log("[inject] tail enter", {
       finalLen: finalText.length,
       injectedLen: lastInjectedText.length,
@@ -1302,9 +1371,10 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
             console.log("[inject] tail paste-all ok");
           } catch (e) {
             console.error("[inject] tail paste-all failed:", e);
-            notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
-              description: i18n.t("overlay:toast.paste_failed.description"),
-            });
+            try {
+              await writeClipboard(finalText);
+            } catch {}
+            showOverlayResult(finalText);
           }
         } else {
           // 末尾兜底走 inject_type 直接键入：和流式路径一致，不污染用户剪贴板。
@@ -1323,9 +1393,10 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
               console.log("[inject] tail paste fallback ok");
             } catch (e2) {
               console.error("[inject] tail paste fallback also failed:", e2);
-              notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
-                description: i18n.t("overlay:toast.paste_failed.description"),
-              });
+              try {
+                await writeClipboard(finalText);
+              } catch {}
+              showOverlayResult(finalText);
             }
           }
         }
@@ -1351,9 +1422,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       } catch (e) {
         console.error("[clipboard] writeText failed:", e);
       }
-      notifyOverlay("warning", i18n.t("overlay:toast.paste_failed.title"), {
-        description: i18n.t("overlay:toast.paste_failed.description"),
-      });
+      showOverlayResult(finalText);
     }
     resetIncrementalInject();
   } else if (!finalText) {
@@ -1394,6 +1463,9 @@ const injectIncremental = (fullText: string) => {
   // 用户关闭了"逐字流式输出"——本轮全部跳过，让末尾兜底走整段 paste。
   // 不更新 lastInjectedText，保证 finalize 时 remaining = 完整 finalText。
   if (!useSettingsStore.getState().dictation.streamingInject) return;
+  // AX 明确告诉我们焦点不在文本输入区——流式 type 只会 silent fail，跳过即可，
+  // finalize 会走结果面板让用户复制。null（拿不到结论 / Win / Linux）仍尝试。
+  if (currentSessionFocusEditable === false) return;
   // 服务端纠错把已注入的前缀改写时（极少），无法回退已敲下去的字符；
   // 跳过本轮增量，等末尾兜底 diff 把"剩余的"再敲一次（用户视觉上会出现重复，
   // 但比反复抖动更可控）。
@@ -1530,6 +1602,7 @@ const abortAndSaveHistory = async (): Promise<void> => {
         target_app: currentSessionTargetApp,
         segment_mode: segmentMode,
         provider_kind: providerKind,
+        focus_title: currentSessionFocusTitle,
       });
     } catch (e) {
       console.warn("[recording] abort: history.add failed:", e);
@@ -2529,16 +2602,17 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       try {
         let text = "";
         try {
-          const debugSystemPrompt = buildAsrSystemPrompt({
+          const debugSystemPrompt = buildSpeechSystemPrompt({
+            corePrompt: ASR_CORE_RULES[resolveLang(useSettingsStore.getState().general.interfaceLang)],
             items: useHistoryStore.getState().items,
             targetApp: currentSessionTargetApp,
+            focusTitle: currentSessionFocusTitle,
+            audioDurationMs: durationMs,
+            expandDomainKeywords: true,
+            includeUserCorrections: true,
           });
           console.info(
-            `[debug] file transcribe system_prompt: ${
-              debugSystemPrompt
-                ? `len=${debugSystemPrompt.length} chars`
-                : "<none>"
-            }`,
+            `[debug] file transcribe system_prompt: len=${debugSystemPrompt.length} chars`,
           );
           const r = await transcribeRecordingFile({
             audioPath,
@@ -2578,37 +2652,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       }
       let refinedText: string | null = null;
       if (refineActive) {
-        const hotwords = getHotwordsArray();
         let streamedSoFar = "";
         const aiSettings = useSettingsStore.getState().aiRefine;
         const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
-        const systemPrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
-        const requestTimeMs = Date.now();
-        const requestTime = `${new Date(requestTimeMs).toISOString()} (UTC)`;
-        let historyEntries: string[] | undefined;
-        if (aiSettings.includeHistory) {
-          const items = useHistoryStore.getState().items;
-          const currentTarget = currentSessionTargetApp;
-          const picked = items
-            .filter((it) => it.status === "success")
-            .filter((it) => !currentTarget || it.target_app === currentTarget)
-            .slice(0, 5)
-            .reverse();
-          const minutesAgoLabel = i18n.t("ai.minutes_ago", {
-            ns: "settings",
-            defaultValue: "minutes ago",
-          });
-          const lines = picked
-            .map((it) => {
-              const content = (it.refined_text ?? it.text ?? "").trim();
-              if (!content) return "";
-              const clipped = clipHistoryEntry(content);
-              const mins = Math.max(1, Math.floor((requestTimeMs - it.created_at) / 60000));
-              return `[${mins} ${minutesAgoLabel}] ${clipped}`;
-            })
-            .filter((s) => s.length > 0);
-          if (lines.length > 0) historyEntries = lines;
-        }
+        const refineCorePrompt = getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
         let activeProvider = null as
           | { id: string; name: string; baseUrl: string; model: string }
           | null;
@@ -2622,17 +2669,21 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           if (aiSettings.mode === "custom" && !activeProvider) {
             throw new Error("no_active_custom_provider");
           }
-          const debugDomains = getDomainNamesForPrompt(aiSettings.selectedDomains);
+          const debugRefineSystemPrompt = buildSpeechSystemPrompt({
+            corePrompt: refineCorePrompt,
+            items: useHistoryStore.getState().items,
+            targetApp: currentSessionTargetApp,
+            focusTitle: currentSessionFocusTitle,
+            audioDurationMs: durationMs,
+          });
+          console.info(
+            `[debug-refine] system_prompt: len=${debugRefineSystemPrompt.length} chars`,
+          );
           const r = await refineTextViaChatStream(
             {
               mode: aiSettings.mode,
-              systemPrompt,
+              systemPrompt: debugRefineSystemPrompt,
               userText: text,
-              hotwords: hotwords.length > 0 ? hotwords : undefined,
-              historyEntries,
-              requestTime,
-              targetApp: currentSessionTargetApp ?? undefined,
-              domains: debugDomains.length > 0 ? debugDomains : undefined,
               customBaseUrl: activeProvider?.baseUrl,
               customModel: activeProvider?.model,
               customKeyringId: activeProvider

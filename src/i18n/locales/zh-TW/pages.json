@@ -299,6 +299,31 @@
       "export_failed": "匯出失敗",
       "refresh_failed": "重新整理失敗"
     },
+    "edit": {
+      "title": "修改紀錄",
+      "description": "修改這筆歷史紀錄的最終文字",
+      "edit_button": "修改",
+      "edit_tooltip": "把辨識錯的地方改對，下次更準",
+      "original_label": "原始內容（AI 給的最終版）",
+      "diff_label": "修改對比（紅色＝刪除，綠色＝新增）",
+      "edited_label": "你的修改",
+      "hint": "改完儲存即可，系統會非同步學習",
+      "placeholder": "在這裡修改文字…",
+      "save": "儲存",
+      "revert": "撤銷修改",
+      "revert_tooltip": "丟棄這筆紀錄的修改，回到 AI 原版",
+      "edited_chip": "已修改",
+      "edited_tooltip": "你修改過這筆紀錄的文字",
+      "toast": {
+        "save_success": "已儲存修改",
+        "save_failed": "儲存失敗",
+        "revert_success": "已恢復原版",
+        "dict_added": "已加入詞典：{{term}}",
+        "dict_updated": "已更新詞典：{{term}}",
+        "dict_removed": "已移除詞典：{{term}}",
+        "dict_hint": "AI 根據你的修改自動學習"
+      }
+    },
     "confirm_clear": {
       "title": "刪除全部歷史",
       "description": "清空本機歷史記錄",
@@ -362,9 +387,9 @@
   "layout": {
     "nav": {
       "home": "首頁",
-      "toolbox": "AI工具",
-      "meetings": "會議轉錄",
-      "history": "歷史記錄",
+      "toolbox": "翻譯 / 潤色",
+      "meetings": "會議錄製",
+      "history": "歷史",
       "dictionary": "詞典"
     },
     "account_fallback": "帳戶",
@@ -385,7 +410,7 @@
     "open": "搜尋"
   },
   "toolbox": {
-    "title": "AI工具",
+    "title": "翻譯 / 潤色",
     "subtitle": "隨手輸入或開口說話，再潤色、翻譯、朗讀。",
     "flow_hint": "上方給輸入 · 下方挑工具 · 即刻拿到處理後的結果",
     "input": {
@@ -508,7 +533,7 @@
     }
   },
   "meetings": {
-    "title": "會議轉錄",
+    "title": "會議錄製",
     "subtitle": "長時間錄音 · 自動分人 · 時間軸回看",
     "idle": {
       "hint": "點擊開始記錄",

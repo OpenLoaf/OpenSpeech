@@ -22,7 +22,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use crate::openloaf::{DEFAULT_BASE_URL, SharedOpenLoaf, handle_session_expired};
+use crate::openloaf::{
+    DEFAULT_BASE_URL, RefreshOutcome, SharedOpenLoaf, handle_session_expired,
+};
 use crate::secrets;
 
 const EVENT_DELTA: &str = "openspeech://ai-refine:delta";
@@ -30,6 +32,8 @@ const EVENT_DONE: &str = "openspeech://ai-refine:done";
 const EVENT_ERROR: &str = "openspeech://ai-refine:error";
 
 const ERR_NOT_AUTHENTICATED: &str = "not authenticated";
+/// SaaS 不可达（网络断开 / 服务器宕机 / 5xx）。**保留登录态**，前端只展示网络错误提示。
+const ERR_NETWORK_UNAVAILABLE: &str = "network_unavailable";
 const ERR_NO_FAST_VARIANT: &str = "no_fast_chat_variant";
 const ERR_MISSING_CUSTOM: &str = "missing_custom_provider";
 const ERR_MISSING_API_KEY: &str = "missing_api_key";
@@ -93,11 +97,11 @@ struct ErrorPayload {
     message: String,
 }
 
-struct ResolvedEndpoint {
-    full_url: String,
-    api_key: String,
-    model: String,
-    variant_id: Option<String>,
+pub(crate) struct ResolvedEndpoint {
+    pub(crate) full_url: String,
+    pub(crate) api_key: String,
+    pub(crate) model: String,
+    pub(crate) variant_id: Option<String>,
 }
 
 fn join_base_endpoint(base_url: &str, endpoint: &str) -> String {
@@ -143,7 +147,7 @@ pub fn invalidate_fast_variant_cache() {
 /// 登录 / restore 成功后、refresh loop tick、chat 失败后台续。
 pub async fn prefetch_fast_variant<R: Runtime>(app: &AppHandle<R>) {
     let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
-    if !ol.ensure_access_token_fresh().await {
+    if !ol.ensure_access_token_fresh().await.is_refreshed() {
         log::debug!("[ai_refine] prefetch skipped: token not fresh / not authenticated");
         return;
     }
@@ -196,15 +200,26 @@ fn refresh_fast_variant_in_background<R: Runtime + 'static>(app: AppHandle<R>) {
     });
 }
 
-async fn resolve_saas<R: Runtime>(app: &AppHandle<R>) -> Result<ResolvedEndpoint, String> {
+pub(crate) async fn resolve_saas<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<ResolvedEndpoint, String> {
     let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
     // 请求前预检：JWT 距离过期 ≤ 30s 时主动 refresh，避免拿过期 token 起飞导致 401。
     // 唤醒场景特别关键：电脑睡眠期间 refresh 定时器没机会跑，醒来第一次调用如果不预检
     // 就一定 401，前端会把它当登录失效踢用户。
-    if !ol.ensure_access_token_fresh().await {
-        log::warn!("[ai_refine] saas preflight refresh failed; signaling auth-lost");
-        handle_session_expired(app, &ol);
-        return Err(ERR_NOT_AUTHENTICATED.to_string());
+    match ol.ensure_access_token_fresh().await {
+        RefreshOutcome::Refreshed => {}
+        RefreshOutcome::AuthLost => {
+            log::warn!("[ai_refine] saas preflight rejected by server; signaling auth-lost");
+            handle_session_expired(app, &ol);
+            return Err(ERR_NOT_AUTHENTICATED.to_string());
+        }
+        RefreshOutcome::Network => {
+            log::warn!(
+                "[ai_refine] saas preflight network/5xx; keeping session, returning network error"
+            );
+            return Err(ERR_NETWORK_UNAVAILABLE.to_string());
+        }
     }
     let client = ol.authenticated_client().ok_or_else(|| {
         handle_session_expired(app, &ol);
@@ -471,9 +486,9 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         "body": body,
     });
     let request_envelope = serde_json::to_string_pretty(&envelope).ok();
-    if log::log_enabled!(log::Level::Debug) {
+    if log::log_enabled!(log::Level::Trace) {
         if let Some(ref s) = request_envelope {
-            log::debug!("[ai_refine] request body:\n{}", s);
+            log::trace!("[ai_refine] request body:\n{}", s);
         }
     }
 
@@ -517,19 +532,34 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
                 "[ai_refine] saas chat got 401 on attempt 1, attempting refresh + retry. raw={raw}"
             );
             let ol = app.state::<SharedOpenLoaf>().inner().clone();
-            if ol.ensure_fresh_token().await {
-                if let Some(new_token) = ol.client_clone().access_token() {
-                    current_key = new_token;
-                    log::info!("[ai_refine] refresh succeeded, retrying chat completion once");
-                    continue;
+            match ol.ensure_fresh_token().await {
+                RefreshOutcome::Refreshed => {
+                    if let Some(new_token) = ol.client_clone().access_token() {
+                        current_key = new_token;
+                        log::info!("[ai_refine] refresh succeeded, retrying chat completion once");
+                        continue;
+                    }
+                    log::warn!(
+                        "[ai_refine] refresh succeeded but access_token gone; clearing session"
+                    );
+                    handle_session_expired(&app, &ol);
+                    emit_error(&app, task_id.as_deref(), code, &raw);
+                    return Err(format!("saas_unauthorized: {raw}"));
                 }
-                log::warn!("[ai_refine] refresh succeeded but access_token gone; clearing session");
-            } else {
-                log::warn!("[ai_refine] refresh failed; clearing session");
+                RefreshOutcome::AuthLost => {
+                    log::warn!("[ai_refine] refresh rejected; clearing session");
+                    handle_session_expired(&app, &ol);
+                    emit_error(&app, task_id.as_deref(), code, &raw);
+                    return Err(format!("saas_unauthorized: {raw}"));
+                }
+                RefreshOutcome::Network => {
+                    log::warn!(
+                        "[ai_refine] refresh network/5xx; keeping session, returning network error"
+                    );
+                    emit_error(&app, task_id.as_deref(), code, &raw);
+                    return Err(ERR_NETWORK_UNAVAILABLE.to_string());
+                }
             }
-            handle_session_expired(&app, &ol);
-            emit_error(&app, task_id.as_deref(), code, &raw);
-            return Err(format!("saas_unauthorized: {raw}"));
         }
 
         emit_error(&app, task_id.as_deref(), code, &raw);

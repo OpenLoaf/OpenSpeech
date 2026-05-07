@@ -42,10 +42,12 @@ use crate::asr::tencent::file::{
 };
 use crate::audio;
 use crate::db;
-use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
+use crate::openloaf::{RefreshOutcome, SharedOpenLoaf, handle_session_expired};
 
 const ERR_UNAUTHORIZED: &str = "unauthorized";
 const ERR_NOT_AUTHENTICATED: &str = "not authenticated";
+/// SaaS 不可达（网络断开 / 服务器宕机 / 5xx）。**保留登录态**。
+const ERR_NETWORK_UNAVAILABLE: &str = "network_unavailable";
 
 fn is_unauthorized(msg: &str) -> bool {
     msg.contains("401") || msg.contains("Unauthorized") || msg.contains("unauthorized")
@@ -593,10 +595,19 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
 
     // B：发请求前先确保 access_token 还没过期。唤醒场景必备——睡眠期间 refresh 定时器
     // 没机会跑，醒来第一次调如果不预检就一定 401，会把用户当登录失效踢出去。
-    if !ol.ensure_access_token_fresh().await {
-        log::warn!("[transcribe] saas preflight refresh failed; signaling auth-lost");
-        handle_session_expired(&app, &ol);
-        return Err(ERR_NOT_AUTHENTICATED.to_string());
+    match ol.ensure_access_token_fresh().await {
+        RefreshOutcome::Refreshed => {}
+        RefreshOutcome::AuthLost => {
+            log::warn!("[transcribe] saas preflight rejected by server; signaling auth-lost");
+            handle_session_expired(&app, &ol);
+            return Err(ERR_NOT_AUTHENTICATED.to_string());
+        }
+        RefreshOutcome::Network => {
+            log::warn!(
+                "[transcribe] saas preflight network/5xx; keeping session, returning network error"
+            );
+            return Err(ERR_NETWORK_UNAVAILABLE.to_string());
+        }
     }
 
     let bytes = read_recording_bytes(&app, &audio_path)?;
@@ -640,10 +651,19 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
         AsrShortAttempt::Unauthorized(raw) => {
             // C：401 → 续期一次再重试一次；续期失败 / 重试还 401 才清场。
             log::warn!("[transcribe] asr_short hit 401; attempting refresh + retry. raw={raw}");
-            if !ol.ensure_fresh_token().await {
-                log::warn!("[transcribe] refresh failed; signaling auth-lost");
-                handle_session_expired(&app, &ol);
-                return Err(ERR_UNAUTHORIZED.to_string());
+            match ol.ensure_fresh_token().await {
+                RefreshOutcome::Refreshed => {}
+                RefreshOutcome::AuthLost => {
+                    log::warn!("[transcribe] refresh rejected; signaling auth-lost");
+                    handle_session_expired(&app, &ol);
+                    return Err(ERR_UNAUTHORIZED.to_string());
+                }
+                RefreshOutcome::Network => {
+                    log::warn!(
+                        "[transcribe] refresh network/5xx; keeping session, returning network error"
+                    );
+                    return Err(ERR_NETWORK_UNAVAILABLE.to_string());
+                }
             }
             match run_asr_short_blocking(&ol, &b64, media_type, lang_short, system_prompt).await? {
                 AsrShortAttempt::Ok(r) => {
@@ -696,8 +716,8 @@ async fn run_asr_short_blocking(
             log::info!(
                 "[transcribe] asr_short with system_prompt: chars={chars} bytes={bytes} lines={lines} lang={lang_short:?} preview={preview:?}"
             );
-            // dev/debug 等级才输出全文，避免线上日志被几千字提示词刷屏。
-            log::debug!(
+            // trace 等级才输出全文，避免开发期 debug 日志被几千字提示词刷屏。
+            log::trace!(
                 "[transcribe] asr_short system_prompt full body ({chars} chars):\n{sp}"
             );
             if chars > 2000 {
@@ -756,10 +776,19 @@ pub async fn transcribe_long_audio_url<R: Runtime>(
     // 场景概率极小（24 min 内 token 剩余寿命够用），且需要中断 thread::sleep
     // 才能 await refresh，改造成本不划算。
     let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
-    if !ol.ensure_access_token_fresh().await {
-        log::warn!("[transcribe] long audio preflight refresh failed; signaling auth-lost");
-        handle_session_expired(&app, &ol);
-        return Err(ERR_NOT_AUTHENTICATED.to_string());
+    match ol.ensure_access_token_fresh().await {
+        RefreshOutcome::Refreshed => {}
+        RefreshOutcome::AuthLost => {
+            log::warn!("[transcribe] long audio preflight rejected; signaling auth-lost");
+            handle_session_expired(&app, &ol);
+            return Err(ERR_NOT_AUTHENTICATED.to_string());
+        }
+        RefreshOutcome::Network => {
+            log::warn!(
+                "[transcribe] long audio preflight network/5xx; keeping session, returning network error"
+            );
+            return Err(ERR_NETWORK_UNAVAILABLE.to_string());
+        }
     }
     tauri::async_runtime::spawn_blocking(move || transcribe_long_audio_url_impl(app, url, lang))
         .await

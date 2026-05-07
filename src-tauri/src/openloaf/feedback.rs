@@ -112,7 +112,7 @@ pub async fn openloaf_submit_feedback(
     }
 
     if status.as_u16() == 401 && token.is_some() {
-        if ol.ensure_access_token_fresh().await {
+        if ol.ensure_access_token_fresh().await.is_refreshed() {
             let retry = send(ol.client.access_token())
                 .await
                 .map_err(network_err)?;

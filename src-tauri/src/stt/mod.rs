@@ -75,11 +75,13 @@ use crate::asr::byok::{
 };
 use crate::asr::realtime_backend::{RealtimeAsrBackend, RealtimeBackendEvent};
 use crate::asr::tencent::realtime_session::{ConnectParams, TencentRealtimeSession};
-use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
+use crate::openloaf::{RefreshOutcome, SharedOpenLoaf, handle_session_expired};
 
 /// 业务路径稳定错误码：前端按这个串路由（弹登录框 / cancel 录音），不要改文案。
 const ERR_UNAUTHORIZED: &str = "unauthorized";
 const ERR_NOT_AUTHENTICATED: &str = "not authenticated";
+/// SaaS 不可达（网络断开 / 服务器宕机 / 5xx）。**保留登录态**，不弹登录框。
+const ERR_NETWORK_UNAVAILABLE: &str = "network_unavailable";
 
 fn is_unauthorized(msg: &str) -> bool {
     msg.contains("401") || msg.contains("Unauthorized") || msg.contains("unauthorized")
@@ -262,12 +264,21 @@ pub async fn stt_start<R: Runtime>(
     // BYOK 路径自带 SecretId/SecretKey，跳过这步。
     if needs_saas_token {
         let ol = app.state::<SharedOpenLoaf>();
-        if !ol.ensure_access_token_fresh().await {
-            log::warn!(
-                "[stt] stt_start aborted: ensure_access_token_fresh returned false (no/expired token, refresh failed)"
-            );
-            handle_session_expired(&app, &ol);
-            return Err(ERR_NOT_AUTHENTICATED.to_string());
+        match ol.ensure_access_token_fresh().await {
+            RefreshOutcome::Refreshed => {}
+            RefreshOutcome::AuthLost => {
+                log::warn!(
+                    "[stt] stt_start aborted: refresh rejected by server (auth-lost)"
+                );
+                handle_session_expired(&app, &ol);
+                return Err(ERR_NOT_AUTHENTICATED.to_string());
+            }
+            RefreshOutcome::Network => {
+                log::warn!(
+                    "[stt] stt_start aborted: refresh hit network/5xx; keeping session"
+                );
+                return Err(ERR_NETWORK_UNAVAILABLE.to_string());
+            }
         }
     }
 

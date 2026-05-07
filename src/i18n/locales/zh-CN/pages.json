@@ -299,6 +299,31 @@
       "export_failed": "导出失败",
       "refresh_failed": "刷新失败"
     },
+    "edit": {
+      "title": "修改记录",
+      "description": "修改这条历史记录的最终文本",
+      "edit_button": "修改",
+      "edit_tooltip": "把识别错误的地方改对，下次更准",
+      "original_label": "原始内容（AI 给的最终版）",
+      "diff_label": "修改对比（红色＝删除，绿色＝新增）",
+      "edited_label": "你的修改",
+      "hint": "改完保存即可，系统会异步学习",
+      "placeholder": "在这里修改文本…",
+      "save": "保存",
+      "revert": "撤销修改",
+      "revert_tooltip": "丢弃这条记录的修改，恢复到 AI 原版",
+      "edited_chip": "已修改",
+      "edited_tooltip": "你修改过这条记录的文本",
+      "toast": {
+        "save_success": "已保存修改",
+        "save_failed": "保存失败",
+        "revert_success": "已恢复原版",
+        "dict_added": "已添加字典：{{term}}",
+        "dict_updated": "已更新字典：{{term}}",
+        "dict_removed": "已删除字典：{{term}}",
+        "dict_hint": "AI 根据你的修改自动学习"
+      }
+    },
     "confirm_clear": {
       "title": "删除全部历史",
       "description": "清空本机历史记录",
@@ -362,9 +387,9 @@
   "layout": {
     "nav": {
       "home": "首页",
-      "toolbox": "AI工具",
-      "meetings": "会议转录",
-      "history": "历史记录",
+      "toolbox": "翻译 / 润色",
+      "meetings": "会议录制",
+      "history": "历史",
       "dictionary": "词典"
     },
     "account_fallback": "账户",
@@ -385,7 +410,7 @@
     "open": "搜索"
   },
   "toolbox": {
-    "title": "AI工具",
+    "title": "翻译 / 润色",
     "subtitle": "随手输入或开口说话，再润色、翻译、朗读。",
     "flow_hint": "上方给输入 · 下方挑工具 · 即刻拿到处理后的结果",
     "input": {
@@ -508,7 +533,7 @@
     }
   },
   "meetings": {
-    "title": "会议转录",
+    "title": "会议录制",
     "subtitle": "长时间录音 · 自动分人 · 时间轴回看",
     "idle": {
       "hint": "点击开始记录",

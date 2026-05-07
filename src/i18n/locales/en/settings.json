@@ -166,8 +166,10 @@
     "polish_scenario_instruction_placeholder": "e.g. Target scenario: business email. Formal tone. Use greeting / body / sign-off paragraphs.",
     "prompt_reset": "Reset to default",
     "section_history": "Context",
-    "include_history": "Send the last 5 dictations as context",
+    "include_history": "Send recent dictations as context",
     "include_history_hint": "Recent transcripts help the model carry over tone and terminology.",
+    "recent_history_count": "Recent items to send",
+    "recent_history_count_hint": "Maximum number of recent dictations to attach. More items bias the model harder, but use more tokens.",
     "minutes_ago": "minutes ago",
     "history_truncated": "+{{count}} more words"
   },

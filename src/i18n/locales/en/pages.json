@@ -299,6 +299,31 @@
       "export_failed": "Export failed",
       "refresh_failed": "Refresh failed"
     },
+    "edit": {
+      "title": "Edit transcript",
+      "description": "Edit the final text of this history record",
+      "edit_button": "Edit",
+      "edit_tooltip": "Fix misrecognized words so the next session is more accurate",
+      "original_label": "Original (AI's final version)",
+      "diff_label": "Diff (red = removed, green = added)",
+      "edited_label": "Your edit",
+      "hint": "Save when done; learning happens in the background",
+      "placeholder": "Edit the text here…",
+      "save": "Save",
+      "revert": "Revert edit",
+      "revert_tooltip": "Discard your edit on this record and restore the AI's version",
+      "edited_chip": "Edited",
+      "edited_tooltip": "You've edited the text of this record",
+      "toast": {
+        "save_success": "Edit saved",
+        "save_failed": "Save failed",
+        "revert_success": "Restored original",
+        "dict_added": "Added to dictionary: {{term}}",
+        "dict_updated": "Dictionary updated: {{term}}",
+        "dict_removed": "Removed from dictionary: {{term}}",
+        "dict_hint": "AI learned from your edit"
+      }
+    },
     "confirm_clear": {
       "title": "Delete all history",
       "description": "Clear local history records",
@@ -362,7 +387,7 @@
   "layout": {
     "nav": {
       "home": "Home",
-      "toolbox": "AI Tools",
+      "toolbox": "Translate & Polish",
       "meetings": "Meetings",
       "history": "History",
       "dictionary": "Dictionary"
@@ -385,7 +410,7 @@
     "open": "Search"
   },
   "toolbox": {
-    "title": "AI Tools",
+    "title": "Translate & Polish",
     "subtitle": "Speak or type. Polish, translate, or read it aloud.",
     "flow_hint": "Provide input above · pick a tool below · get the processed result inline",
     "input": {

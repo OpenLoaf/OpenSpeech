@@ -246,7 +246,9 @@ export const useUIStore = create<UIStore>((set, get) => ({
   },
 
   openAiPromptDialog: (kind) => {
-    set({ aiPromptDialog: kind });
+    // 同时把 settingsInitialTab 钉到 "AI"：prompt dialog 关闭后 SettingsDialog
+    // 复现时会以这个 tab 重新挂载 SettingsContent，保证用户回到刚才那个面板。
+    set({ aiPromptDialog: kind, settingsInitialTab: "AI" });
   },
 
   closeAiPromptDialog: () => {

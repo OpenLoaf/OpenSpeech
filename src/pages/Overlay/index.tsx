@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, Check, Languages, Mic, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Info,
+  Languages,
+  Mic,
+  X,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
+import { info as logInfo } from "@tauri-apps/plugin-log";
 import { useTranslation } from "react-i18next";
 import i18n, { resolveLang, SUPPORTED_LANGS, type SupportedLang } from "@/i18n";
 import { applyLang } from "@/lib/i18n-sync";
@@ -43,6 +52,8 @@ export default function OverlayPage() {
     setDebug,
     setTranslate,
     showModeSwitchHint,
+    showTranscriptResult,
+    dismissTranscriptResult,
   } = useOverlayMachine();
 
   // boot IIFE 跑 applyLang 是 race 路径——overlay 第一次拿到 settings 之前可能就
@@ -85,6 +96,7 @@ export default function OverlayPage() {
     onTranslate: (p) =>
       setTranslate({ active: p.active, lang: p.active ? p.lang ?? "" : "" }),
     onModeSwitchHint: (p) => showModeSwitchHint(p.kind),
+    onTranscriptResult: (p) => showTranscriptResult(p.text),
   });
 
   // DEBUG 倒计时 ticker：每 200ms 重新算 remaining，驱动 strip 文案刷新。
@@ -119,11 +131,13 @@ export default function OverlayPage() {
   // 也是 false（切到听写完成），indicator 自然退场）。
   const translateIndicatorVisible =
     state.translate.active || state.modeSwitchHint !== null;
+  const transcriptResult = state.transcriptResult;
   const visible =
     (state.main !== "idle" && !pillEarlyHide) ||
     state.toast !== null ||
     debugActive ||
-    translateIndicatorVisible;
+    translateIndicatorVisible ||
+    transcriptResult !== null;
   // 底部 shell 共享一个 motion.div，pill / toast 形态在容器内 crossfade，
   // 容器自身的 height 由 framer-motion layout 自动平滑过渡——避免 pill 退场 +
   // toast 入场两个独立动画并发引起的"内容跳一下"。
@@ -134,13 +148,18 @@ export default function OverlayPage() {
   const recordingActive =
     !pillEarlyHide && state.main !== "idle" && state.main !== "error";
   const hasToast = state.toast !== null;
-  const bottomMode: "pill" | "toast" | null = pillEarlyHide
-    ? null
-    : recordingActive || (state.main === "error" && !hasToast)
-      ? "pill"
-      : hasToast
-        ? "toast"
-        : null;
+  // 结果面板优先级最高——pillEarlyHide 是用来让 pill 提前退场的信号，但兜底
+  // 面板是注入失败后才挂上来的独立内容，必须能盖过 pillEarlyHide 的短路；新一
+  // 轮录音的 reducer 会清掉 transcriptResult，不会和后续 pill / toast 抢位置。
+  const bottomMode: "pill" | "toast" | "result" | null = transcriptResult
+    ? "result"
+    : pillEarlyHide
+      ? null
+      : recordingActive || (state.main === "error" && !hasToast)
+        ? "pill"
+        : hasToast
+          ? "toast"
+          : null;
   // 录音活跃期 + toast：toast 仍叠加在 pill 上方（保留原行为，让用户既能看到
   // 录音波形又能看到提示）。其他时机 toast 进入底部 shell。
   const showToastAbove = recordingActive && hasToast;
@@ -148,14 +167,26 @@ export default function OverlayPage() {
   // 不可见时调用 hide。Rust 端 hide 是单 command 串行：先移屏外 → hide，
   // 不会再有 IPC 顺序竞争留下黑条。延迟一帧让 motion exit 跑完再 hide。
   useEffect(() => {
-    if (visible) return;
+    if (visible) {
+      void logInfo(
+        `[overlay-render] visible=true main=${state.main} bottomMode=${bottomMode} transcriptResult=${transcriptResult ? `len=${transcriptResult.text.length}` : "null"}`,
+      );
+      return;
+    }
+    void logInfo(
+      `[overlay-render] visible=false → schedule hide(200ms) main=${state.main} bottomMode=${bottomMode} transcriptResult=null`,
+    );
     const t = window.setTimeout(() => {
+      void logInfo("[overlay-render] invoking overlay_hide");
       invoke("overlay_hide").catch((e) =>
         console.warn("[overlay] hide failed", e),
       );
     }, 200);
-    return () => window.clearTimeout(t);
-  }, [visible]);
+    return () => {
+      void logInfo("[overlay-render] hide-timer cancelled (visible flipped back)");
+      window.clearTimeout(t);
+    };
+  }, [visible, state.main, bottomMode, transcriptResult]);
 
   // overlay 是镜像窗口：按钮交互通过 emitTo 发回主窗，主窗 FSM 调真实的 Rust 副作用。
   const cancel = () => {
@@ -167,6 +198,24 @@ export default function OverlayPage() {
   const runToastAction = (key: ToastActionKey) => {
     void emitTo("main", "openspeech://overlay-toast-action", key);
     dismissToast();
+  };
+
+  const [resultCopied, setResultCopied] = useState(false);
+  useEffect(() => {
+    if (!transcriptResult) setResultCopied(false);
+  }, [transcriptResult]);
+  // 主窗的 inject 兜底路径已经把 finalText 写过剪贴板了，这里只走视觉反馈 +
+  // 自动收起面板，不重复 writeClipboard——避免覆盖用户在等待期间手动复制过的
+  // 别的内容。
+  const copyResult = () => {
+    if (!transcriptResult) return;
+    setResultCopied(true);
+    window.setTimeout(() => {
+      dismissTranscriptResult();
+    }, 600);
+  };
+  const closeResult = () => {
+    dismissTranscriptResult();
   };
 
   const isRecording = state.main === "recording";
@@ -392,7 +441,64 @@ export default function OverlayPage() {
             className="pointer-events-auto w-full"
           >
             <AnimatePresence mode="popLayout" initial={false}>
-              {bottomMode === "pill" ? (
+              {bottomMode === "result" && transcriptResult ? (
+                <motion.div
+                  key="form-result"
+                  layout
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.14 }}
+                  className="flex flex-col gap-1.5 overflow-hidden border border-te-light-gray bg-te-bg px-2.5 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <Info className="size-3.5 shrink-0 text-te-accent" />
+                      <span className="truncate font-mono text-[11px] uppercase tracking-[0.12em] text-te-fg">
+                        {t("overlay:result.title")}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={closeResult}
+                      aria-label={t("overlay:aria.close_result")}
+                      className="flex size-5 shrink-0 items-center justify-center border border-te-gray text-te-light-gray transition-colors hover:border-te-accent hover:text-te-accent"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                  <div
+                    className="line-clamp-3 px-1 text-center font-mono text-[11px] leading-snug text-te-fg"
+                    title={transcriptResult.text}
+                  >
+                    “{transcriptResult.text}”
+                  </div>
+                  <div className="flex items-center justify-center pt-0.5">
+                    <button
+                      type="button"
+                      onClick={copyResult}
+                      className={cn(
+                        "flex items-center gap-1 border px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.1em] transition-colors",
+                        resultCopied
+                          ? "border-te-accent text-te-accent"
+                          : "border-te-gray text-te-fg hover:border-te-accent hover:text-te-accent",
+                      )}
+                    >
+                      {resultCopied ? (
+                        <>
+                          <Check className="size-3" />
+                          {t("overlay:result.copied")}
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3" />
+                          {t("overlay:result.copy")}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </motion.div>
+              ) : bottomMode === "pill" ? (
                 <motion.div
                   key="form-pill"
                   layout

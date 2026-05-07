@@ -120,6 +120,8 @@ export interface AiRefineSettings {
   // 非 null = 用户自定义条目（可空数组表示"用户主动清空"）。
   customPolishScenarios: PolishScenario[] | null;
   includeHistory: boolean;
+  // 历史块允许携带的最近条数；clamp 在 [1, 50]。
+  recentHistoryCount: number;
   // 用户在词典页"常见领域"勾选的 ID 列表，最多 DOMAIN_LIMIT 项。注入到 refine prompt 头部。
   selectedDomains: string[];
 }
@@ -218,8 +220,21 @@ const DEFAULT_AI_REFINE: AiRefineSettings = {
   customMeetingSummaryPrompt: null,
   customPolishScenarios: null,
   includeHistory: true,
+  recentHistoryCount: 10,
   selectedDomains: [],
 };
+
+const HISTORY_COUNT_MIN = 1;
+const HISTORY_COUNT_MAX = 50;
+const HISTORY_COUNT_DEFAULT = 10;
+
+function clampHistoryCount(n: unknown): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return HISTORY_COUNT_DEFAULT;
+  const v = Math.floor(n);
+  if (v < HISTORY_COUNT_MIN) return HISTORY_COUNT_MIN;
+  if (v > HISTORY_COUNT_MAX) return HISTORY_COUNT_MAX;
+  return v;
+}
 
 const DEFAULT_DICTATION: DictationSettings = {
   mode: "saas",
@@ -253,6 +268,7 @@ interface SettingsState {
   setAiMeetingSummaryPrompt: (value: string | null) => Promise<void>;
   setPolishScenarios: (value: PolishScenario[] | null) => Promise<void>;
   setAiIncludeHistory: (v: boolean) => Promise<void>;
+  setAiRecentHistoryCount: (n: number) => Promise<void>;
   setSelectedDomains: (ids: string[]) => Promise<void>;
   setDictationMode: (mode: DictationProviderMode) => Promise<void>;
   setDictationLang: (lang: DictationLang) => Promise<void>;
@@ -469,6 +485,7 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
     customMeetingSummaryPrompt,
     customPolishScenarios,
     includeHistory: typeof r.includeHistory === "boolean" ? r.includeHistory : true,
+    recentHistoryCount: clampHistoryCount(r.recentHistoryCount),
     selectedDomains,
   };
 }
@@ -822,6 +839,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     setAiIncludeHistory: async (v) => {
       const cur = get().aiRefine;
       const next = { ...cur, includeHistory: v };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setAiRecentHistoryCount: async (n) => {
+      const cur = get().aiRefine;
+      const next = { ...cur, recentHistoryCount: clampHistoryCount(n) };
       set({ aiRefine: next });
       await persist({ aiRefine: next });
     },
