@@ -374,6 +374,7 @@ fn clear_session(state: &OpenLoafState) {
         log::warn!("openloaf: storage.clear failed: {e}");
     }
     clear_dev_session();
+    crate::ai_refine::invalidate_fast_variant_cache();
 }
 
 /// 任何业务路径（实时 ASR / 文件转写 / 其他直接调 SaaS 的 command）拿到 401 后调一次。
@@ -579,6 +580,11 @@ pub async fn openloaf_try_recover(
             if let Err(e) = app.emit(RESTORED_EVENT, user) {
                 log::warn!("openloaf: emit restored event failed: {e}");
             }
+            // 离线 → 重连场景下拿到 token 立刻把 fast_chat_variant 也续上。
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::ai_refine::prefetch_fast_variant(&app_clone).await;
+            });
             Ok(true)
         }
         Ok(None) => Ok(false),
@@ -816,6 +822,11 @@ pub async fn handle_login_callback(app: &AppHandle, state_str: String, login_cod
                 session.user,
             );
             emit_login(app, &state_str, Ok(user));
+            // 登录成功立刻拉一次 fast_chat_variant 写缓存，首次 refine 直接命中。
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::ai_refine::prefetch_fast_variant(&app_clone).await;
+            });
         }
         Ok(Err(err)) => {
             log::warn!("openloaf: exchange failed: {err}");
@@ -904,6 +915,11 @@ pub async fn bootstrap(app: &AppHandle) {
             if let Err(e) = app.emit(RESTORED_EVENT, user) {
                 log::warn!("openloaf: emit restored event failed: {e}");
             }
+            // cold start 立即把 fast_chat_variant 拉一次，让首次 refine 命中缓存。
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::ai_refine::prefetch_fast_variant(&app_clone).await;
+            });
         }
         Ok(Ok(None)) => {
             // 无凭据或凭据被服务端 reject：SDK 已自动 clear storage。无需任何动作，UI 走 OAuth。

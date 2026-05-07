@@ -4253,9 +4253,9 @@ dependencies = [
 
 [[package]]
 name = "openloaf-saas"
-version = "0.3.16"
+version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91b3a592168a736580b948521d5db86bd2ec517c4068ffd70d039a5abcdc701d"
+checksum = "f920a20cbf1b2b83c8b02a057f666895c92d8d0b8c01fd15bc8f12b4070f46cc"
 dependencies = [
  "serde",
  "serde_json",
@@ -4267,7 +4267,7 @@ dependencies = [
 
 [[package]]
 name = "openspeech"
-version = "0.2.30-beta.14"
+version = "0.2.30-beta.15"
 dependencies = [
  "active-win-pos-rs",
  "async-openai",

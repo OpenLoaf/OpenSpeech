@@ -88,11 +88,11 @@ const VAD_VOICE_HANG_MS: u64 = 200;
 // 加上用户在结束按键前可能还在收尾——宁可多留也不能吞字。
 const TRIM_HEAD_PAD_MS: u32 = 300;
 const TRIM_TAIL_PAD_MS: u32 = 2000;
-// 裁剪后真正的语音时长低于该阈值视作"整段无人声"，前端跳过 ASR 与历史。
-const TRIM_MIN_VOICED_MS: u32 = 200;
-// webrtc-vad 在 Aggressive 模式仍会把"低能 babble / HVAC 嗡嗡声"判成 voice。
-// 叠一层每帧 RMS 能量门：≈ -40 dBFS（线性 0.01），实测真实语音哪怕轻声也在 -25 dBFS 以上，
-// 不影响真人声但能把 -41 dB 峰值的"录音环境底噪"案例稳稳挡掉。
+// 整段最大 30ms 帧 RMS 低于该阈值才视作"纯静默"。≈ -50 dBFS，只挡误触 / 麦克风未插好；
+// 真实人声哪怕轻声也在 -25 dBFS 以上，门压得很低保证短句不被假阴性误杀。
+const EMPTY_MAX_RMS: f32 = 0.003;
+// 计算 voice 边界用的能量门：≈ -40 dBFS，过滤 webrtc-vad 在低能噪声上的假阳，
+// 让 first/last_voice 不被环境底噪拉宽，导致 trim padding 失效。
 const VAD_FRAME_MIN_RMS: f32 = 0.01;
 // OGG Vorbis 输出：采样率 / 声道跟随采集配置，不做 resample / 下混——这两步
 // 留给 STT 集成阶段（大多数 STT 服务上传前自己会做）。
@@ -481,13 +481,13 @@ enum TrimDecision {
     },
 }
 
-/// 落盘前对整段录音跑一次 webrtc-vad，找出首尾 voice 边界并附非对称 padding。
-/// 返回相对原 interleaved 缓冲的样本索引区间，调用方据此切片再交给 ogg 编码器。
+/// 落盘前找首尾 voice 边界并附非对称 padding；返回相对原 interleaved 缓冲的样本索引区间。
 ///
 /// 设计要点：
+/// - "是否上传"用纯能量判定（EMPTY_MAX_RMS）：只挡纯静默，避免 webrtc-vad 假阴性把短句误杀。
+/// - "裁多少"用 webrtc-vad（Quality 模式 + RMS 兜底）：找到首尾就裁，找不到就整段保留。
 /// - 只裁首尾，**绝不动中间**——句间停顿对 ASR 是合法分段线索。
 /// - 非对称 padding：头 TRIM_HEAD_PAD_MS / 尾 TRIM_TAIL_PAD_MS，尾部更宽以兜住衰减尾音。
-/// - 整段无 voice → 返回 Empty，调用方跳过编码与历史。
 fn analyze_recording_trim(
     interleaved: &[f32],
     sample_rate: u32,
@@ -499,7 +499,6 @@ fn analyze_recording_trim(
         return TrimDecision::Empty;
     }
 
-    // 1) 多声道均值 → mono；与 VadGate::feed 同款下混。
     let mono_src: Vec<f32> = if ch == 1 {
         interleaved[..total_frames].to_vec()
     } else {
@@ -515,7 +514,7 @@ fn analyze_recording_trim(
         out
     };
 
-    // 2) 重采样到 16kHz（webrtc-vad 只接受 8/16/32/48kHz；统一 16k 与现有 VadGate 对齐）。
+    // webrtc-vad 只接受 8/16/32/48kHz；统一 16k 与现有 VadGate 对齐。
     let mono_16k: Vec<f32> = if sample_rate == VAD_SAMPLE_RATE {
         mono_src
     } else {
@@ -536,7 +535,6 @@ fn analyze_recording_trim(
         out
     };
 
-    // 3) f32 → i16；按 30ms 帧喂 webrtc-vad，记录每帧是否 voice。
     let pcm_i16: Vec<i16> = mono_16k
         .iter()
         .map(|s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
@@ -547,14 +545,36 @@ fn analyze_recording_trim(
         return TrimDecision::Empty;
     }
 
+    // 第一遍：每帧 RMS + 整段最大 RMS。Empty 判定只看 max——只要任何 30ms 窗口
+    // 越过 EMPTY_MAX_RMS 就视为"有内容"，由 ASR 自己判断能否识别。
+    let mut frame_rms: Vec<f32> = Vec::with_capacity(frame_count);
+    let mut max_rms: f32 = 0.0;
+    for i in 0..frame_count {
+        let start = i * VAD_FRAME_SAMPLES;
+        let mono_frame = &mono_16k[start..start + VAD_FRAME_SAMPLES];
+        let mut sumsq = 0.0f64;
+        for s in mono_frame {
+            sumsq += (*s as f64) * (*s as f64);
+        }
+        let rms = (sumsq / mono_frame.len() as f64).sqrt() as f32;
+        if rms > max_rms {
+            max_rms = rms;
+        }
+        frame_rms.push(rms);
+    }
+
+    if max_rms < EMPTY_MAX_RMS {
+        return TrimDecision::Empty;
+    }
+
+    // 第二遍：webrtc-vad Quality 模式找首尾 voice 边界，用于裁剪。Quality 比 Aggressive
+    // 宽松，更不容易在轻声开口/句尾衰减处漏判，配合 RMS 兜底过滤底噪假阳。
     let mut vad = webrtc_vad::Vad::new_with_rate_and_mode(
         webrtc_vad::SampleRate::Rate16kHz,
-        webrtc_vad::VadMode::Aggressive,
+        webrtc_vad::VadMode::Quality,
     );
-
     let mut first_voice: Option<usize> = None;
     let mut last_voice: Option<usize> = None;
-    let mut voiced_count: usize = 0;
     for i in 0..frame_count {
         let start = i * VAD_FRAME_SAMPLES;
         let frame = &pcm_i16[start..start + VAD_FRAME_SAMPLES];
@@ -562,41 +582,30 @@ fn analyze_recording_trim(
         if !is_voice {
             continue;
         }
-        // 二级能量门：webrtc-vad 在低能噪声上会假阳，叠一层 RMS 阈值兜底。
-        let mono_frame = &mono_16k[start..start + VAD_FRAME_SAMPLES];
-        let mut sumsq = 0.0f64;
-        for s in mono_frame {
-            sumsq += (*s as f64) * (*s as f64);
-        }
-        let rms = (sumsq / mono_frame.len() as f64).sqrt() as f32;
-        if rms < VAD_FRAME_MIN_RMS {
+        if frame_rms[i] < VAD_FRAME_MIN_RMS {
             continue;
         }
-        voiced_count += 1;
         if first_voice.is_none() {
             first_voice = Some(i);
         }
         last_voice = Some(i);
     }
 
-    let voiced_ms = (voiced_count as u32) * 30;
-    if voiced_ms < TRIM_MIN_VOICED_MS {
-        return TrimDecision::Empty;
-    }
-    let (Some(first), Some(last)) = (first_voice, last_voice) else {
-        return TrimDecision::Empty;
+    let total_ms = (total_frames as u64 * 1000) / sample_rate.max(1) as u64;
+
+    // 找到 voice 边界 → 按 padding 裁；没找到（短促 / 轻声短句）→ 整段保留交给 ASR。
+    let (start_ms, end_ms) = match (first_voice, last_voice) {
+        (Some(first), Some(last)) => {
+            let voice_start_ms = (first as u64) * 30;
+            let voice_end_ms = ((last + 1) as u64) * 30;
+            let s = voice_start_ms.saturating_sub(TRIM_HEAD_PAD_MS as u64);
+            let e = (voice_end_ms + TRIM_TAIL_PAD_MS as u64).min(total_ms);
+            (s, e)
+        }
+        _ => (0u64, total_ms),
     };
 
-    // 4) 从 16k 帧 idx 反推到原采样率下的 interleaved 样本索引（含 padding）。
-    let total_ms = (total_frames as u64 * 1000) / sample_rate.max(1) as u64;
-    let voice_start_ms = (first as u64) * 30;
-    let voice_end_ms = ((last + 1) as u64) * 30;
-
-    let start_ms = voice_start_ms.saturating_sub(TRIM_HEAD_PAD_MS as u64);
-    let end_ms = (voice_end_ms + TRIM_TAIL_PAD_MS as u64).min(total_ms);
-
-    let start_frame =
-        ((start_ms as u128) * sample_rate as u128 / 1000) as usize;
+    let start_frame = ((start_ms as u128) * sample_rate as u128 / 1000) as usize;
     let end_frame =
         (((end_ms as u128) * sample_rate as u128 / 1000) as usize).min(total_frames);
 
@@ -606,8 +615,6 @@ fn analyze_recording_trim(
 
     let head_trimmed_ms = start_ms as u32;
     let tail_trimmed_ms = total_ms.saturating_sub(end_ms) as u32;
-
-    let _ = voiced_ms;
 
     TrimDecision::Bounds {
         start_sample: start_frame * ch,

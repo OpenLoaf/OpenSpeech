@@ -23,17 +23,19 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::asr::byok::{
     DictationBackend, DictationModality, ProviderRef, dispatch as dispatch_dictation_backend,
 };
+use crate::asr::meeting::saas::SaasMeetingProvider;
 use crate::asr::meeting::tencent_speaker::TencentSpeakerProvider;
 use crate::asr::meeting::{
     MeetingAsrProvider, MeetingEvent, MeetingSession, MeetingSessionConfig,
 };
 use crate::audio::is_valid_date_segment;
 use crate::db;
+use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
 
 /// 前端订阅的事件名。
 pub const EVENT_READY: &str = "meetings://ready";
@@ -141,24 +143,43 @@ fn active_slot() -> &'static Mutex<Option<ActiveMeeting>> {
 // ---------- Provider 选择 ----------
 //
 // 凭证完全复用"听写通道"配置——前端把 ProviderRef 透传过来，dispatch() 解出
-// `DictationBackend::TencentRealtime { app_id, secret_id, secret_key, ... }` 即可
-// 直接喂 TencentSpeakerProvider。这样用户在设置里改一处，听写 / 会议同时生效。
+// `DictationBackend::*` 后按下表挑出对应的 `MeetingAsrProvider` 实现：
 //
-// 不支持的组合（SaaS / Aliyun / 未配置）一律明确报错——会议必须用支持
-// speaker_diarization 的 vendor，不做隐式 fallback。
+//   SaasRealtime          → SaasMeetingProvider  （SaaS 端 OL-TL-RT-003）
+//   TencentRealtime{...}  → TencentSpeakerProvider（用户自带腾讯 16k_zh_en_speaker）
+//
+// 后续接入阿里 / Google 等 vendor 时，照这个表加一行——provider 子模块、
+// dispatch、build_provider 三处 plug 进去即可，不动外层编排逻辑。
+//
+// SaaS 分支需要拿登录态的 `SaaSClient`，所以这里要 AppHandle 取 SharedOpenLoaf。
+// 未登录 / 不支持的组合（Aliyun 自带）一律明确报错，不做隐式 fallback。
 
 const ERR_MEETING_PROVIDER_UNSUPPORTED: &str = "meeting_provider_unsupported";
 const ERR_MEETING_PROVIDER_NOT_CONFIGURED: &str = "meeting_provider_not_configured";
+const ERR_NOT_AUTHENTICATED: &str = "not_authenticated";
 
 // 直接返回 `<i18n_code>: <msg>` 字符串而不过 MeetingProviderError——
 // 后者 Display 会再加一层 "unsupported:" / "unauthenticated:" 前缀，导致前端
 // 按 `^[a-z_]+:` 解析时把分类名当成了 code，i18n 无法命中。
-fn build_provider(
+fn build_provider<R: Runtime>(
+    app: &AppHandle<R>,
     provider: &ProviderRef,
 ) -> Result<Arc<dyn MeetingAsrProvider>, String> {
     let backend = dispatch_dictation_backend(provider, DictationModality::Realtime)
         .map_err(|e| format!("{ERR_MEETING_PROVIDER_NOT_CONFIGURED}: {e}"))?;
     match backend {
+        DictationBackend::SaasRealtime => {
+            let ol = app.state::<SharedOpenLoaf>();
+            let client = ol.authenticated_client().ok_or_else(|| {
+                // 与 stt / transcribe / ai_refine 对齐：SaaS 直连失败统一走全局清场，
+                // 前端 auth store 监听 auth-lost 后切未登录 + 弹登录框。
+                handle_session_expired(app, &ol);
+                // 带 `<code>: <msg>` 让前端 stores/meetings.ts 的正则命中 code，
+                // i18n errors:meetings.not_authenticated{,_hint} 才能渲染。
+                format!("{ERR_NOT_AUTHENTICATED}: SaaS not authenticated")
+            })?;
+            Ok(Arc::new(SaasMeetingProvider::new(client)))
+        }
         DictationBackend::TencentRealtime {
             app_id,
             secret_id,
@@ -217,7 +238,7 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         }
     }
 
-    let provider = build_provider(&args.provider)?;
+    let provider = build_provider(&app, &args.provider)?;
     let provider_id = provider.id().to_string();
     let session_config = MeetingSessionConfig {
         language: args.language.clone(),

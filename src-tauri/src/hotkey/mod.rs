@@ -10,7 +10,7 @@
 // - 实际录音 / 注入：录音模块
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -22,6 +22,47 @@ pub mod modifier_only;
 pub use modifier_only::SharedModifierOnlyState;
 
 pub const HOTKEY_EVENT: &str = "openspeech://hotkey";
+pub const HOTKEY_BLOCKED_BY_MEETING_EVENT: &str = "openspeech://hotkey-blocked-by-meeting";
+
+/// 会议录制中需要拦的录音类绑定。
+fn is_recording_binding(id: BindingId) -> bool {
+    matches!(
+        id,
+        BindingId::DictatePtt | BindingId::DictateToggle | BindingId::AskAi | BindingId::Translate
+    )
+}
+
+/// 记录被会议拦掉的"按下"——release 时一起吞掉，避免前端 FSM 收到孤立 release。
+fn meeting_blocked_set() -> &'static Mutex<HashSet<BindingId>> {
+    static SET: OnceLock<Mutex<HashSet<BindingId>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 录制中按下听写/翻译/AskAI → emit 提示并返回 true，由调用方 return 跳过 overlay/cue/HOTKEY_EVENT。
+/// release 阶段只判 set 再吞掉，不重复 emit toast。
+pub fn maybe_block_for_meeting<R: Runtime>(
+    app: &AppHandle<R>,
+    id: BindingId,
+    phase: &'static str,
+) -> bool {
+    if !is_recording_binding(id) {
+        return false;
+    }
+    if phase == "released" {
+        if let Ok(mut s) = meeting_blocked_set().lock() {
+            return s.remove(&id);
+        }
+        return false;
+    }
+    if !crate::meetings::has_active() {
+        return false;
+    }
+    if let Ok(mut s) = meeting_blocked_set().lock() {
+        s.insert(id);
+    }
+    let _ = app.emit(HOTKEY_BLOCKED_BY_MEETING_EVENT, id);
+    true
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -395,10 +436,20 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
 
     // 按下立即 show overlay（不等前端事件往返，消除 50-100ms 感知延迟）；
     // hide 交给 overlay 窗口自己——进入 idle 状态时 invoke overlay_hide。
+    // 即使会议录制中也照样弹一下：让用户看到视觉反馈，前端 FSM 没收到 pressed
+    // 会自动把 overlay 收起来。
     if phase == "pressed" {
         if let Err(e) = crate::overlay::show(app) {
             log::warn!("[overlay] show failed: {e:?}");
         }
+    }
+
+    // 会议录制中拦下听写/翻译/Ask 的录音类绑定——不播开录音 cue、不进 FSM、emit toast。
+    if maybe_block_for_meeting(app, id, phase) {
+        return;
+    }
+
+    if phase == "pressed" {
         // 与 overlay::show 同帧触发 start cue。cue 模块自己判 ENABLED + ACTIVE，
         // 录音中再按一次（toggle off）不会重复播 start。stop / cancel 由前端
         // 在 state 过渡时通过 cue_play 命令补播。
