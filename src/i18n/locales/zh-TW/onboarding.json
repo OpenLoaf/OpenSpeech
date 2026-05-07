@@ -47,7 +47,7 @@
     },
     "input_monitoring": {
       "title": "輸入監控",
-      "rationale": "用於在你正在使用其它 App 時，監聽全域快速鍵（如 Fn / Ctrl+Win）觸發錄音。",
+      "rationale": "用於在你正在使用其它 App 時，監聽全域快速鍵（如 Fn / Alt+Win）觸發錄音。",
       "hint_macos": "授權位置：系統設定 → 隱私權與安全性 → 輸入監控"
     },
     "inject_tools": {

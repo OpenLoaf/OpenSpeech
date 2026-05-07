@@ -25,7 +25,7 @@ const FAQS: { question: string; answer: string }[] = [
   {
     question: "怎么唤起？快捷键能改吗？",
     answer:
-      "默认 macOS 是 Fn + Control，Windows 是 Ctrl + Win，Linux 是 Ctrl + Super，按一下开始、再按一下结束。在设置里可以改成任意全局快捷键组合、单键 PTT 或修饰键双击。",
+      "默认 macOS 是 Fn + Control，Windows 是 Alt + Win，Linux 是 Ctrl + Super，按一下开始、再按一下结束。在设置里可以改成任意全局快捷键组合、单键 PTT 或修饰键双击。",
   },
   {
     question: "转写错了能撤销吗？",

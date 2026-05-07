@@ -39,7 +39,7 @@ const FEATURES: Feature[] = [
     icon: KeyRound,
     meta: "Hotkey",
     title: "全局快捷键",
-    body: "Fn+Ctrl / Ctrl+Win / Ctrl+Super 默认绑定，可改任意单键 PTT 或修饰键双击。",
+    body: "Fn+Ctrl / Alt+Win / Ctrl+Super 默认绑定，可改任意单键 PTT 或修饰键双击。",
     span: "md:col-span-3 md:row-span-1",
   },
   {

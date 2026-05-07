@@ -54,6 +54,11 @@ fn is_unauthorized(msg: &str) -> bool {
 const SHORT_AUDIO_LIMIT_MS: u64 = 5 * 60 * 1000;
 const LONG_POLL_INTERVAL_MS: u64 = 4_000;
 const LONG_POLL_MAX_TRIES: u32 = 360; // 4s × 360 ≈ 24 min；够覆盖大多数场景，超时让前端报错。
+// SDK 用 ureq Agent 但没设 read timeout（见 openloaf-saas client.rs），
+// 服务端 hang 时会无限挂——这里用 tokio timeout 把 caller 拽回来；spawn_blocking
+// 内部线程没法取消，会泄漏到 socket 自然死，但 UI 至少能退出 transcribing 态。
+const ASR_SHORT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+pub const ERR_TRANSCRIBE_TIMEOUT: &str = "transcribe_timeout";
 
 #[derive(Debug, serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -626,16 +631,24 @@ async fn run_asr_short_blocking(
         ERR_NOT_AUTHENTICATED.to_string()
     })?;
     let b64_owned = b64.to_string();
-    let join = tokio::task::spawn_blocking(move || {
+    let task = tokio::task::spawn_blocking(move || {
         let input = AsrShortOlTl003Input::from_base64(b64_owned, media_type);
         let params = AsrShortOlTl003Params {
             language: lang_short,
             enable_itn: Some(true),
         };
         client.tools_v4().asr_short_ol_tl_003(&input, &params)
-    })
-    .await
-    .map_err(|e| format!("transcribe join: {e}"))?;
+    });
+    let join = match tokio::time::timeout(ASR_SHORT_REQUEST_TIMEOUT, task).await {
+        Ok(j) => j.map_err(|e| format!("transcribe join: {e}"))?,
+        Err(_) => {
+            log::warn!(
+                "[transcribe] asr_short timed out after {}s; SDK has no read timeout, blocking thread leaks until socket dies",
+                ASR_SHORT_REQUEST_TIMEOUT.as_secs()
+            );
+            return Err(ERR_TRANSCRIBE_TIMEOUT.to_string());
+        }
+    };
     Ok(match join {
         Ok(r) => AsrShortAttempt::Ok(r),
         Err(e) => {

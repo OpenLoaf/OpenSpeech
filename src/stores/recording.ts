@@ -456,6 +456,9 @@ const humanizeSttError = (raw: unknown): string => {
   if (msg.includes("tencent_task_timeout")) {
     return i18n.t("overlay:error.tencent_task_timeout");
   }
+  if (msg.includes("transcribe_timeout")) {
+    return i18n.t("overlay:error.transcribe_timeout");
+  }
   if (msg.includes("tencent_task_failed")) {
     const detail = msg.split("tencent_task_failed:").pop()?.trim() || "";
     return i18n.t("overlay:error.tencent_task_failed", { msg: detail });

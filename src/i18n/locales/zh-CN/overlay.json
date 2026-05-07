@@ -188,6 +188,7 @@
     "file_too_large_for_tencent_byok": "单个文件超过腾讯 BYOK 文件转写上限（约 5 分钟），请改用 REALTIME 模式或缩短录音",
     "tencent_task_failed": "腾讯任务执行失败：{{msg}}",
     "tencent_task_timeout": "腾讯任务超时（>24 分钟未返回结果）",
+    "transcribe_timeout": "转写请求超时（服务端无响应，已自动结束等待）",
     "tencent_unauthenticated": "腾讯 BYOK 鉴权失败 —— 请检查设置里的 SecretId / SecretKey",
     "tencent_rate_limited": "腾讯 BYOK 触发限流，请稍候再试",
     "tencent_cos_unauthenticated": "腾讯 COS 鉴权失败 —— 请检查 SecretId / SecretKey 与存储桶权限",

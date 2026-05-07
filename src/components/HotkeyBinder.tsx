@@ -27,7 +27,7 @@ import {
   type Side,
 } from "@/lib/hotkey";
 import { detectPlatform, type Platform } from "@/lib/platform";
-import { MAIN_ICON, modIcon as sharedModIcon } from "@/lib/hotkeyVisual";
+import { MAIN_ICON, modIcon as sharedModIcon, displaySide } from "@/lib/hotkeyVisual";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useUIStore } from "@/stores/ui";
@@ -785,7 +785,7 @@ function modChip(
   return {
     label: formatMod(mod, platform),
     icon: modIcon(mod, platform),
-    side: side ?? undefined,
+    side: displaySide(mod, platform, side) ?? undefined,
   };
 }
 
@@ -796,7 +796,7 @@ function bindingToChips(binding: HotkeyBinding, platform: Platform): ChipItem[] 
       {
         label: `2× ${formatMod(m, platform)}`,
         icon: modIcon(m, platform),
-        side: getModSide(binding, m) ?? undefined,
+        side: displaySide(m, platform, getModSide(binding, m)) ?? undefined,
       },
     ];
   }

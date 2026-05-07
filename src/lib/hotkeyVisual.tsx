@@ -6,8 +6,26 @@ import {
   formatCode,
   formatMod,
   type HotkeyMod,
+  type Side,
 } from "@/lib/hotkey";
 import type { Platform } from "@/lib/platform";
+
+// Windows 键物理上有左右，但 Windows 平台键盘上 RWin 极少见且与 LWin 等价，
+// 在 UI 上加 L/R 角标只会让用户困惑——meta 键在 Windows 下展示时丢掉 side。
+export function shouldShowSide(mod: HotkeyMod, platform: Platform): boolean {
+  if (mod === "fn") return false;
+  if (mod === "meta" && platform === "windows") return false;
+  return true;
+}
+
+export function displaySide(
+  mod: HotkeyMod,
+  platform: Platform,
+  side: Side | null | undefined,
+): Side | null {
+  if (!side) return null;
+  return shouldShowSide(mod, platform) ? side : null;
+}
 
 // 共用快捷键渲染模块。HotkeyBinder（chip 风格）/ HotkeyPreview（Kbd 风格）/ DemoSection
 // 统一从此处取 icon、main key glyph 与"用户实际按下键"的 label，避免符号 / 文案
@@ -102,7 +120,9 @@ export function keyEventLabel(code: string, platform: Platform): string {
   if (mod) {
     const name = formatMod(mod, platform);
     const side = codeToSide(code);
-    if (side) return `${side === "left" ? "Left" : "Right"} ${name}`;
+    if (side && shouldShowSide(mod, platform)) {
+      return `${side === "left" ? "Left" : "Right"} ${name}`;
+    }
     return name;
   }
   if (SPECIAL_KEY_LABELS[code]) return SPECIAL_KEY_LABELS[code];

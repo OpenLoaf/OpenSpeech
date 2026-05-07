@@ -447,7 +447,7 @@ function defaultKeys(platform: Platform): { glyph?: ReactNode; label: string }[]
     return [{ label: "Fn" }, { glyph: "⌃", label: "Ctrl" }];
   }
   if (platform === "windows") {
-    return [{ glyph: "⌃", label: "Ctrl" }, { glyph: <WinIcon size={13} />, label: "Win" }];
+    return [{ label: "Alt" }, { glyph: <WinIcon size={13} />, label: "Win" }];
   }
   return [
     { glyph: "⌃", label: "Ctrl" },

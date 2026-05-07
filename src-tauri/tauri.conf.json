@@ -35,6 +35,9 @@
     "active": true,
     "targets": ["app", "deb", "rpm", "appimage", "nsis"],
     "createUpdaterArtifacts": false,
+    "category": "Productivity",
+    "shortDescription": "Voice to text — speech, dictation, transcription",
+    "longDescription": "OpenSpeech turns your voice into text anywhere — system-wide push-to-talk dictation, speech recognition and AI transcription for any input field.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,6 +45,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "templates/main.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "templates/main.desktop"
+      }
+    },
     "windows": {
       "nsis": {
         "languages": [

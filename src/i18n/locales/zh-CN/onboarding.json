@@ -47,7 +47,7 @@
     },
     "input_monitoring": {
       "title": "输入监控",
-      "rationale": "用于在你正在使用其它 App 时，监听全局快捷键（如 Fn / Ctrl+Win）触发录音。",
+      "rationale": "用于在你正在使用其它 App 时，监听全局快捷键（如 Fn / Alt+Win）触发录音。",
       "hint_macos": "授权位置：系统设置 → 隐私与安全性 → 输入监控"
     },
     "inject_tools": {

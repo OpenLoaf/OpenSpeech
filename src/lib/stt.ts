@@ -62,18 +62,32 @@ export interface TranscribeFileResult {
     | "aliyun-file";
 }
 
+// Rust 侧 ASR_SHORT_REQUEST_TIMEOUT = 120s；前端兜底 150s，留 30s buffer 让后端
+// 先抛 transcribe_timeout 进 humanizeSttError。万一 invoke 通道本身卡住、Rust
+// 那条 timeout 没生效，这里能把 UI 从 transcribing 态拽回来。
+const TRANSCRIBE_INVOKE_TIMEOUT_MS = 150_000;
+
 export async function transcribeRecordingFile(args: {
   audioPath: string;
   durationMs: number;
   lang?: string;
   provider?: ProviderRef;
 }): Promise<TranscribeFileResult> {
-  return await invoke<TranscribeFileResult>("transcribe_recording_file", {
+  const call = invoke<TranscribeFileResult>("transcribe_recording_file", {
     audioPath: args.audioPath,
     durationMs: args.durationMs,
     lang: args.lang,
     provider: args.provider,
   });
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("transcribe_timeout")), TRANSCRIBE_INVOKE_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([call, timeout]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 // 长音频公网 URL 转写。本地录音重试不会走这里——保留给后续"上传后转写"等场景。

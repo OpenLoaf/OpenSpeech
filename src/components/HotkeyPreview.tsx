@@ -17,7 +17,7 @@ import {
   type Side,
 } from "@/lib/hotkey";
 import { detectPlatform, type Platform } from "@/lib/platform";
-import { keyEventLabel, mainIcon, modIcon } from "@/lib/hotkeyVisual";
+import { keyEventLabel, mainIcon, modIcon, displaySide } from "@/lib/hotkeyVisual";
 
 // 听写快捷键的视觉预览：渲染当前 binding 的 token 序列；按键时高亮匹配的 token，
 // 不匹配时显示用户实际按下的键。Home 页与 Onboarding Step 1 共用。
@@ -332,7 +332,7 @@ export function HotkeyPreview({
                 {tok.icon}
               </span>
             ) : null}
-            {tok.kind === "mod" && tok.side ? (
+            {tok.kind === "mod" && displaySide(tok.mod, platform, tok.side) ? (
               <span aria-hidden className="mr-1 text-[0.7em] font-bold opacity-70">
                 {tok.side === "left" ? "L" : "R"}
               </span>

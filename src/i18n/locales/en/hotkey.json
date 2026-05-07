@@ -21,7 +21,7 @@
     "needs_main_key": "Needs to be combined with a main key",
     "special_keys_locked": "Esc / Enter / arrow keys require enabling them in advanced settings",
     "needs_modifier": "Needs to be combined with a modifier key",
-    "fn_macos_only": "Fn is only reliable on macOS — use Ctrl + Win or Right Alt instead",
+    "fn_macos_only": "Fn is only reliable on macOS — use Alt + Win or Right Alt instead",
     "modifier_only_no_main": "Modifier-only bindings can't include a main key",
     "modifier_only_min": "At least one modifier key is required",
     "modifier_only_min_two": "Needs at least two modifier keys — a single modifier would swallow every native chord that uses it",

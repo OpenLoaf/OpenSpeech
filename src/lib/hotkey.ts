@@ -53,45 +53,59 @@ export type BindingId = (typeof BINDING_IDS)[number];
  * 平台感知的默认快捷键：
  * - macOS:   PTT = `Fn + Control`（modifier-only，组合键避免 Intel Mac / 外接键盘
  *            上单 Fn 不可达 + 减少与系统 Fn 行为的歧义）
- * - Windows: PTT = `Ctrl + Win`（modifier-only，Win 键在内部抽象为 `meta`）
+ * - Windows: PTT = `LAlt + Win`（modifier-only，Win 键在内部抽象为 `meta`）
  * - Linux:   PTT = `Ctrl + Super`（modifier-only）
  *
  * 唤起主窗口统一 `Ctrl + Alt + O`（macOS = ⌃⌥O）。三平台无系统占用，O 对应
- * OpenSpeech 助记，不与 PTT 默认（Fn+Ctrl / Ctrl+Meta）冲突。
+ * OpenSpeech 助记，不与 PTT 默认冲突。
  */
 export function getDefaultBindings(
   platform: Platform,
 ): Record<BindingId, HotkeyBinding | null> {
-  const ptt: HotkeyBinding =
-    platform === "macos"
-      ? {
-          kind: "modifierOnly",
-          mods: ["fn", "ctrl"],
-          code: "",
-          modSides: { ctrl: "left" },
-        }
-      : {
-          kind: "modifierOnly",
-          mods: ["ctrl", "meta"],
-          code: "",
-          modSides: { ctrl: "left", meta: "left" },
-        };
+  let ptt: HotkeyBinding;
+  let translate: HotkeyBinding;
 
-  // 翻译：默认 macOS = Fn + Shift；Windows = Win + Alt；Linux = Super + Alt（meta + alt）。
-  const translate: HotkeyBinding =
-    platform === "macos"
-      ? {
-          kind: "modifierOnly",
-          mods: ["fn", "shift"],
-          code: "",
-          modSides: { shift: "left" },
-        }
-      : {
-          kind: "modifierOnly",
-          mods: ["alt", "meta"],
-          code: "",
-          modSides: { alt: "left", meta: "left" },
-        };
+  if (platform === "macos") {
+    ptt = {
+      kind: "modifierOnly",
+      mods: ["fn", "ctrl"],
+      code: "",
+      modSides: { ctrl: "left" },
+    };
+    translate = {
+      kind: "modifierOnly",
+      mods: ["fn", "shift"],
+      code: "",
+      modSides: { shift: "left" },
+    };
+  } else if (platform === "windows") {
+    // Windows 键只有一个，无需区分左右；这里 modSides 仍写 left 仅用于 Rust matcher 兜底
+    ptt = {
+      kind: "modifierOnly",
+      mods: ["alt", "meta"],
+      code: "",
+      modSides: { alt: "left", meta: "left" },
+    };
+    translate = {
+      kind: "modifierOnly",
+      mods: ["shift", "meta"],
+      code: "",
+      modSides: { shift: "left", meta: "left" },
+    };
+  } else {
+    ptt = {
+      kind: "modifierOnly",
+      mods: ["ctrl", "meta"],
+      code: "",
+      modSides: { ctrl: "left", meta: "left" },
+    };
+    translate = {
+      kind: "modifierOnly",
+      mods: ["alt", "meta"],
+      code: "",
+      modSides: { alt: "left", meta: "left" },
+    };
+  }
 
   const showMainWindow: HotkeyBinding = {
     kind: "combo",

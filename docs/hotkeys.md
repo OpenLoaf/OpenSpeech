@@ -6,12 +6,12 @@
 
 | Binding ID | macOS | Windows | Linux | 形态 |
 |---|---|---|---|---|
-| `dictate_ptt`（听写） | `Fn + Ctrl(L)` | `Ctrl(L) + Win(L)` | `Ctrl(L) + Super(L)` | modifierOnly |
-| `translate`（翻译听写） | `Fn + Shift(L)` | `Alt(L) + Win(L)` | `Alt(L) + Super(L)` | modifierOnly |
+| `dictate_ptt`（听写） | `Fn + Ctrl(L)` | `Alt(L) + Win` | `Ctrl(L) + Super(L)` | modifierOnly |
+| `translate`（翻译听写） | `Fn + Shift(L)` | `Shift(L) + Win` | `Alt(L) + Super(L)` | modifierOnly |
 | `show_main_window`（唤起主窗口） | `Ctrl(L) + Alt(L) + O` | `Ctrl(L) + Alt(L) + O` | `Ctrl(L) + Alt(L) + O` | combo |
 | `open_toolbox`（打开 AI 工具） | `Ctrl(L) + Alt(L) + T` | `Ctrl(L) + Alt(L) + T` | `Ctrl(L) + Alt(L) + T` | combo |
 
-> 标记 `(L)` = 必须左侧物理键；右侧不命中（详见"左右匹配"章节）。`Fn` 没有左右概念。
+> 标记 `(L)` = 必须左侧物理键；右侧不命中（详见"左右匹配"章节）。`Fn` 没有左右概念。**Win 键（meta）在 Windows 上不区分左右**：UI 上不渲染 `L`/`R` 角标，因为绝大多数 Windows 键盘只有左 Win，且产品上"Windows 键就是 Windows 键"。
 
 | 行为 | 形态 | 可否自定义 | 可否清空 |
 |---|---|---|---|
@@ -163,7 +163,7 @@ Esc 不注册为全局快捷键（否则会拦截用户在其他应用里的 Esc
 | 平台 | 限制 |
 |---|---|
 | **macOS** | `Fn` 键通过 `rustdesk-org/rdev` fork 的 `Modifiers::FN` 原生支持。需 Accessibility 权限（首启弹窗）。Option+字母会产生 dead key，录入组件必须用 `event.code` 而非 `event.key`。**蓝牙外接键盘的 Fn 多数被硬件层吃掉，系统 API 读不到——这是硬件层限制，无解**。提示用户在 Settings → Keyboard → "Press fn key to" 设为 "Do Nothing"，否则 Fn 会弹 Emoji。 |
-| **Windows** | **Fn 键不支持**——大多数笔记本的 Fn 在键盘固件层被截获（改变 F5→音量等），根本不发送 scan code 到 OS，`WH_KEYBOARD_LL` 也拿不到。默认改用 `Ctrl + Win`（Wispr Flow 默认）或 `Right Alt`（TypeLess 默认）。若用户希望 Fn 触发，指引用 **PowerToys Keyboard Manager** 把 Fn 映射到 F20–F24 后再绑定。**左右修饰键**通过 `VK_LCONTROL/VK_RCONTROL/VK_LSHIFT/VK_RSHIFT/VK_LMENU/VK_RMENU/VK_LWIN/VK_RWIN` 细粒度 VK + `GetAsyncKeyState` 校准，可精确区分。 |
+| **Windows** | **Fn 键不支持**——大多数笔记本的 Fn 在键盘固件层被截获（改变 F5→音量等），根本不发送 scan code 到 OS，`WH_KEYBOARD_LL` 也拿不到。默认改用 `Alt + Win` 或 `Right Alt`（TypeLess 默认）。若用户希望 Fn 触发，指引用 **PowerToys Keyboard Manager** 把 Fn 映射到 F20–F24 后再绑定。**左右修饰键**通过 `VK_LCONTROL/VK_RCONTROL/VK_LSHIFT/VK_RSHIFT/VK_LMENU/VK_RMENU/VK_LWIN/VK_RWIN` 细粒度 VK + `GetAsyncKeyState` 校准，可精确区分；但 UI 不给 Win 键加 L/R 角标——产品上"Windows 键就是 Windows 键"。 |
 | **Linux / Wayland** | 全局快捷键依赖 `xdg-desktop-portal GlobalShortcuts` 接口；部分发行版 / 桌面环境（较老的 GNOME / 精简 WM）可能无法注册。MVP 仅保证 X11 下完全可用，Wayland 下若不可用则禁用快捷键设置 UI 并给出解释。Fn 键取决于硬件——Framework / ThinkPad 部分型号会上报 `KEY_FN (464)`，其他机型放弃。**左右修饰键校准**当前 fallback 到 rdev 维护的 pressed 缓存（macOS / Linux），Windows 用 OS 同步 API。 |
 | **IME 组字态** | 用户正在输入法组字过程中按下全局快捷键，可能被 IME 吃掉；这是 OS 级行为，无法绕过。 |
 
@@ -263,7 +263,7 @@ OpenSpeech 的快捷键有两条互不相同的执行路径，左右区分的实
   - v1 → v2：`normalizeBinding` 按 `code === ""` 推断 `kind`。
   - v2 → v3：`normalizeBinding` 给 mods 中每个非 fn 修饰键自动补 `modSides[mod] = "left"`，对齐"旧绑定一律视为左"产品决策。
   - 未知 schemaVersion 一律重置为平台默认。
-- 显示层本地化由 `formatMod` 统一渲染：macOS = `Ctrl / Option / Shift / Cmd / fn`、Windows = `Ctrl / Alt / Shift / Win / Fn`、Linux = `Ctrl / Alt / Shift / Super / Fn`。`doubleTap` 前缀 `2×`；左右用 chip 内 `L`/`R` 小角标渲染（不写入 label 文字）。
+- 显示层本地化由 `formatMod` 统一渲染：macOS = `Ctrl / Option / Shift / Cmd / fn`、Windows = `Ctrl / Alt / Shift / Win / Fn`、Linux = `Ctrl / Alt / Shift / Super / Fn`。`doubleTap` 前缀 `2×`；左右用 chip 内 `L`/`R` 小角标渲染（不写入 label 文字）。**例外**：`meta`（Windows = Win 键）在 Windows 平台不渲染 L/R 角标——`hotkeyVisual.shouldShowSide` 单独拦截，因为产品上"Windows 键只有一个"。
 
 ## 实现时序（开发补充）
 

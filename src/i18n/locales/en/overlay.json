@@ -188,6 +188,7 @@
     "file_too_large_for_tencent_byok": "Recording exceeds the Tencent BYOK file transcription limit (~5 minutes). Switch to REALTIME mode or shorten the recording.",
     "tencent_task_failed": "Tencent task failed: {{msg}}",
     "tencent_task_timeout": "Tencent task timed out (no result after 24 minutes)",
+    "transcribe_timeout": "Transcription timed out — the server didn't respond, so we stopped waiting.",
     "tencent_unauthenticated": "Tencent BYOK auth failed — check the SecretId / SecretKey in Settings",
     "tencent_rate_limited": "Tencent BYOK rate-limited — wait a moment and retry",
     "tencent_cos_unauthenticated": "Tencent COS auth failed — check SecretId / SecretKey and bucket permissions",

@@ -21,7 +21,7 @@
     "needs_main_key": "需要配合主键使用",
     "special_keys_locked": "Esc / Enter / 方向键等特殊键需在高级设置开启后使用",
     "needs_modifier": "需要配合修饰键使用",
-    "fn_macos_only": "Fn 键仅在 macOS 可靠可用；请用 Ctrl + Win 或 Right Alt",
+    "fn_macos_only": "Fn 键仅在 macOS 可靠可用；请用 Alt + Win 或 Right Alt",
     "modifier_only_no_main": "modifier-only 绑定不能包含主键",
     "modifier_only_min": "至少需要一个修饰键",
     "modifier_only_min_two": "至少需要两个修饰键——单修饰键会吞掉该键的所有原生组合",
