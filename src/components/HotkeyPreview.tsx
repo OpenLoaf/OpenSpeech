@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
@@ -243,6 +244,36 @@ export function useKeyPreview(): KeyToken[] {
   return Array.from(held.values());
 }
 
+// 主窗口聚焦态。webview 失焦 → onFocusChanged(false)，视觉上把绑定 Kbd 抹成 •
+// 防止旁观者看屏知道触发键。show_main_window 全键命中时短暂揭开，覆盖按下激活键
+// 到 OS 真正切焦那一小段时间。
+function useMainWindowFocus(): boolean {
+  const [focused, setFocused] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    const w = getCurrentWebviewWindow();
+    void w
+      .isFocused()
+      .then((f) => {
+        if (!cancelled) setFocused(f);
+      })
+      .catch(() => {});
+    void w
+      .onFocusChanged(({ payload }) => setFocused(payload))
+      .then((un) => {
+        if (cancelled) un();
+        else unlisten = un;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+  return focused;
+}
+
 export function HotkeyPreview({
   hint,
   index = "01",
@@ -254,6 +285,7 @@ export function HotkeyPreview({
   headerExtra,
   hideHeader = false,
   trailing,
+  swapToActivatorWhenUnfocused = false,
 }: {
   hint?: string;
   index?: string;
@@ -272,11 +304,13 @@ export function HotkeyPreview({
   hideHeader?: boolean;
   /** 替换默认 modeHint 行尾文字的自定义节点（按键预览右边那段）。 */
   trailing?: React.ReactNode;
+  /** 主窗口失焦时把 Kbd 内容换成 show_main_window 的按键，提示用户先把窗口唤起。 */
+  swapToActivatorWhenUnfocused?: boolean;
 }) {
   const { t } = useTranslation();
   const allBindings = useHotkeysStore((s) => s.bindings);
   const platform = detectPlatform();
-  const groups = useMemo(
+  const baseGroups = useMemo(
     () =>
       bindingIds.map((id) => ({
         id,
@@ -290,14 +324,30 @@ export function HotkeyPreview({
     recState === "preparing" ||
     recState === "recording" ||
     recState === "transcribing";
+  const focused = useMainWindowFocus();
+  const showActivator = swapToActivatorWhenUnfocused && !focused;
+  const showMainTokens = useMemo(
+    () => tokensFromBinding(allBindings["show_main_window"], platform),
+    [allBindings, platform],
+  );
+  // 失焦时把按键替换成 show_main_window 整组，引导用户先唤起窗口。
+  const groups = showActivator
+    ? [{ id: "show_main_window" as BindingId, tokens: showMainTokens }]
+    : baseGroups;
+  // showActivator 状态下不让 sessionActive（dictate 录音中）把激活键 Kbd 也点亮，
+  // 那不是当前展示的 binding。
   const tokenIsHeld = (token: HotkeyToken) =>
-    sessionActive || pressed.some((p) => tokenMatches(token, p));
+    (!showActivator && sessionActive) ||
+    pressed.some((p) => tokenMatches(token, p));
   const anyMatchAcrossGroups = groups.some((g) => g.tokens.some(tokenIsHeld));
   // 多组模式下不再走 "pressed.slice(-4)" 按错回显——一组都不命中时无法决定回显
   // 挂在哪组旁边，强制保持绑定行视图避免歧义。
   const multiGroup = groups.length > 1;
   const showBindingRow =
-    multiGroup || pressed.length === 0 || anyMatchAcrossGroups || sessionActive;
+    multiGroup ||
+    pressed.length === 0 ||
+    anyMatchAcrossGroups ||
+    sessionActive;
   const resolvedTitle = title ?? t("dialogs:hotkey_preview.default_title");
   const modeHint = hint ?? t("dialogs:hotkey_preview.default_hint");
 

@@ -402,23 +402,6 @@ function GeneralTab() {
           ]}
         />
       </Row>
-      <Row
-        label={t("general.update_check_interval")}
-        hint={t("general.update_check_interval_hint")}
-      >
-        <Select
-          value={String(general.updateCheckIntervalHours)}
-          onChange={(v) =>
-            void setGeneral("updateCheckIntervalHours", Number(v))
-          }
-          options={[
-            { value: "1", label: t("general.update_check_interval_options.1h") },
-            { value: "6", label: t("general.update_check_interval_options.6h") },
-            { value: "24", label: t("general.update_check_interval_options.24h") },
-          ]}
-        />
-      </Row>
-
       {!loaded ? (
         <div className="mt-6 font-mono text-xs text-te-light-gray/70">
           {t("general.loading")}

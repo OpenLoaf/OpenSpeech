@@ -248,7 +248,7 @@
       "view_translation": "譯文",
       "view_raw": "原始文字",
       "view_details": "查看詳情",
-      "copy_debug": "複製除錯請求 JSON"
+      "copy_debug": "複製除錯資訊"
     },
     "detail": {
       "title": "記錄詳情",
@@ -289,8 +289,8 @@
     "toast": {
       "copy_success": "已複製到剪貼簿",
       "copy_failed": "複製失敗",
-      "copy_debug_success": "除錯請求 JSON 已複製",
-      "copy_debug_failed": "複製除錯請求 JSON 失敗",
+      "copy_debug_success": "除錯資訊已複製",
+      "copy_debug_failed": "複製除錯資訊失敗",
       "copy_debug_missing": "該紀錄未擷取到請求快照（可能為正式版錄入或呼叫前已失敗）",
       "retry_success": "重試成功",
       "retry_failed": "重試失敗",

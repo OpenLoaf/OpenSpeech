@@ -57,8 +57,6 @@ export interface GeneralSettings {
   // 自动更新策略：决定后台周期检查命中新版后的行为。详见 UpdatePolicy 注释。
   // 默认 PROMPT：下载完毕后弹 toast 让用户决定何时安装。
   updatePolicy: UpdatePolicy;
-  // 周期检查间隔（小时）。boot 触发一次，之后每 N 小时再触发一次。
-  updateCheckIntervalHours: number;
   // 用户在自动检测到新版的 toast 上点了"跳过此版本"——记下版本号，下次启动 check
   // 命中同一版本时静默掉提示。空串 = 未跳过任何版本；用户主动点托盘 / 关于页的
   // "检查更新"时不消费这个值，仍会正常提示。
@@ -196,7 +194,6 @@ const DEFAULT_GENERAL: GeneralSettings = {
   restoreClipboard: true,
   launchStartup: false,
   updatePolicy: "AUTO",
-  updateCheckIntervalHours: 6,
   skippedUpdateVersion: "",
   closeBehavior: "ASK",
   onboardingCompleted: false,
@@ -349,19 +346,20 @@ function migrateV6(oldGeneral: Record<string, unknown>): Partial<GeneralSettings
   return cleaned as Partial<GeneralSettings>;
 }
 
-// v7 → v8：autoUpdate(boolean) → updatePolicy(枚举) + 新增 updateCheckIntervalHours。
+// v7 → v8：autoUpdate(boolean) → updatePolicy(枚举)。
 // true ⇒ PROMPT（保持现有"提示后才装"的行为，不做用户没要求过的自动安装）；
 // false ⇒ DISABLED。老用户没设过就走默认 PROMPT。
+// 历史遗物 updateCheckIntervalHours 字段后续被弃用——直接 drop，不再迁回。
 function migrateV7(oldGeneral: Record<string, unknown>): Partial<GeneralSettings> {
   const cleaned = { ...oldGeneral };
   const legacy = cleaned.autoUpdate;
   delete cleaned.autoUpdate;
+  delete cleaned.updateCheckIntervalHours;
   let policy: UpdatePolicy = "PROMPT";
   if (legacy === false) policy = "DISABLED";
   return {
     ...(cleaned as Partial<GeneralSettings>),
     updatePolicy: policy,
-    updateCheckIntervalHours: 6,
   };
 }
 
@@ -607,12 +605,17 @@ async function readPersisted(): Promise<{ shape: PersistShape; migrated: boolean
     general: Partial<GeneralSettings>,
     forceEnabled?: boolean,
     langOverride?: DictationLang,
-  ): PersistShape => ({
-    schemaVersion: SCHEMA_VERSION,
-    general: { ...DEFAULT_GENERAL, ...general },
-    aiRefine: mergeAiRefine((r as { aiRefine?: unknown }).aiRefine, forceEnabled),
-    dictation: mergeDictation((r as { dictation?: unknown }).dictation, langOverride),
-  });
+  ): PersistShape => {
+    // 已弃用的字段就地剥离，避免持久化里反复回写。
+    const cleanedGeneral = { ...general } as Record<string, unknown>;
+    delete cleanedGeneral.updateCheckIntervalHours;
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      general: { ...DEFAULT_GENERAL, ...(cleanedGeneral as Partial<GeneralSettings>) },
+      aiRefine: mergeAiRefine((r as { aiRefine?: unknown }).aiRefine, forceEnabled),
+      dictation: mergeDictation((r as { dictation?: unknown }).dictation, langOverride),
+    };
+  };
 
   // 老 schema(<11) 都先按链迁到 v11 形态，再统一过 migrateV11 决定 aiRefine.enabled。
   const runChainToV11 = (start: Record<string, unknown>, fromVersion: number): Record<string, unknown> => {

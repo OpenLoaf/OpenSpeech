@@ -128,10 +128,9 @@ const bootPromise = (async () => {
     // 用户在 dev 环境自负盈亏。
     void syncAutostart(useSettingsStore.getState().general.launchStartup);
 
-    // 自动更新：交给 updateScheduler 统一调度——boot 触发一次 + 之后按
-    // updateCheckIntervalHours 周期检查；命中新版后按 updatePolicy 决定是
-    // PROMPT 弹 toast 还是 AUTO 等空闲再静默安装。整段 fire-and-forget，
-    // 不阻塞 boot；DISABLED 由 scheduler 内部判定，无需在此 if。
+    // 自动更新：boot 期只挂 policy 监听器；首次 check 由 Home 页 mount 时
+    // notifyHomeActivated() 触发，之后按 5 分钟轮询。命中新版后按 updatePolicy
+    // 决定是 PROMPT 弹 toast 还是 AUTO 等空闲再静默安装。
     startUpdateScheduler();
 
     await useRecordingStore.getState().initListeners();

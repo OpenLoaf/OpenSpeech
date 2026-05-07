@@ -64,13 +64,6 @@
       "auto": "閒置時自動安裝",
       "disabled": "關閉"
     },
-    "update_check_interval": "檢查更新間隔",
-    "update_check_interval_hint": "背景多久檢查一次新版本；啟動時一定會先檢查一次",
-    "update_check_interval_options": {
-      "1h": "1 小時",
-      "6h": "6 小時",
-      "24h": "24 小時"
-    },
     "loading": "// loading settings…"
   },
   "device": {

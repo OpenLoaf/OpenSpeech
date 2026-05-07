@@ -35,7 +35,7 @@ use crate::asr::meeting::{
 };
 use crate::audio::is_valid_date_segment;
 use crate::db;
-use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
+use crate::openloaf::{DEFAULT_BASE_URL, SharedOpenLoaf, handle_session_expired};
 
 /// 前端订阅的事件名。
 pub const EVENT_READY: &str = "meetings://ready";
@@ -178,7 +178,7 @@ fn build_provider<R: Runtime>(
                 // i18n errors:meetings.not_authenticated{,_hint} 才能渲染。
                 format!("{ERR_NOT_AUTHENTICATED}: SaaS not authenticated")
             })?;
-            Ok(Arc::new(SaasMeetingProvider::new(client)))
+            Ok(Arc::new(SaasMeetingProvider::new(client, DEFAULT_BASE_URL)))
         }
         DictationBackend::TencentRealtime {
             app_id,

@@ -12,33 +12,30 @@ import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 
-// 取代 main.tsx 里"启动只 check 一次"的旧逻辑：
-//   - boot 触发一次 + 之后按 updateCheckIntervalHours 周期触发；
-//   - 命中新版后按 updatePolicy 决定走 toast prompt 还是空闲自动安装；
-//   - DISABLED 完全不调度。
-//
-// 单例化：模块作用域 + 一个进程内全局状态，确保 React StrictMode / HMR 重挂载也不
-// 会把 timer 装两份。
+// 触发模型：Home 页 mount 即立刻 check 一次，并起 5 分钟轮询。
+// 不再以"软件 boot"为时机——bug 多出在那条路径上（用户根本没看到主窗就被弹 toast、
+// 网络栈还在初始化、settings 还没就绪等）。Home 页激活意味着用户确实进了主窗界面，
+// 时机是干净的；首次激活之后 5 分钟周期跑下去，不再依赖"启动一次性 check"。
 
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const CHECK_TIMEOUT_MS = 30_000;
-// AUTO 策略：用户连续 N 秒无键鼠输入才认为"空闲"，避免在用户暂时离开瞬间就重启。
 const AUTO_IDLE_THRESHOLD_SECONDS = 5 * 60;
-// AUTO 策略下的空闲轮询间隔：每分钟检查一次 idle + 录音状态。
 const AUTO_IDLE_POLL_MS = 60_000;
-// 检查失败时的快速重试：网络一过可能马上能成；不与正常周期混在一起。
-const RETRY_AFTER_FAIL_MS = 30 * 60_000;
 
 interface SchedulerState {
-  started: boolean;
+  policyListenerStarted: boolean;
+  homeActivated: boolean;
   checkTimer: ReturnType<typeof setTimeout> | null;
-  // AUTO 策略命中后挂在这里，等空闲 + 非录音中再 install。
+  inFlight: boolean;
   pendingAutoInstall: { version: string; update: Update } | null;
   autoIdleTimer: ReturnType<typeof setInterval> | null;
 }
 
 const state: SchedulerState = {
-  started: false,
+  policyListenerStarted: false,
+  homeActivated: false,
   checkTimer: null,
+  inFlight: false,
   pendingAutoInstall: null,
   autoIdleTimer: null,
 };
@@ -57,19 +54,22 @@ function clearAutoIdleTimer() {
   }
 }
 
-function scheduleNextCheck(delayMs: number) {
+function scheduleNextCheck() {
   clearCheckTimer();
-  const at = new Date(Date.now() + delayMs).toISOString();
-  void logInfo(
-    `[updater] next check scheduled in ${(delayMs / 60_000).toFixed(1)} min (≈ ${at})`,
-  );
   state.checkTimer = setTimeout(() => {
     void runCheck();
-  }, delayMs);
+  }, CHECK_INTERVAL_MS);
+  void logInfo(
+    `[updater] next check scheduled in ${(CHECK_INTERVAL_MS / 60_000).toFixed(0)} min`,
+  );
 }
 
 async function runCheck(): Promise<void> {
-  const { updatePolicy, updateCheckIntervalHours, skippedUpdateVersion } =
+  if (state.inFlight) {
+    void logInfo("[updater] tick skipped: another check still in flight");
+    return;
+  }
+  const { updatePolicy, skippedUpdateVersion } =
     useSettingsStore.getState().general;
 
   const tickId = new Date().toISOString();
@@ -85,9 +85,10 @@ async function runCheck(): Promise<void> {
     null;
 
   void logInfo(
-    `[updater] tick=${tickId} START policy=${updatePolicy} interval=${updateCheckIntervalHours}h skipped=${skippedUpdateVersion || "none"} queued=${alreadyQueued ?? "none"}`,
+    `[updater] tick=${tickId} START policy=${updatePolicy} skipped=${skippedUpdateVersion || "none"} queued=${alreadyQueued ?? "none"}`,
   );
 
+  state.inFlight = true;
   const startedAt = Date.now();
   let upd: Update | null = null;
   try {
@@ -102,16 +103,17 @@ async function runCheck(): Promise<void> {
     void logWarn(
       `[updater] tick=${tickId} FAIL after ${elapsed}ms: ${String((e as Error)?.message ?? e)}`,
     );
-    const intervalMs = Math.max(1, updateCheckIntervalHours) * 3600_000;
-    scheduleNextCheck(Math.min(RETRY_AFTER_FAIL_MS, intervalMs));
+    state.inFlight = false;
+    scheduleNextCheck();
     return;
   }
 
+  state.inFlight = false;
   const elapsed = Date.now() - startedAt;
 
   if (!upd) {
     void logInfo(`[updater] tick=${tickId} DONE no-update (${elapsed}ms)`);
-    scheduleNextCheck(Math.max(1, updateCheckIntervalHours) * 3600_000);
+    scheduleNextCheck();
     return;
   }
 
@@ -123,7 +125,7 @@ async function runCheck(): Promise<void> {
     void logInfo(
       `[updater] tick=${tickId} suppressed: ${upd.version} matches skippedUpdateVersion`,
     );
-    scheduleNextCheck(Math.max(1, updateCheckIntervalHours) * 3600_000);
+    scheduleNextCheck();
     return;
   }
 
@@ -131,7 +133,7 @@ async function runCheck(): Promise<void> {
     void logInfo(
       `[updater] tick=${tickId} no-op: ${upd.version} already queued`,
     );
-    scheduleNextCheck(Math.max(1, updateCheckIntervalHours) * 3600_000);
+    scheduleNextCheck();
     return;
   }
 
@@ -150,7 +152,7 @@ async function runCheck(): Promise<void> {
       .setPendingUpdate({ version: upd.version, update: upd });
   }
 
-  scheduleNextCheck(Math.max(1, updateCheckIntervalHours) * 3600_000);
+  scheduleNextCheck();
 }
 
 function ensureAutoIdleTimer() {
@@ -233,15 +235,12 @@ async function silentInstall(update: Update, version: string): Promise<void> {
   await invoke("relaunch_app");
 }
 
+// boot 期挂 policy 监听器；不再主动触发首次 check（等 Home 页激活）。
 export function startUpdateScheduler(): void {
-  if (state.started) return;
-  state.started = true;
-  void logInfo("[updater] scheduler started");
-  // 立即跑一次启动检查；后续由 runCheck 自己排下一轮。
-  void runCheck();
+  if (state.policyListenerStarted) return;
+  state.policyListenerStarted = true;
+  void logInfo("[updater] policy listener attached, awaiting home activation");
 
-  // 监听策略变更：从 DISABLED 切回 PROMPT/AUTO 时立刻 kick 一次；切到 DISABLED
-  // 取消已排队的自动安装（已弹 toast 的 pendingUpdate 留给用户自己处理）。
   let prevPolicy = useSettingsStore.getState().general.updatePolicy;
   useSettingsStore.subscribe((s) => {
     const next = s.general.updatePolicy;
@@ -252,8 +251,20 @@ export function startUpdateScheduler(): void {
       clearCheckTimer();
       clearAutoIdleTimer();
       state.pendingAutoInstall = null;
-    } else {
+      return;
+    }
+    // 切回 PROMPT/AUTO：仅当 Home 已经激活过才立刻 kick；否则等 Home 激活。
+    if (state.homeActivated) {
       void runCheck();
     }
   });
+}
+
+// Home 页 mount 即调用：立即检查一次 + 重置 5 分钟轮询。
+// 幂等：重复调用会取消上一轮 timer，正在跑的 check 会被 inFlight 守门跳过。
+export function notifyHomeActivated(): void {
+  state.homeActivated = true;
+  void logInfo("[updater] home activated → running immediate check");
+  clearCheckTimer();
+  void runCheck();
 }

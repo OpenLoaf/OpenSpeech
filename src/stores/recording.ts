@@ -42,6 +42,7 @@ import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { getDomainNamesForPrompt } from "@/lib/domains";
 import { clipHistoryEntry } from "@/lib/historyClip";
+import { buildAsrSystemPrompt } from "@/lib/asrSystemPrompt";
 import { newId } from "@/lib/ids";
 import { cuePlay, cueSetActive } from "@/lib/cue";
 import { getActiveAppName } from "@/lib/activeApp";
@@ -772,11 +773,23 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
             "duration=",
             rec.duration_ms,
           );
+          const fileSystemPrompt = buildAsrSystemPrompt({
+            items: useHistoryStore.getState().items,
+            targetApp: currentSessionTargetApp,
+          });
+          console.info(
+            `[stt] file transcribe system_prompt: ${
+              fileSystemPrompt
+                ? `len=${fileSystemPrompt.length} chars`
+                : "<none>"
+            }`,
+          );
           const r = await transcribeRecordingFile({
             audioPath: rec.audio_path,
             durationMs: rec.duration_ms,
             lang: currentDictationLang(),
             provider: buildProviderRef(),
+            systemPrompt: fileSystemPrompt,
           });
           text = r.text;
           resolvedProviderKindForCurrentSession = r.providerKind;
@@ -926,8 +939,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     let historyEntries: string[] | undefined;
     if (aiSettings.includeHistory) {
       const items = useHistoryStore.getState().items;
+      // 当前会话的目标应用已知时，仅取在同一应用里发生的历史，避免把"在 VSCode 里说的代码段"
+      // 当成"在微信里说话"的上下文。target_app 拿不到（null）时不过滤，保留原行为。
+      const currentTarget = currentSessionTargetApp;
       const picked = items
         .filter((it) => it.status === "success")
+        .filter((it) => !currentTarget || it.target_app === currentTarget)
         .slice(0, HISTORY_TURNS)
         .reverse();
       const minutesAgoLabel = i18n.t("ai.minutes_ago", {
@@ -2512,11 +2529,23 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
       try {
         let text = "";
         try {
+          const debugSystemPrompt = buildAsrSystemPrompt({
+            items: useHistoryStore.getState().items,
+            targetApp: currentSessionTargetApp,
+          });
+          console.info(
+            `[debug] file transcribe system_prompt: ${
+              debugSystemPrompt
+                ? `len=${debugSystemPrompt.length} chars`
+                : "<none>"
+            }`,
+          );
           const r = await transcribeRecordingFile({
             audioPath,
             durationMs,
             lang: currentDictationLang(),
             provider: buildProviderRef(),
+            systemPrompt: debugSystemPrompt,
           });
           text = r.text ?? "";
         } catch (e) {
@@ -2559,8 +2588,10 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
         let historyEntries: string[] | undefined;
         if (aiSettings.includeHistory) {
           const items = useHistoryStore.getState().items;
+          const currentTarget = currentSessionTargetApp;
           const picked = items
             .filter((it) => it.status === "success")
+            .filter((it) => !currentTarget || it.target_app === currentTarget)
             .slice(0, 5)
             .reverse();
           const minutesAgoLabel = i18n.t("ai.minutes_ago", {

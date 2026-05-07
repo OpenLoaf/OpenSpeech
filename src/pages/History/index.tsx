@@ -1054,11 +1054,26 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
       });
       return;
     }
+    const sections = [
+      "=== OpenSpeech Debug Info ===",
+      "",
+      "[Audio path] (relative to app_data_dir)",
+      item.audio_path ?? "(no audio file)",
+      "",
+      "[Raw transcript]",
+      item.text || "(empty)",
+      "",
+      "[AI refined]",
+      item.refined_text ?? "(not enabled)",
+      "",
+      "[Request snapshot]",
+      item.debug_payload,
+    ];
     try {
-      await writeText(item.debug_payload);
+      await writeText(sections.join("\n"));
       toast.success(t("pages:history.toast.copy_debug_success"));
     } catch (e) {
-      console.error("[history] copy debug prompt failed:", e);
+      console.error("[history] copy debug info failed:", e);
       toast.error(t("pages:history.toast.copy_debug_failed"));
     }
   };

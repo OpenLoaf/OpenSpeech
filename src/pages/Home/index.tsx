@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { PulsarGrid } from "@/components/PulsarGrid";
@@ -7,6 +7,7 @@ import { useHistoryStore } from "@/stores/history";
 import { countWords, TYPING_BASELINE_WPM } from "@/lib/wordCount";
 import { useStatsStore } from "@/stores/stats";
 import { useUIStore, type StatsMetric } from "@/stores/ui";
+import { notifyHomeActivated } from "@/lib/updateScheduler";
 
 type StatsView = "today" | "all";
 
@@ -83,6 +84,11 @@ export default function HomePage() {
   const cachedWords = useStatsStore((s) => s.totalWords);
   const openStats = useUIStore((s) => s.openStats);
   const [view, setView] = useState<StatsView>("all");
+
+  // Home 页激活即触发一次更新检查并启动 5 分钟轮询；scheduler 内部幂等。
+  useEffect(() => {
+    notifyHomeActivated();
+  }, []);
 
   type CardMetric = Exclude<StatsMetric, "sessions">;
   const cardLabels: Record<CardMetric, string> = {

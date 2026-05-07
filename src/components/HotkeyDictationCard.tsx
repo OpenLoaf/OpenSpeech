@@ -274,6 +274,7 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
               <HotkeyPreview
                 fillHeight
                 hideHeader
+                swapToActivatorWhenUnfocused
                 bindingIds={[editBindingId]}
                 trailing={
                   <div className="flex items-center gap-1.5">

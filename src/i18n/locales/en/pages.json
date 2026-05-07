@@ -248,7 +248,7 @@
       "view_translation": "Translation",
       "view_raw": "Raw text",
       "view_details": "View details",
-      "copy_debug": "Copy debug request JSON"
+      "copy_debug": "Copy debug info"
     },
     "detail": {
       "title": "Record details",
@@ -289,8 +289,8 @@
     "toast": {
       "copy_success": "Copied to clipboard",
       "copy_failed": "Copy failed",
-      "copy_debug_success": "Debug request JSON copied",
-      "copy_debug_failed": "Failed to copy debug request JSON",
+      "copy_debug_success": "Debug info copied",
+      "copy_debug_failed": "Failed to copy debug info",
       "copy_debug_missing": "No request snapshot captured for this record (likely a release-build entry or a pre-dispatch failure)",
       "retry_success": "Retry succeeded",
       "retry_failed": "Retry failed",

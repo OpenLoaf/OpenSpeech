@@ -179,7 +179,16 @@ export default function OverlayPage() {
   // 翻译激活时主窗发持续型 toast，录音结束 dismiss。pill 内宽度让回波形使用，
   // bar count 统一 20 不再按是否翻译模式区分。
   const canFinalize = isRecording || isPreparing;
-  const canCancel = isRecording || isPreparing || isError;
+  // 录音结束后的 transcribing / injecting / translating 同样允许 X 取消：
+  // simulateCancel 在这些态走 discardRecording → 丢弃 STT 结果 + 中断后续注入，
+  // 用户不会被一段已经反悔的转写强行注入光标。
+  const canCancel =
+    isRecording ||
+    isPreparing ||
+    isTranscribing ||
+    isInjecting ||
+    isTranslating ||
+    isError;
 
   const toastAccent =
     state.toast?.kind === "info"

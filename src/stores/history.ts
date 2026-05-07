@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { deleteRecordingFile } from "@/lib/audio";
 import { transcribeRecordingFile } from "@/lib/stt";
+import { buildAsrSystemPrompt } from "@/lib/asrSystemPrompt";
 import { buildProviderRef } from "@/lib/dictation-provider-ref";
 import { resolveDictationLang } from "@/lib/dictation-lang";
 import { refineTextViaChatStream } from "@/lib/ai-refine";
@@ -384,11 +385,22 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     markRetry(true);
     try {
       const settings = useSettingsStore.getState();
+      const retrySystemPrompt = buildAsrSystemPrompt({
+        items: get().items,
+        targetApp: target.target_app ?? null,
+        excludeHistoryId: id,
+      });
+      console.info(
+        `[history] retry transcribe system_prompt: ${
+          retrySystemPrompt ? `len=${retrySystemPrompt.length} chars` : "<none>"
+        }`,
+      );
       const r = await transcribeRecordingFile({
         audioPath: target.audio_path,
         durationMs: target.duration_ms,
         lang: resolveDictationLang(settings.dictation.lang, settings.general.interfaceLang),
         provider: buildProviderRef(),
+        systemPrompt: retrySystemPrompt,
       });
       const text = r.text ?? "";
       // retry 永远走 SaaS REST 文件转写，与 recording.ts degrade 路径一致。
@@ -418,8 +430,12 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
             ns: "settings",
             defaultValue: "minutes ago",
           });
+          // retry 当前这条历史所在的目标应用即作为"当前会话"应用：相同 app 的历史才进上下文。
+          // target.target_app 为空（老记录或 OS 没拿到）时不过滤，避免一刀切清空上下文。
+          const currentTarget = target.target_app ?? null;
           const lines = get()
             .items.filter((it) => it.id !== id && it.status === "success")
+            .filter((it) => !currentTarget || it.target_app === currentTarget)
             .slice(0, 5)
             .reverse()
             .map((it) => {

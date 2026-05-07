@@ -72,12 +72,15 @@ export async function transcribeRecordingFile(args: {
   durationMs: number;
   lang?: string;
   provider?: ProviderRef;
+  /** OL-TL-003 的可选 system_prompt（仅 SaaS 短音频路径透传，BYOK / asrLong 忽略并打 warn）。 */
+  systemPrompt?: string;
 }): Promise<TranscribeFileResult> {
   const call = invoke<TranscribeFileResult>("transcribe_recording_file", {
     audioPath: args.audioPath,
     durationMs: args.durationMs,
     lang: args.lang,
     provider: args.provider,
+    systemPrompt: args.systemPrompt,
   });
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_, reject) => {
