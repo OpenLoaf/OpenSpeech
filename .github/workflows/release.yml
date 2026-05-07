@@ -152,6 +152,24 @@ jobs:
             libfuse2 \
             xdg-utils
 
+      # Tauri bundler 内置使用的 linuxdeploy 来自 tauri-apps/binary-releases 镜像，
+      # 该镜像 2024-07-24 后未更新；2024 → 2026 间 Linux 工具链引入 `.relr.dyn`
+      # ELF section（type 0x13），老 linuxdeploy strip 时不识别 → "failed to run linuxdeploy"。
+      # 这里预先把上游最新 linuxdeploy（continuous tag）放到 Tauri 期望的缓存路径
+      # `~/.cache/tauri/linuxdeploy-<arch>.AppImage`，Tauri 检测到 cached 即跳过下载，
+      # 直接用上游最新版（已修 `.relr.dyn` 兼容性）。
+      # 等 Tauri 上游 PR #12491 (Truly portable appimage) 合并后可移除。
+      - name: Pre-populate latest linuxdeploy (Linux)
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          set -euxo pipefail
+          arch="$(uname -m)"
+          mkdir -p "$HOME/.cache/tauri"
+          curl -fsSL "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${arch}.AppImage" \
+            -o "$HOME/.cache/tauri/linuxdeploy-${arch}.AppImage"
+          chmod +x "$HOME/.cache/tauri/linuxdeploy-${arch}.AppImage"
+          ls -la "$HOME/.cache/tauri/"
+
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
@@ -176,6 +194,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # 新版 linuxdeploy 自身是 AppImage 格式，启动需 FUSE；GitHub-hosted runner 上
+          # FUSE 不一定可用，让它先 extract 再跑。对非 Linux 平台无害。
+          APPIMAGE_EXTRACT_AND_RUN: '1'
         # tauri.conf.json 默认 `createUpdaterArtifacts: false`（让本地 / 协作者裸跑 build 不需要 updater 私钥）；
         # 发版构建在这里临时 override 打开，CI 的 TAURI_SIGNING_PRIVATE_KEY 已注入。
         run: pnpm tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
