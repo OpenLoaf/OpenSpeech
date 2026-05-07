@@ -1,0 +1,14 @@
+[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}} {{exec_arg}}
+Icon={{icon}}
+Name={{name}}
+Terminal={{terminal}}
+Type=Application
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}
+Keywords=speech;voice;dictation;dictate;transcribe;transcription;asr;listen;openspeech;语音;听写;语音输入;语音识别;转写;口述;录音;
