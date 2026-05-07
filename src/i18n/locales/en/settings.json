@@ -175,7 +175,8 @@
     "section_history": "Context",
     "include_history": "Send the last 5 dictations as context",
     "include_history_hint": "Recent transcripts help the model carry over tone and terminology.",
-    "minutes_ago": "minutes ago"
+    "minutes_ago": "minutes ago",
+    "history_truncated": "+{{count}} more words"
   },
   "translate_target_lang": {
     "en": "English",

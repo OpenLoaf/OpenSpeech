@@ -41,6 +41,7 @@ import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
 import { getDomainNamesForPrompt } from "@/lib/domains";
+import { clipHistoryEntry } from "@/lib/historyClip";
 import { newId } from "@/lib/ids";
 import { cuePlay, cueSetActive } from "@/lib/cue";
 import { getActiveAppName } from "@/lib/activeApp";
@@ -934,8 +935,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         .map((it) => {
           const content = (it.refined_text ?? it.text ?? "").trim();
           if (!content) return "";
+          const clipped = clipHistoryEntry(content);
           const mins = Math.max(1, Math.floor((requestTimeMs - it.created_at) / 60000));
-          return `[${mins} ${minutesAgoLabel}] ${content}`;
+          return `[${mins} ${minutesAgoLabel}] ${clipped}`;
         })
         .filter((s) => s.length > 0);
       if (lines.length > 0) historyEntries = lines;
@@ -2566,8 +2568,9 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
             .map((it) => {
               const content = (it.refined_text ?? it.text ?? "").trim();
               if (!content) return "";
+              const clipped = clipHistoryEntry(content);
               const mins = Math.max(1, Math.floor((requestTimeMs - it.created_at) / 60000));
-              return `[${mins} ${minutesAgoLabel}] ${content}`;
+              return `[${mins} ${minutesAgoLabel}] ${clipped}`;
             })
             .filter((s) => s.length > 0);
           if (lines.length > 0) historyEntries = lines;

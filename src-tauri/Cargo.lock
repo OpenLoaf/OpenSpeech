@@ -4267,7 +4267,7 @@ dependencies = [
 
 [[package]]
 name = "openspeech"
-version = "0.2.30-beta.15"
+version = "0.2.30-beta.16"
 dependencies = [
  "active-win-pos-rs",
  "async-openai",

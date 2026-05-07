@@ -175,7 +175,8 @@
     "section_history": "上下文",
     "include_history": "把最近 5 條歷史一同送出",
     "include_history_hint": "把最近的 transcript 作為參考上下文，協助模型沿用一致的語氣與術語。",
-    "minutes_ago": "分鐘前"
+    "minutes_ago": "分鐘前",
+    "history_truncated": "省略 {{count}} 字"
   },
   "translate_target_lang": {
     "en": "English",
