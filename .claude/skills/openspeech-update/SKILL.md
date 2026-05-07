@@ -1,16 +1,16 @@
 ---
-name: openspeech-release
+name: openspeech-update
 description: >
-  OpenSpeech 发版执行总入口。当用户在 OpenSpeech 仓库说「发版 / release / 发布新版本 /
-  打个新包 / 触发自动更新 / 升级版本号 / bump / 提交并发版 / patch / minor / major /
-  推 tag / 让用户能收到更新」等任意一种意图时，**都触发本 skill**。涵盖完整流程：
-  提交累计改动 → 写 changelog → bump 版本号 → 推 tag → 监控 CI → publish draft Release，
-  并讲清每步会动哪些文件、哪些步骤会真的影响生产（终端用户）。当用户说「让线上的人能更新到」「让
-  桌面端弹出升级提示」「触发 OTA」也走这个 skill。不要凭印象 push tag——本 skill 列出的检查
-  与确认动作必须按顺序跑完。
+  OpenSpeech 版本更新执行总入口（即 GitHub Release / OTA 推送链路）。当用户在 OpenSpeech 仓库说
+  「自动更新 / 推更新 / 给用户推更新 / 一键更新 / 让用户能收到更新 / 让线上的人能更新到 /
+  让桌面端弹出升级提示 / 触发 OTA / 触发自动更新 / 发版 / release / 发布新版本 / 打个新包 /
+  升级版本号 / bump / 提交并发版 / patch / minor / major / 推 tag」等任意一种意图时，**都触发本
+  skill**。涵盖完整流程：提交累计改动 → 写 changelog → bump 版本号 → 推 tag → 监控 CI →
+  publish draft Release，并讲清每步会动哪些文件、哪些步骤会真的影响生产（终端用户）。
+  不要凭印象 push tag——本 skill 列出的检查与确认动作必须按顺序跑完。
 ---
 
-# OpenSpeech 发版
+# OpenSpeech 版本更新
 
 > **本文件是导航 + 标准 stable 流程的可执行指引。** 特殊场景（beta、跳 beta、R2/CDN 链路、撤回等）
 > 进 §二 决策表，按需读对应 `references/*.md`，不要把所有内容拉进上下文。
