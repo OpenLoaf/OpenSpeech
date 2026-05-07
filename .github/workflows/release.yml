@@ -197,14 +197,9 @@ jobs:
           # 新版 linuxdeploy 自身是 AppImage 格式，启动需 FUSE；GitHub-hosted runner 上
           # FUSE 不一定可用，让它先 extract 再跑。对非 Linux 平台无害。
           APPIMAGE_EXTRACT_AND_RUN: '1'
-          # 临时 debug：让 tauri-bundler 把 linuxdeploy stderr 透出，便于诊断 AppImage 失败。
-          # 拿到根因 fix 后请去掉。
-          RUST_LOG: 'tauri_bundler=trace,debug'
         # tauri.conf.json 默认 `createUpdaterArtifacts: false`（让本地 / 协作者裸跑 build 不需要 updater 私钥）；
         # 发版构建在这里临时 override 打开，CI 的 TAURI_SIGNING_PRIVATE_KEY 已注入。
-        # `--verbose` 临时打开：让 Tauri 把 linuxdeploy 子进程的 stderr 透出（FabianLars 推荐的 debug 路径）；
-        # 拿到根因 fix 后请去掉，避免 log 巨大 + 已知副作用（产物可能 77MB / 启动白屏）。
-        run: pnpm tauri build --verbose ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+        run: pnpm tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       # macOS 上跑 appdmg 自打 DMG（绕开 Tauri 内置 AppleScript 路径）。.app 已经被 Tauri CLI
       # codesign + notarize + staple 了；DMG 是外壳，里面装的 .app 是已被 Apple 认证的，
