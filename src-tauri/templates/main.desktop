@@ -6,7 +6,7 @@ Comment={{comment}}
 Exec={{exec}} {{exec_arg}}
 Icon={{icon}}
 Name={{name}}
-Terminal={{terminal}}
+Terminal=false
 Type=Application
 {{#if mime_type}}
 MimeType={{mime_type}}
