@@ -1,4 +1,11 @@
 {
+  "hotkey_blocked": {
+    "title": "Meeting recording in progress",
+    "description": "{{action}} is paused — stop the meeting recording first.",
+    "action_dictate": "Dictation",
+    "action_translate": "Translation",
+    "action_ask_ai": "Ask AI"
+  },
   "auth": {
     "login_timeout": "Login timed out. Please try again.",
     "login_failed": "Login failed. Please try again.",
@@ -59,9 +66,9 @@
   "meetings": {
     "go_to_settings": "Open settings",
     "meeting_provider_unsupported": "Channel doesn't support meeting transcription",
-    "meeting_provider_unsupported_hint": "Open Settings → Dictation and switch to Custom → Tencent.",
+    "meeting_provider_unsupported_hint": "Open Settings → Dictation and switch to SaaS or Custom → Tencent.",
     "meeting_provider_not_configured": "Dictation channel not configured",
-    "meeting_provider_not_configured_hint": "Open Settings → Dictation and add a Custom → Tencent provider.",
+    "meeting_provider_not_configured_hint": "Open Settings → Dictation and pick SaaS or add a Custom → Tencent provider.",
     "network_exit": "Connection lost",
     "network_exit_hint": "The realtime ASR connection was dropped. Check your network and try again.",
     "idle_timeout": "Disconnected due to silence",
@@ -78,6 +85,12 @@
     "insufficient_funds_hint": "Top up the Tencent ASR account or switch to another provider.",
     "engine_not_authorized": "Tencent account hasn't enabled engine 16k_zh_en_speaker",
     "engine_not_authorized_hint": "\"Realtime Speaker Diarization\" is a separate Tencent SKU — the \"Realtime ASR Large Model\" pack does NOT cover it. Enable this engine via the Tencent Cloud ASR console (or open a support ticket):",
-    "open_tencent_console": "Open"
+    "open_tencent_console": "Open",
+    "unauthenticated_saas": "SaaS session expired",
+    "unauthenticated_saas_hint": "Please sign in to OpenSpeech again before starting the meeting.",
+    "insufficient_funds_saas": "SaaS credits exhausted",
+    "insufficient_funds_saas_hint": "Top up your account in the user portal or switch to Custom → Tencent.",
+    "not_authenticated": "Not signed in",
+    "not_authenticated_hint": "The SaaS channel requires sign-in. Sign in to OpenSpeech first, or switch to Custom → Tencent."
   }
 }

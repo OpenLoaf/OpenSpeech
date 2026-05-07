@@ -632,9 +632,13 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
 
             for (id, id_str) in newly_pressed_ids {
                 log::warn!("[modifier_only] pressed: {id_str} id={id:?}");
-                // 与 combo 路径一致：按下立即 show overlay 消除感知延迟
+                // 与 combo 路径一致：按下立即 show overlay 消除感知延迟（会议录制
+                // 中也照弹，前端 FSM 没进 active 会自动 hide，配合 toast 提示）。
                 if let Err(e) = crate::overlay::show(&app_clone) {
                     log::warn!("[overlay] show failed: {e:?}");
+                }
+                if super::maybe_block_for_meeting(&app_clone, id, "pressed") {
+                    continue;
                 }
                 crate::cue::play_start();
                 let payload = HotkeyEventPayload {
@@ -647,6 +651,9 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
             }
             for (id, id_str) in newly_released_ids {
                 log::warn!("[modifier_only] released: {id_str} id={id:?}");
+                if super::maybe_block_for_meeting(&app_clone, id, "released") {
+                    continue;
+                }
                 let payload = HotkeyEventPayload {
                     id,
                     phase: "released",

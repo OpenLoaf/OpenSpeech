@@ -13,16 +13,9 @@ import {
 import i18next from "i18next";
 import {
   useSettingsStore,
-  DEFAULT_AI_SYSTEM_PROMPTS,
-  DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS,
-  DEFAULT_AI_POLISH_SYSTEM_PROMPTS,
-  DEFAULT_AI_MEETING_SUMMARY_PROMPTS,
-  DEFAULT_POLISH_SCENARIOS,
   hasUnverifiedActiveDictation,
   hasUnverifiedActiveAiRefine,
-  type PolishScenario,
 } from "@/stores/settings";
-import { resolveLang } from "@/i18n";
 import { useUIStore } from "@/stores/ui";
 import {
   listInputDevices,
@@ -384,22 +377,6 @@ function GeneralTab() {
           }}
         />
       </Row>
-      {detectPlatform() === "macos" ? (
-        <Row
-          label={t("general.show_dock")}
-          hint={t("general.show_dock_hint")}
-        >
-          <Switch
-            checked={general.showDockIcon}
-            onChange={(v) => {
-              void setGeneral("showDockIcon", v);
-              void invoke("sync_dock_icon").catch((e) =>
-                console.warn("[dock] sync failed:", e),
-              );
-            }}
-          />
-        </Row>
-      ) : null}
       <Row
         label={t("general.close_to_tray")}
         hint={t("general.close_to_tray_hint")}
@@ -883,17 +860,6 @@ function AiTab() {
   const updateAiProvider = useSettingsStore((s) => s.updateAiProvider);
   const removeAiProvider = useSettingsStore((s) => s.removeAiProvider);
   const setActiveAiProvider = useSettingsStore((s) => s.setActiveAiProvider);
-  const setAiSystemPrompt = useSettingsStore((s) => s.setAiSystemPrompt);
-  const setAiTranslationSystemPrompt = useSettingsStore(
-    (s) => s.setAiTranslationSystemPrompt,
-  );
-  const setAiPolishSystemPrompt = useSettingsStore(
-    (s) => s.setAiPolishSystemPrompt,
-  );
-  const setAiMeetingSummaryPrompt = useSettingsStore(
-    (s) => s.setAiMeetingSummaryPrompt,
-  );
-  const setPolishScenarios = useSettingsStore((s) => s.setPolishScenarios);
   const setAiIncludeHistory = useSettingsStore((s) => s.setAiIncludeHistory);
 
   return (
@@ -964,16 +930,13 @@ function AiTab() {
       )}
 
       <AiSystemPromptSection
-        refineCustom={aiRefine.customSystemPrompt}
-        onRefineChange={(v) => void setAiSystemPrompt(v)}
-        translationCustom={aiRefine.customTranslationSystemPrompt}
-        onTranslationChange={(v) => void setAiTranslationSystemPrompt(v)}
-        polishCustom={aiRefine.customPolishSystemPrompt}
-        onPolishChange={(v) => void setAiPolishSystemPrompt(v)}
-        polishScenarios={aiRefine.customPolishScenarios}
-        onPolishScenariosChange={(v) => void setPolishScenarios(v)}
-        meetingSummaryCustom={aiRefine.customMeetingSummaryPrompt}
-        onMeetingSummaryChange={(v) => void setAiMeetingSummaryPrompt(v)}
+        refineCustom={aiRefine.customSystemPrompt !== null}
+        translationCustom={aiRefine.customTranslationSystemPrompt !== null}
+        polishCustom={
+          aiRefine.customPolishSystemPrompt !== null ||
+          aiRefine.customPolishScenarios !== null
+        }
+        meetingCustom={aiRefine.customMeetingSummaryPrompt !== null}
       />
 
       <SectionTitle>{t("ai.section_history")}</SectionTitle>
@@ -990,32 +953,20 @@ function AiTab() {
   );
 }
 
-type PromptKind = "refine" | "translate" | "polish" | "meeting";
-
-function previewLine(value: string, max = 64): string {
-  const first = value
-    .split("\n")
-    .map((s) => s.trim())
-    .find(Boolean) ?? "";
-  return first.length > max ? `${first.slice(0, max)}…` : first;
-}
-
 function PromptRow({
   label,
-  hint,
+  description,
   isCustom,
-  preview,
   onEdit,
 }: {
   label: string;
-  hint?: string;
+  description: string;
   isCustom: boolean;
-  preview: string;
   onEdit: () => void;
 }) {
   const { t } = useTranslation("settings");
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-te-gray/30 py-3 last:border-b-0">
+    <div className="flex items-center justify-between gap-4 border-b border-te-gray/30 py-4 last:border-b-0">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-sans text-sm text-te-fg">{label}</span>
@@ -1032,13 +983,8 @@ function PromptRow({
               : t("ai.prompt_status_default")}
           </span>
         </div>
-        {hint ? (
-          <div className="mt-1 font-sans text-xs text-te-light-gray/80">
-            {hint}
-          </div>
-        ) : null}
-        <div className="mt-1 truncate font-mono text-xs text-te-light-gray/80">
-          {preview}
+        <div className="mt-1 font-sans text-xs leading-relaxed text-te-light-gray/80">
+          {description}
         </div>
       </div>
       <button
@@ -1054,41 +1000,17 @@ function PromptRow({
 
 function AiSystemPromptSection({
   refineCustom,
-  onRefineChange,
   translationCustom,
-  onTranslationChange,
   polishCustom,
-  onPolishChange,
-  polishScenarios,
-  onPolishScenariosChange,
-  meetingSummaryCustom,
-  onMeetingSummaryChange,
+  meetingCustom,
 }: {
-  refineCustom: string | null;
-  onRefineChange: (value: string | null) => void;
-  translationCustom: string | null;
-  onTranslationChange: (value: string | null) => void;
-  polishCustom: string | null;
-  onPolishChange: (value: string | null) => void;
-  polishScenarios: PolishScenario[] | null;
-  onPolishScenariosChange: (value: PolishScenario[] | null) => void;
-  meetingSummaryCustom: string | null;
-  onMeetingSummaryChange: (value: string | null) => void;
+  refineCustom: boolean;
+  translationCustom: boolean;
+  polishCustom: boolean;
+  meetingCustom: boolean;
 }) {
   const { t } = useTranslation("settings");
-  const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
-  const lang = resolveLang(interfaceLang);
-  const [openKind, setOpenKind] = useState<PromptKind | null>(null);
-
-  const refineDefault = DEFAULT_AI_SYSTEM_PROMPTS[lang];
-  const translateDefault = DEFAULT_AI_TRANSLATION_SYSTEM_PROMPTS[lang];
-  const polishDefault = DEFAULT_AI_POLISH_SYSTEM_PROMPTS[lang];
-  const meetingDefault = DEFAULT_AI_MEETING_SUMMARY_PROMPTS[lang];
-
-  const refineValue = refineCustom ?? refineDefault;
-  const translateValue = translationCustom ?? translateDefault;
-  const polishValue = polishCustom ?? polishDefault;
-  const meetingValue = meetingSummaryCustom ?? meetingDefault;
+  const openAiPromptDialog = useUIStore((s) => s.openAiPromptDialog);
 
   return (
     <>
@@ -1099,323 +1021,29 @@ function AiSystemPromptSection({
 
       <PromptRow
         label={t("ai.prompt_tab_refine")}
-        isCustom={refineCustom !== null}
-        preview={previewLine(refineValue)}
-        onEdit={() => setOpenKind("refine")}
+        description={t("ai.prompt_desc_refine")}
+        isCustom={refineCustom}
+        onEdit={() => openAiPromptDialog("refine")}
       />
       <PromptRow
         label={t("ai.prompt_tab_translate")}
-        isCustom={translationCustom !== null}
-        preview={previewLine(translateValue)}
-        onEdit={() => setOpenKind("translate")}
+        description={t("ai.prompt_desc_translate")}
+        isCustom={translationCustom}
+        onEdit={() => openAiPromptDialog("translate")}
       />
       <PromptRow
         label={t("ai.prompt_tab_polish")}
-        hint={t("ai.polish_row_hint")}
-        isCustom={polishCustom !== null || polishScenarios !== null}
-        preview={previewLine(polishValue)}
-        onEdit={() => setOpenKind("polish")}
+        description={t("ai.prompt_desc_polish")}
+        isCustom={polishCustom}
+        onEdit={() => openAiPromptDialog("polish")}
       />
       <PromptRow
         label={t("ai.prompt_tab_meeting")}
-        isCustom={meetingSummaryCustom !== null}
-        preview={previewLine(meetingValue)}
-        onEdit={() => setOpenKind("meeting")}
-      />
-
-      <PromptEditDialog
-        open={openKind === "refine"}
-        onOpenChange={(v) => !v && setOpenKind(null)}
-        title={t("ai.prompt_dialog_title_refine")}
-        value={refineValue}
-        isCustom={refineCustom !== null}
-        onChange={(v) => onRefineChange(v)}
-        onReset={() => onRefineChange(null)}
-      />
-      <PromptEditDialog
-        open={openKind === "translate"}
-        onOpenChange={(v) => !v && setOpenKind(null)}
-        title={t("ai.prompt_dialog_title_translate")}
-        value={translateValue}
-        isCustom={translationCustom !== null}
-        onChange={(v) => onTranslationChange(v)}
-        onReset={() => onTranslationChange(null)}
-      />
-      <PromptEditDialog
-        open={openKind === "meeting"}
-        onOpenChange={(v) => !v && setOpenKind(null)}
-        title={t("ai.prompt_dialog_title_meeting")}
-        value={meetingValue}
-        isCustom={meetingSummaryCustom !== null}
-        onChange={(v) => onMeetingSummaryChange(v)}
-        onReset={() => onMeetingSummaryChange(null)}
-      />
-      <PolishSettingsDialog
-        open={openKind === "polish"}
-        onOpenChange={(v) => !v && setOpenKind(null)}
-        promptValue={polishValue}
-        isPromptCustom={polishCustom !== null}
-        onPromptChange={(v) => onPolishChange(v)}
-        onPromptReset={() => onPolishChange(null)}
-        scenarios={polishScenarios}
-        onScenariosChange={onPolishScenariosChange}
+        description={t("ai.prompt_desc_meeting")}
+        isCustom={meetingCustom}
+        onEdit={() => openAiPromptDialog("meeting")}
       />
     </>
-  );
-}
-
-function PromptEditDialog({
-  open,
-  onOpenChange,
-  title,
-  value,
-  isCustom,
-  onChange,
-  onReset,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  title: string;
-  value: string;
-  isCustom: boolean;
-  onChange: (v: string) => void;
-  onReset: () => void;
-}) {
-  const { t } = useTranslation("settings");
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        showCloseButton={false}
-        className="flex max-h-[88vh] w-[92vw] max-w-3xl flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 sm:max-w-3xl"
-      >
-        <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
-          <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
-            {title}
-          </DialogTitle>
-          <DialogDescription className="font-sans text-xs text-te-light-gray">
-            {t("ai.prompts_hint")}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="overflow-y-auto px-5 py-5">
-          <textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            rows={16}
-            className="w-full resize-y border border-te-gray/40 bg-te-surface p-3 font-mono text-xs text-te-fg outline-none transition-colors focus:border-te-accent"
-          />
-        </div>
-        <div className="flex items-stretch border-t border-te-dialog-border">
-          <button
-            type="button"
-            disabled={!isCustom}
-            onClick={onReset}
-            className="flex-1 border-r border-te-dialog-border px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-light-gray transition-colors enabled:hover:bg-te-surface-hover enabled:hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {t("ai.prompt_reset")}
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="flex-1 bg-te-accent px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
-          >
-            {t("common:actions.done")}
-          </button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function PolishSettingsDialog({
-  open,
-  onOpenChange,
-  promptValue,
-  isPromptCustom,
-  onPromptChange,
-  onPromptReset,
-  scenarios,
-  onScenariosChange,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  promptValue: string;
-  isPromptCustom: boolean;
-  onPromptChange: (v: string) => void;
-  onPromptReset: () => void;
-  scenarios: PolishScenario[] | null;
-  onScenariosChange: (next: PolishScenario[] | null) => void;
-}) {
-  const { t } = useTranslation("settings");
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        showCloseButton={false}
-        className="flex max-h-[88vh] w-[92vw] max-w-3xl flex-col !gap-0 rounded-none border border-te-dialog-border bg-te-dialog-bg p-0 shadow-2xl ring-0 sm:max-w-3xl"
-      >
-        <DialogHeader className="border-b border-te-dialog-border bg-te-surface-hover px-5 py-4">
-          <DialogTitle className="font-mono text-base font-bold tracking-tighter text-te-fg">
-            {t("ai.polish_dialog_title")}
-          </DialogTitle>
-          <DialogDescription className="font-sans text-xs text-te-light-gray">
-            {t("ai.polish_dialog_subtitle")}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="overflow-y-auto px-5 py-5">
-          <div className="mb-3 flex items-end justify-between gap-3">
-            <div>
-              <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
-                {t("ai.polish_dialog_prompt_label")}
-              </div>
-              <div className="mt-1 font-sans text-xs text-te-light-gray/80">
-                {t("ai.prompts_hint")}
-              </div>
-            </div>
-            <button
-              type="button"
-              disabled={!isPromptCustom}
-              onClick={onPromptReset}
-              className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors enabled:hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {t("ai.prompt_reset")}
-            </button>
-          </div>
-          <textarea
-            value={promptValue}
-            onChange={(e) => onPromptChange(e.target.value)}
-            rows={10}
-            className="w-full resize-y border border-te-gray/40 bg-te-surface p-3 font-mono text-xs text-te-fg outline-none transition-colors focus:border-te-accent"
-          />
-
-          <PolishScenariosEditor
-            scenarios={scenarios}
-            onChange={onScenariosChange}
-          />
-        </div>
-        <div className="flex items-stretch border-t border-te-dialog-border">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="flex-1 bg-te-accent px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-te-accent-fg transition-colors hover:bg-te-accent/90"
-          >
-            {t("common:actions.done")}
-          </button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function PolishScenariosEditor({
-  scenarios,
-  onChange,
-}: {
-  scenarios: PolishScenario[] | null;
-  onChange: (next: PolishScenario[] | null) => void;
-}) {
-  const { t } = useTranslation("settings");
-  const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
-  const lang = resolveLang(interfaceLang);
-  const effective = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
-  const isCustom = scenarios !== null;
-
-  const updateAt = (idx: number, patch: Partial<PolishScenario>) => {
-    const base = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
-    const next = base.map((s, i) => (i === idx ? { ...s, ...patch } : s));
-    onChange(next);
-  };
-  const removeAt = (idx: number) => {
-    const base = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
-    const next = base.filter((_, i) => i !== idx);
-    onChange(next);
-  };
-  const addNew = () => {
-    const base = scenarios ?? DEFAULT_POLISH_SCENARIOS[lang];
-    const id =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `scn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const next: PolishScenario[] = [
-      ...base,
-      {
-        id,
-        name: t("ai.polish_scenario_default_name"),
-        instruction: "",
-      },
-    ];
-    onChange(next);
-  };
-
-  return (
-    <div className="mt-8">
-      <div className="mb-3 flex items-end justify-between gap-3">
-        <div>
-          <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray">
-            {t("ai.polish_scenarios_title")}
-          </div>
-          <div className="mt-1 font-sans text-xs text-te-light-gray/80">
-            {t("ai.polish_scenarios_hint")}
-          </div>
-        </div>
-        <button
-          type="button"
-          disabled={!isCustom}
-          onClick={() => onChange(null)}
-          className="font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors enabled:hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {t("ai.prompt_reset")}
-        </button>
-      </div>
-
-      {effective.length === 0 ? (
-        <div className="border border-dashed border-te-gray/40 px-4 py-6 text-center font-mono text-xs text-te-light-gray">
-          {t("ai.polish_scenarios_empty")}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {effective.map((s, idx) => (
-            <div
-              key={s.id}
-              className="flex flex-col gap-2 border border-te-gray/40 bg-te-surface/50 px-3 py-3"
-            >
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={s.name}
-                  onChange={(e) => updateAt(idx, { name: e.target.value })}
-                  className="flex-1 border border-te-gray/40 bg-te-surface px-3 py-1.5 font-mono text-sm text-te-fg outline-none transition-colors focus:border-te-accent"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeAt(idx)}
-                  className="inline-flex items-center gap-1 border border-te-gray/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-te-light-gray transition-colors hover:border-red-400 hover:text-red-400"
-                >
-                  <Trash2 className="size-3" />
-                  {t("ai.polish_scenario_remove")}
-                </button>
-              </div>
-              <textarea
-                value={s.instruction}
-                onChange={(e) => updateAt(idx, { instruction: e.target.value })}
-                rows={3}
-                placeholder={t("ai.polish_scenario_instruction_placeholder") ?? ""}
-                className="w-full resize-y border border-te-gray/40 bg-te-surface p-2 font-mono text-xs text-te-fg outline-none transition-colors focus:border-te-accent"
-              />
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="mt-3">
-        <button
-          type="button"
-          onClick={addNew}
-          className="inline-flex items-center gap-2 border border-te-gray/60 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
-        >
-          <Plus className="size-3.5" />
-          {t("ai.polish_scenario_add")}
-        </button>
-      </div>
-    </div>
   );
 }
 

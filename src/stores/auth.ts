@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useUIStore } from "@/stores/ui";
 
 // 与 Rust 端 PublicUser 对齐（camelCase）。
 export interface AuthUser {
@@ -111,7 +112,10 @@ async function ensureLoginListener() {
     );
   }
 
-  // Rust 端自动 refresh 失败时广播 —— 把本地会话视为过期，UI 切回未登录态。
+  // Rust 端自动 refresh 失败时广播 —— 任何 SaaS 直连链路（ai_refine / stt /
+  // transcribe / feedback）走 `handle_session_expired` 都会发这条事件，前端在此
+  // 一处统一切未登录态 + 弹登录框。openLogin 幂等且非主窗 no-op，重复事件 / 多
+  // 窗口广播都安全；用户主动 logout 不发此事件，所以登出不会反弹登录框。
   if (!authLostUnlisten) {
     authLostUnlisten = await listen("openspeech://openloaf-auth-lost", () => {
       useAuthStore.setState({
@@ -119,6 +123,7 @@ async function ensureLoginListener() {
         profile: null,
         isAuthenticated: false,
       });
+      useUIStore.getState().openLogin();
     });
   }
 

@@ -22,6 +22,7 @@
 | refined_text | AI 优化后的书面化文本；仅 UTTERANCE + `aiRefine.enabled` 时产生。**判断"是否做过 AI 优化"必须看 `segment_mode` + `aiRefine.enabled` 配合**，不能仅凭 `refined_text != null` 反推（refine 失败时也会是 null，会误判） |
 | segment_mode | 该次记录使用的分段模式：`REALTIME` / `UTTERANCE`。schema v4 之前的老记录为 NULL |
 | provider_kind | 实际承载本次转写的供应商通道。命名规则 `<vendor>-<channel>`：`saas-realtime` / `saas-file` / `tencent-realtime` / `tencent-file` / `aliyun-realtime` / `aliyun-file`。schema v4 之前的老记录为 NULL |
+| debug_payload | DEV 构建下捕获的 LLM 请求快照（URL / model / body 的 pretty JSON 字符串；refine + 翻译 phase2 累积成 JSON 数组）。仅在 `import.meta.env.DEV` 路径写入；正式版恒为 NULL。复制 Debug 信息按钮直接读这一列，不再实时拼接。schema v10 之前的老记录为 NULL |
 
 **不保存**：模型请求/响应的完整内容（仅保留最终 `text`）。
 
@@ -33,6 +34,7 @@
 | v2 | 加 `target_app` | 同上 |
 | v3 | 加 `audio_path` / `asr_source` / `ai_model` | 同上 |
 | v4 | 加 `segment_mode` / `provider_kind` | `migrate_to_v4`（追加 PR-8） |
+| v10 | 加 `debug_payload` | `src-tauri/src/db/mod.rs` |
 
 老记录这两列回填策略：保持 NULL，UI 详情页按 i18n key `history.detail.{segment_mode,provider_kind}.<value>` 翻译，命中 NULL 时显示 "—"。
 

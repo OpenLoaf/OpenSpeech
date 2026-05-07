@@ -121,28 +121,7 @@ export const AudioWavePlayer = forwardRef<AudioWavePlayerHandle, Props>(
     const showPause = isPlaying;
 
     return (
-      <div className="flex shrink-0 items-center gap-3 border-t border-te-gray/40 bg-te-bg px-4 py-3">
-        <button
-          type="button"
-          onClick={onPlayPause}
-          disabled={!isReady}
-          className="inline-flex size-9 shrink-0 items-center justify-center border border-te-gray/50 text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-te-gray/50 disabled:hover:text-te-fg"
-          title={
-            showPause ? t("pages:history.row.pause") : t("pages:history.row.play")
-          }
-          aria-label={
-            showPause ? t("pages:history.row.pause") : t("pages:history.row.play")
-          }
-        >
-          {!blobUrl && !loadError ? (
-            <Loader2 className="size-3.5 animate-spin" strokeWidth={2.5} />
-          ) : showPause ? (
-            <Pause className="size-3.5" strokeWidth={2.5} />
-          ) : (
-            <Play className="size-3.5" strokeWidth={2.5} />
-          )}
-        </button>
-
+      <div className="flex shrink-0 items-center gap-3 border-t border-te-gray/40 bg-te-bg px-4 pt-5 pb-3">
         <span className="w-10 font-mono text-[11px] tabular-nums text-te-light-gray">
           {formatClockTime(currentTime)}
         </span>
@@ -159,6 +138,30 @@ export const AudioWavePlayer = forwardRef<AudioWavePlayerHandle, Props>(
         <span className="w-10 text-right font-mono text-[11px] tabular-nums text-te-light-gray">
           {formatClockTime(duration)}
         </span>
+
+        <button
+          type="button"
+          onClick={onPlayPause}
+          disabled={!isReady}
+          className="inline-flex h-9 shrink-0 items-center gap-2 border border-te-gray/50 px-3 font-mono text-[11px] uppercase tracking-[0.2em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-te-gray/50 disabled:hover:text-te-fg"
+          title={
+            showPause ? t("pages:history.player.pause") : t("pages:history.player.play")
+          }
+          aria-label={
+            showPause ? t("pages:history.player.pause") : t("pages:history.player.play")
+          }
+        >
+          {!blobUrl && !loadError ? (
+            <Loader2 className="size-3.5 animate-spin" strokeWidth={2.5} />
+          ) : showPause ? (
+            <Pause className="size-3.5" strokeWidth={2.5} />
+          ) : (
+            <Play className="size-3.5" strokeWidth={2.5} />
+          )}
+          <span>
+            {showPause ? t("pages:history.player.pause") : t("pages:history.player.play")}
+          </span>
+        </button>
       </div>
     );
   },

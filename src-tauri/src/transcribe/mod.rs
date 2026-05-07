@@ -3,8 +3,9 @@
 //
 // 接口分流（按时长自动选择，与前端 history 重试流程对接）：
 // - ≤ 5 分钟 ⇒ `OL-TL-003` (asrShort)：同步 HTTP，base64 直传，秒级返回。
-// - > 5 分钟 ⇒ `OL-TL-004` (asrLong)：上游只接受公网 URL，本地音频走不通；
-//   暂不支持，返回明确错误让 UI 提示用户。后续若加上传服务再接通查询轮询路径。
+// - > 5 分钟 ⇒ `OL-TL-004` (asrLong)：base64 直传，服务端自动上传到 DashScope
+//   免费 48h 临时 OSS；submit 拿 task_id 后用同一查询接口轮询。history 重试若
+//   已有公网 URL 则直接传 URL。
 //
 // 路径安全：复用 audio 模块的统一校验——只接受
 // `recordings/<yyyy-MM-dd>/<id>.ogg`（新版）或 `recordings/<id>.{ogg,wav}`
@@ -83,7 +84,6 @@ fn media_type_for(audio_path: &str) -> &'static str {
     }
 }
 
-// 短文件（OL-TL-003）仍接受 Option<String>；长文件（OL-TL-004）0.3.13 起改成强类型枚举。
 fn parse_lang_short(lang: Option<&str>) -> Option<String> {
     let s = lang?.trim().to_ascii_lowercase();
     if s.is_empty() || s == "auto" {
@@ -545,13 +545,6 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
 ) -> Result<TranscribeFileResult, String> {
     let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
 
-    if duration_ms > SHORT_AUDIO_LIMIT_MS {
-        return Err(
-            "long audio retry needs a public URL; local recording cannot be uploaded yet (>5min)"
-                .into(),
-        );
-    }
-
     // B：发请求前先确保 access_token 还没过期。唤醒场景必备——睡眠期间 refresh 定时器
     // 没机会跑，醒来第一次调如果不预检就一定 401，会把用户当登录失效踢出去。
     if !ol.ensure_access_token_fresh().await {
@@ -563,6 +556,17 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     let bytes = read_recording_bytes(&app, &audio_path)?;
     let b64 = B64.encode(&bytes);
     let media_type = media_type_for(&audio_path);
+
+    if duration_ms > SHORT_AUDIO_LIMIT_MS {
+        let lang_long = parse_lang_long(lang.as_deref());
+        return tauri::async_runtime::spawn_blocking(move || {
+            let input = AsrLongOlTl004Input::from_base64(b64, Some(media_type));
+            run_asr_long_blocking(app, input, lang_long, provider_kind)
+        })
+        .await
+        .map_err(|e| format!("transcribe join: {e}"))?;
+    }
+
     let lang_short = parse_lang_short(lang.as_deref());
 
     // 第一次尝试。spawn_blocking 包同步 SDK 调用，避免阻塞 tauri 主异步执行器。
@@ -626,7 +630,7 @@ async fn run_asr_short_blocking(
         let input = AsrShortOlTl003Input::from_base64(b64_owned, media_type);
         let params = AsrShortOlTl003Params {
             language: lang_short,
-            enable_itn: None,
+            enable_itn: Some(true),
         };
         client.tools_v4().asr_short_ol_tl_003(&input, &params)
     })
@@ -672,16 +676,28 @@ fn transcribe_long_audio_url_impl<R: Runtime>(
     url: String,
     lang: Option<String>,
 ) -> Result<TranscribeFileResult, String> {
+    let input = AsrLongOlTl004Input::from_url(url);
+    let lang_long = parse_lang_long(lang.as_deref());
+    run_asr_long_blocking(app, input, lang_long, "saas-file".into())
+}
+
+fn run_asr_long_blocking<R: Runtime>(
+    app: AppHandle<R>,
+    input: AsrLongOlTl004Input,
+    lang: Option<AsrLongOlTl004Lang>,
+    provider_kind: String,
+) -> Result<TranscribeFileResult, String> {
     let ol = app.state::<SharedOpenLoaf>();
     let client = ol.authenticated_client().ok_or_else(|| {
         handle_session_expired(&app, &ol);
         ERR_NOT_AUTHENTICATED.to_string()
     })?;
 
-    let input = AsrLongOlTl004Input::from_url(url);
     let params = AsrLongOlTl004Params {
-        language: parse_lang_long(lang.as_deref()),
+        language: lang,
         enable_words: Some(false),
+        enable_itn: Some(true),
+        disfluency_removal_enabled: Some(true),
         ..Default::default()
     };
     let submitted = client
@@ -717,14 +733,11 @@ fn transcribe_long_audio_url_impl<R: Runtime>(
                     text: r.text.unwrap_or_default(),
                     variant: "asrLong".into(),
                     credits_consumed: r.credits_consumed.unwrap_or(0.0),
-                    provider_kind: "saas-file".into(),
+                    provider_kind,
                 });
             }
             AsrLongOlTl004Status::Failed => {
-                let msg = r
-                    .error
-                    .and_then(|e| e.message)
-                    .unwrap_or_default();
+                let msg = r.error.and_then(|e| e.message).unwrap_or_default();
                 return Err(format!("asr_long failed: {msg}"));
             }
             AsrLongOlTl004Status::Pending | AsrLongOlTl004Status::Doing => continue,

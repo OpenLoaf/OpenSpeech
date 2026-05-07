@@ -19,6 +19,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { useStatsStore } from "@/stores/stats";
 import { useUIStore } from "@/stores/ui";
 import { syncAutostart } from "@/lib/autostart";
+import { auditBindings } from "@/lib/hotkey";
+import { detectPlatform } from "@/lib/platform";
 import i18n, { resolveLang } from "@/i18n";
 import "./i18n";
 import {
@@ -162,6 +164,54 @@ const bootPromise = (async () => {
       else console.warn("[boot] unknown overlay-toast-action:", key);
     });
 
+    // SaaS 转写撞 401 → 弹登录 → 用户登录回来后用刚才录音续转写并展示在 dialog。
+    // recording.ts 在 finalize 末尾把 history id 写到 ui.pendingAuthRecoveryHistoryId；
+    // 这里订阅 auth.isAuthenticated 从 false → true 时取出来跑 history.retry。
+    // 用 prev 比较确保只对"刚刚登录成功"这一拍触发——bootstrap 自动恢复登录态时
+    // 也会从 false → true，但那时 pendingAuthRecoveryHistoryId 还是 null（用户没
+    // 录过音），无副作用。
+    useAuthStore.subscribe(async (s, prev) => {
+      if (prev.isAuthenticated || !s.isAuthenticated) return;
+      const ui = useUIStore.getState();
+      const pendingId = ui.pendingAuthRecoveryHistoryId;
+      if (!pendingId) return;
+      // 立刻清掉 pending id —— 后续 retry 期间用户若再次失败也别复用同一条；
+      // 真实的 historyId 已经透传给 dialog state 自管。
+      ui.setPendingAuthRecoveryHistoryId(null);
+      // retry 并行开跑——不要等 LoginDialog 自闭再启动转写，否则用户登录回来要
+      // 多等 0.8s 才看到 spinner。dialog 的 open 时机要等 LoginDialog 关闭后，
+      // 不然两层 Radix overlay 同时挂 portal，AuthRecoveryDialog 会被 LoginDialog
+      // 盖住 0.8s。LOGIN_DIALOG_AUTO_CLOSE_MS = 800（LoginDialog.tsx）。
+      const retryPromise = useHistoryStore.getState().retry(pendingId);
+      // 把 retry 的 reject 先 swallow 一道避免成为 unhandled rejection——下面的
+      // try/await 仍会拿到错误（同一个 promise 可被多处 await，第二次 await 不会
+      // 重新抛 unhandled）。
+      retryPromise.catch(() => {});
+      await new Promise((r) => window.setTimeout(r, 850));
+      useUIStore.getState().setAuthRecoveryDialog({
+        open: true,
+        status: "pending",
+        historyId: pendingId,
+      });
+      try {
+        await retryPromise;
+        useUIStore.getState().setAuthRecoveryDialog({
+          open: true,
+          status: "success",
+          historyId: pendingId,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e ?? "");
+        console.warn("[boot] auth recovery retry failed:", e);
+        useUIStore.getState().setAuthRecoveryDialog({
+          open: true,
+          status: "error",
+          historyId: pendingId,
+          errorMessage: msg,
+        });
+      }
+    });
+
     // Rust apply_bindings 注册失败按 binding 维度逐条 emit；ui store 内部聚合
     // 短窗口内的 push，最终由 HotkeyConflictDialog 一次列出全部冲突。
     void listen<{ id: string; error: string }>(
@@ -179,6 +229,20 @@ const bootPromise = (async () => {
       useHotkeysStore.getState().bindings,
     );
     console.log("[boot] initial syncBindings done");
+
+    // 启动自检：v2 → v3 migrate 后存量 binding 可能命中新规则（单 Option / 单 Fn /
+    // fn-combo / 子集冲突等）。命中即推到 ui store，HotkeyConflictDialog 自动弹
+    // 让用户立即重录；用户改完后 setBinding 会清掉对应条目。
+    const violations = auditBindings(
+      useHotkeysStore.getState().bindings,
+      detectPlatform(),
+      useHotkeysStore.getState().allowSpecialKeys,
+    );
+    if (violations.length > 0) {
+      console.warn("[boot] binding audit violations:", violations);
+      const ui = useUIStore.getState();
+      for (const v of violations) ui.pushHotkeyConflict(v);
+    }
 
     useHotkeysStore.subscribe((s, prev) => {
       if (s.bindings !== prev.bindings) {

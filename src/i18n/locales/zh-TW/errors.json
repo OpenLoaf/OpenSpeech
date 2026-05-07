@@ -1,4 +1,11 @@
 {
+  "hotkey_blocked": {
+    "title": "會議錄製中",
+    "description": "{{action}}已被暫停——請先結束目前會議錄製再使用",
+    "action_dictate": "聽寫",
+    "action_translate": "翻譯",
+    "action_ask_ai": "問 AI"
+  },
   "auth": {
     "login_timeout": "登入逾時，請重試",
     "login_failed": "登入失敗，請重試",
@@ -59,9 +66,9 @@
   "meetings": {
     "go_to_settings": "前往設定",
     "meeting_provider_unsupported": "目前通道不支援會議轉錄",
-    "meeting_provider_unsupported_hint": "請到「設定 → 聽寫」切換到「自訂 → 騰訊」。",
+    "meeting_provider_unsupported_hint": "請到「設定 → 聽寫」切換到「SaaS」或「自訂 → 騰訊」。",
     "meeting_provider_not_configured": "尚未設定聽寫通道",
-    "meeting_provider_not_configured_hint": "請到「設定 → 聽寫」新增「自訂 → 騰訊」供應商。",
+    "meeting_provider_not_configured_hint": "請到「設定 → 聽寫」選擇「SaaS」或新增「自訂 → 騰訊」供應商。",
     "network_exit": "連線已中斷",
     "network_exit_hint": "即時語音辨識連線被中斷，請檢查網路後重試。",
     "idle_timeout": "長時間無聲音而被中斷",
@@ -78,6 +85,12 @@
     "insufficient_funds_hint": "請為騰訊語音辨識帳戶儲值，或切換到其他供應商。",
     "engine_not_authorized": "騰訊帳號未開通 16k_zh_en_speaker 引擎",
     "engine_not_authorized_hint": "「即時說話人分離」是騰訊獨立 SKU，「即時語音辨識大模型」資源包並不涵蓋。請到騰訊雲語音辨識控制台開通該引擎，或提工單確認：",
-    "open_tencent_console": "開啟"
+    "open_tencent_console": "開啟",
+    "unauthenticated_saas": "SaaS 登入已失效",
+    "unauthenticated_saas_hint": "請重新登入 OpenSpeech 後再開始會議。",
+    "insufficient_funds_saas": "SaaS 積分不足",
+    "insufficient_funds_saas_hint": "請前往個人中心儲值積分，或切換到「自訂 → 騰訊」。",
+    "not_authenticated": "尚未登入",
+    "not_authenticated_hint": "SaaS 通道需要先登入 OpenSpeech。請登入後再開始會議，或切換到「自訂 → 騰訊」。"
   }
 }

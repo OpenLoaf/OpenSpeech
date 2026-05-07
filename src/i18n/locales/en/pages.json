@@ -17,6 +17,17 @@
     },
     "hotkey_hint": "Press the hotkey to start recording, press again to stop and inject the text into the focused field. Press <esc>Esc</esc> to cancel; an editable field must be focused.",
     "translate_hint": "Press the translate hotkey to start recording, press again to stop. The system transcribes then translates to the target language before injecting into the focused field.",
+    "translate_bilingual": "Bilingual output",
+    "translate_bilingual_aria": "Bilingual output (source + translation)",
+    "edit_hotkey": "Edit hotkey",
+    "edit_hotkey_dialog_title": "Edit hotkey",
+    "edit_hotkey_dialog_description": "Record or change the current hotkey binding.",
+    "quick_dict": {
+      "button_aria": "Add a word",
+      "title": "My dictionary",
+      "empty": "// No entries yet //",
+      "domains_label": "// Common domains"
+    },
     "hotkey_tab": {
       "dictate": "Dictate",
       "translate": "Translate"
@@ -212,6 +223,10 @@
       "failed": "Failed",
       "cancelled": "Cancelled"
     },
+    "player": {
+      "play": "Play",
+      "pause": "Pause"
+    },
     "row": {
       "play": "Play original recording",
       "pause": "Pause",
@@ -233,7 +248,7 @@
       "view_translation": "Translation",
       "view_raw": "Raw text",
       "view_details": "View details",
-      "copy_debug": "Copy debug prompt"
+      "copy_debug": "Copy debug request JSON"
     },
     "detail": {
       "title": "Record details",
@@ -274,8 +289,9 @@
     "toast": {
       "copy_success": "Copied to clipboard",
       "copy_failed": "Copy failed",
-      "copy_debug_success": "Debug prompt copied",
-      "copy_debug_failed": "Failed to copy debug prompt",
+      "copy_debug_success": "Debug request JSON copied",
+      "copy_debug_failed": "Failed to copy debug request JSON",
+      "copy_debug_missing": "No request snapshot captured for this record (likely a release-build entry or a pre-dispatch failure)",
       "retry_success": "Retry succeeded",
       "retry_failed": "Retry failed",
       "delete_failed": "Delete failed",
@@ -298,16 +314,39 @@
     "search_placeholder": "Search entries...",
     "filters": {
       "all": "All",
-      "auto": "Auto-added",
+      "domains": "Domains",
       "manual": "Manually added"
     },
     "empty": "// No entries //",
     "count_total": "// {{count}} total //",
+    "divider_label": "Custom entries",
     "card": {
-      "auto_tooltip": "Auto-added",
+      "domain_tooltip": "Selected domain",
       "manual_tooltip": "Manually added",
       "edit": "Edit",
       "delete": "Delete"
+    },
+    "domains": {
+      "helper": "Pick the topics you often dictate — the AI will lean on their terminology and tone.",
+      "limit_hint": "Up to {{limit}}",
+      "counter": "{{count}} / {{limit}} selected",
+      "items": {
+        "programming": "Programming",
+        "ai_ml": "AI / ML",
+        "medicine": "Medicine",
+        "law": "Law",
+        "finance": "Finance",
+        "academic": "Academic",
+        "engineering": "Engineering",
+        "marketing": "Marketing",
+        "psychology": "Psychology",
+        "design": "Design",
+        "film_production": "Film & Video",
+        "cybersecurity": "Cybersecurity",
+        "photography": "Photography",
+        "tcm": "TCM",
+        "automotive": "Automotive"
+      }
     },
     "new_dialog": {
       "title": "New word",
@@ -358,6 +397,8 @@
         "file": "Audio file"
       },
       "text_placeholder": "Type or paste text here…",
+      "dictate_hint": "Press the hotkey · talk to dictate",
+      "dictate_unbound": "Dictation hotkey not bound",
       "voice_hint": "Hold the button and speak — release to transcribe.",
       "voice_button_idle": "Hold to talk",
       "voice_button_recording": "Listening…",
@@ -407,6 +448,7 @@
       "polish": {
         "scenario_label": "Scenario",
         "scenarios_empty": "No scenarios configured",
+        "add_scenario": "+ Add",
         "examples": {
           "email": "Email",
           "wechat": "Message",
@@ -456,6 +498,8 @@
     "output": {
       "idle_label": "Awaiting run",
       "ready": "READY",
+      "waiting_input": "WAITING FOR INPUT…",
+      "generating": "GENERATING…",
       "meta_chars": "{{count}} chars",
       "meta_elapsed": "{{seconds}}s"
     },

@@ -46,6 +46,8 @@ import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 import { getEffectiveAiMeetingSummaryPrompt } from "@/lib/defaultAiPrompts";
 import { resolveLang } from "@/i18n";
 import { useSettingsStore } from "@/stores/settings";
+import { useAuthStore } from "@/stores/auth";
+import { useUIStore } from "@/stores/ui";
 
 // "starting" 是 idle → live 的过渡态：cpal stream 拉起 + meeting_start
 // (含腾讯握手) 期间停留在这里，按钮显示 loading；任意一步失败直接回 idle，
@@ -223,6 +225,19 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   async start() {
     const s = get();
     if (s.view !== "idle") return;
+
+    // 前置 gate：SaaS 通道未登录直接弹登录框，不发 invoke。靠后端报错再正则识别
+    // 字符串本来就是反模式——登录态前端已知，应当在源头拦住。BYOK custom 路径
+    // 自带凭证，跳过此 gate；token 过期但 isAuthenticated=true 的兜底由后端
+    // handle_session_expired 走 auth-lost 事件触发全局拦截器。
+    // 不往 store 写 error：未登录由全局 LoginDialog 接管；同时再弹 MeetingErrorDialog
+    // 会叠两层 modal overlay，背景的 sidebar 登录 / 设置按钮全部被点击拦截。
+    const dictationMode = useSettingsStore.getState().dictation.mode;
+    if (dictationMode === "saas" && !useAuthStore.getState().isAuthenticated) {
+      useUIStore.getState().openLogin();
+      return;
+    }
+
     set({
       ...initialState,
       view: "starting",

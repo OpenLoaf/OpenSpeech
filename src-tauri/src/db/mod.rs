@@ -206,5 +206,13 @@ DROP TABLE IF EXISTS history_segments;
             sql: "ALTER TABLE history ADD COLUMN summary_path TEXT;",
             kind: MigrationKind::Up,
         },
+        // v10：DEV 模式下落库的请求快照（URL / model / body 的 pretty JSON）。
+        // 复制按钮直接读这一列；非 DEV 构建写入路径不会触发，所以正式版用户库里恒为 NULL。
+        Migration {
+            version: 10,
+            description: "history_add_debug_payload",
+            sql: "ALTER TABLE history ADD COLUMN debug_payload TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }

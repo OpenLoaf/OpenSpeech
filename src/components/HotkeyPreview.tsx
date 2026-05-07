@@ -111,10 +111,12 @@ function isDisplayableKey(token: KeyToken): boolean {
 export function Kbd({
   children,
   highlight,
+  error,
   size = "md",
 }: {
   children: React.ReactNode;
   highlight?: boolean;
+  error?: boolean;
   size?: "md" | "lg";
 }) {
   return (
@@ -124,9 +126,11 @@ export function Kbd({
         size === "lg"
           ? "px-[clamp(0.75rem,2.5cqw,1.5rem)] py-[clamp(0.4rem,1.6cqw,1rem)] text-[clamp(0.875rem,3cqw,1.75rem)]"
           : "px-3 py-1.5 text-sm",
-        highlight
-          ? "border-te-accent text-te-accent shadow-[inset_0_-2px_0_0_var(--te-accent)]"
-          : "border-te-gray text-te-fg shadow-[inset_0_-2px_0_0_var(--te-gray)]",
+        error
+          ? "border-red-700/70 text-red-500/80 shadow-[inset_0_-2px_0_0_#b91c1c]"
+          : highlight
+            ? "border-te-accent text-te-accent shadow-[inset_0_-2px_0_0_var(--te-accent)]"
+            : "border-te-gray text-te-fg shadow-[inset_0_-2px_0_0_var(--te-gray)]",
       )}
     >
       {children}
@@ -249,6 +253,7 @@ export function HotkeyPreview({
   bindingIds = ["dictate_ptt"],
   headerExtra,
   hideHeader = false,
+  trailing,
 }: {
   hint?: string;
   index?: string;
@@ -265,6 +270,8 @@ export function HotkeyPreview({
   headerExtra?: React.ReactNode;
   /** 不渲染 header 行（title / hint / index）。调用方已在外部承担 section 标题时用。 */
   hideHeader?: boolean;
+  /** 替换默认 modeHint 行尾文字的自定义节点（按键预览右边那段）。 */
+  trailing?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   const allBindings = useHotkeysStore((s) => s.bindings);
@@ -296,7 +303,7 @@ export function HotkeyPreview({
 
   const hintInHeader = hintPlacement === "header";
 
-  const renderTokens = (tokens: HotkeyToken[]) =>
+  const renderTokens = (tokens: HotkeyToken[], error = false) =>
     tokens.length === 0 ? (
       <Kbd size={fillHeight ? "lg" : "md"}>
         {t("dialogs:hotkey_preview.unbound")}
@@ -307,14 +314,19 @@ export function HotkeyPreview({
           {i > 0 && (
             <span
               className={cn(
-                "font-mono text-te-light-gray",
+                "font-mono",
+                error ? "text-red-500/70" : "text-te-light-gray",
                 fillHeight ? "text-[clamp(1rem,3cqw,2rem)]" : "text-xl",
               )}
             >
               +
             </span>
           )}
-          <Kbd highlight={tokenIsHeld(tok)} size={fillHeight ? "lg" : "md"}>
+          <Kbd
+            highlight={!error && tokenIsHeld(tok)}
+            error={error}
+            size={fillHeight ? "lg" : "md"}
+          >
             {tok.kind !== "prefix" && tok.icon ? (
               <span aria-hidden className="mr-1.5 opacity-60">
                 {tok.icon}
@@ -415,15 +427,17 @@ export function HotkeyPreview({
                   icon: mainIcon(p.id),
                 };
               }),
+              true,
             )
           )}
         </div>
 
-        {!hintInHeader && (
-          <div className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
-            {modeHint}
-          </div>
-        )}
+        {!hintInHeader &&
+          (trailing ?? (
+            <div className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+              {modeHint}
+            </div>
+          ))}
       </div>
     </div>
   );

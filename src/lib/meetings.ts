@@ -2,8 +2,8 @@
 //
 // Rust 端见 src-tauri/src/meetings/mod.rs。
 // 凭证完全复用 dictation 通道：buildProviderRef() 给的就是会议要用的 provider。
-// 当前唯一支持的 provider 是腾讯实时说话人分离（16k_zh_en_speaker）；当用户
-// 听写通道选 SaaS / 阿里 / 未配置 BYOK 时，meeting_start 会返回
+// 支持的 provider：SaaS（OL-TL-RT-003 服务端腾讯）+ 自定义腾讯（16k_zh_en_speaker
+// 自带说话人分离）。阿里 / 未配置时 meeting_start 返回
 // `meeting_provider_unsupported` / `meeting_provider_not_configured`。
 
 import { invoke } from "@tauri-apps/api/core";

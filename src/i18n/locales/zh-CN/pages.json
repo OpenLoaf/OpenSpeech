@@ -17,6 +17,17 @@
     },
     "hotkey_hint": "按一下快捷键开始录音，再按一下结束并把文字写入当前输入框。按 <esc>Esc</esc> 取消；焦点必须在可编辑区域。",
     "translate_hint": "按一下翻译快捷键开始录音，再按一下结束。系统会先转写再翻译为目标语言，并写入当前输入框。",
+    "translate_bilingual": "双语输出",
+    "translate_bilingual_aria": "双语输出（原文 + 译文）",
+    "edit_hotkey": "编辑快捷键",
+    "edit_hotkey_dialog_title": "编辑快捷键",
+    "edit_hotkey_dialog_description": "录入或修改当前快捷键绑定。",
+    "quick_dict": {
+      "button_aria": "添加新词",
+      "title": "我的词典",
+      "empty": "// 还没有任何词条 //",
+      "domains_label": "// 常用领域"
+    },
     "hotkey_tab": {
       "dictate": "听写",
       "translate": "翻译"
@@ -212,6 +223,10 @@
       "failed": "失败",
       "cancelled": "已取消"
     },
+    "player": {
+      "play": "播放",
+      "pause": "暂停"
+    },
     "row": {
       "play": "播放原始录音",
       "pause": "暂停",
@@ -233,7 +248,7 @@
       "view_translation": "译文",
       "view_raw": "原始文本",
       "view_details": "查看详情",
-      "copy_debug": "复制调试提示词"
+      "copy_debug": "复制调试请求 JSON"
     },
     "detail": {
       "title": "记录详情",
@@ -274,8 +289,9 @@
     "toast": {
       "copy_success": "已复制到剪贴板",
       "copy_failed": "复制失败",
-      "copy_debug_success": "调试提示词已复制",
-      "copy_debug_failed": "复制调试提示词失败",
+      "copy_debug_success": "调试请求 JSON 已复制",
+      "copy_debug_failed": "复制调试请求 JSON 失败",
+      "copy_debug_missing": "该记录未捕获到请求快照（可能为正式版录入或调用前已失败）",
       "retry_success": "重试成功",
       "retry_failed": "重试失败",
       "delete_failed": "删除失败",
@@ -298,16 +314,39 @@
     "search_placeholder": "搜索词条...",
     "filters": {
       "all": "全部",
-      "auto": "自动添加",
+      "domains": "常见领域",
       "manual": "手动添加"
     },
     "empty": "// 暂无词条 //",
     "count_total": "// 共 {{count}} 条 //",
+    "divider_label": "自定义词条",
     "card": {
-      "auto_tooltip": "自动添加",
+      "domain_tooltip": "常用领域",
       "manual_tooltip": "手动添加",
       "edit": "编辑",
       "delete": "删除"
+    },
+    "domains": {
+      "helper": "勾选你常聊的领域，AI 会优先按这些场景调整术语和措辞",
+      "limit_hint": "最多选 {{limit}} 个",
+      "counter": "已选 {{count}} / {{limit}}",
+      "items": {
+        "programming": "软件开发",
+        "ai_ml": "AI / 机器学习",
+        "medicine": "医学健康",
+        "law": "法律",
+        "finance": "金融投资",
+        "academic": "学术科研",
+        "engineering": "工程制造",
+        "marketing": "营销增长",
+        "psychology": "心理学",
+        "design": "设计创意",
+        "film_production": "影视制作",
+        "cybersecurity": "网络安全",
+        "photography": "摄影",
+        "tcm": "中医",
+        "automotive": "汽车"
+      }
     },
     "new_dialog": {
       "title": "新词",
@@ -358,6 +397,8 @@
         "file": "音频文件"
       },
       "text_placeholder": "在这里输入或粘贴文字…",
+      "dictate_hint": "按下快捷键 · 直接开口听写",
+      "dictate_unbound": "未绑定听写快捷键",
       "voice_hint": "按住按钮说话，松开自动转写。",
       "voice_button_idle": "按住说话",
       "voice_button_recording": "正在听…",
@@ -407,6 +448,7 @@
       "polish": {
         "scenario_label": "场景",
         "scenarios_empty": "未配置场景",
+        "add_scenario": "+ 新增",
         "examples": {
           "email": "邮件",
           "wechat": "微信",
@@ -456,6 +498,8 @@
     "output": {
       "idle_label": "等待运行",
       "ready": "READY",
+      "waiting_input": "等待输入完毕…",
+      "generating": "生成中…",
       "meta_chars": "{{count}} 字",
       "meta_elapsed": "耗时 {{seconds}}s"
     },

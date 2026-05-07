@@ -47,6 +47,12 @@ function formatHMS(ms: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function formatAbsoluteTime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 /** speakerId=-1（待识别）走灰；正整数按 mod 取色。 */
 function speakerColor(speakerId: number): string {
   if (speakerId < 0) return "text-te-light-gray";
@@ -344,7 +350,7 @@ function IdleView({ onStart, loading }: { onStart: () => void; loading: boolean 
             <PreviewWaveform height={48} />
           </div>
 
-          <div className="mt-1 max-w-md text-center font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/70">
+          <div className="mt-1 max-w-3xl text-center font-mono text-[10px] uppercase tracking-[0.2em] text-te-light-gray/70">
             {t("pages:meetings.idle.language_support")}
           </div>
         </motion.div>
@@ -719,6 +725,12 @@ function ReviewView({ onBack }: { onBack: () => void }) {
                     !!audioPath &&
                     currentSec * 1000 >= seg.startMs &&
                     currentSec * 1000 < seg.endMs;
+                  const startedAtMs =
+                    meta != null ? meta.created_at - meta.duration_ms : null;
+                  const absoluteLabel =
+                    startedAtMs != null
+                      ? formatAbsoluteTime(startedAtMs + seg.startMs)
+                      : null;
                   return (
                     <button
                       key={seg.sentenceId}
@@ -734,9 +746,16 @@ function ReviewView({ onBack }: { onBack: () => void }) {
                     >
                       <div className="flex items-baseline gap-3">
                         <SpeakerLabel speakerId={seg.speakerId} />
-                        <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
-                          {formatHMS(seg.startMs)}
-                        </span>
+                        <div className="ml-auto flex items-baseline gap-3">
+                          <span className="font-mono text-[10px] tabular-nums text-te-light-gray/60">
+                            {formatHMS(seg.startMs)}
+                          </span>
+                          {absoluteLabel ? (
+                            <span className="font-mono text-[10px] tabular-nums text-te-light-gray/40">
+                              {absoluteLabel}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       <p className="text-sm leading-relaxed text-te-fg">{seg.text}</p>
                     </button>

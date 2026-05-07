@@ -394,6 +394,43 @@ export function findBindingConflict(
   return null;
 }
 
+/**
+ * 启动 / schema 升级后跑一遍：把不再合规的 binding 列出来，让 HotkeyConflictDialog
+ * 立即弹给用户重录。返回每条违规的 id + 已渲染好的 i18n 文案——存量用户在新规则
+ * 下可能违规（v2 历史数据里有单 Option modifierOnly、fn-combo、子集冲突等）。
+ *
+ * 一条 binding 同时违反多个规则时只报第一个；用户改完后下次启动重新自检会暴露
+ * 后续问题，避免一次塞太多文案给用户。
+ */
+export function auditBindings(
+  bindings: Record<BindingId, HotkeyBinding | null>,
+  platform: Platform,
+  allowSpecialKeys: boolean,
+): { id: BindingId; error: string }[] {
+  const out: { id: BindingId; error: string }[] = [];
+  const reported = new Set<BindingId>();
+  for (const id of BINDING_IDS) {
+    const b = bindings[id];
+    if (!b) continue;
+    const legal = isLegalBinding(b, platform, allowSpecialKeys);
+    if (!legal.ok) {
+      out.push({ id, error: legal.reason ?? "" });
+      reported.add(id);
+      continue;
+    }
+    const conflict = findBindingConflict(bindings, b, id);
+    if (conflict && !reported.has(id)) {
+      const error = i18n.t(
+        `dialogs:hotkey_field.conflict_reason.${conflict.kind}`,
+        { name: BINDING_LABELS[conflict.with] },
+      );
+      out.push({ id, error });
+      reported.add(id);
+    }
+  }
+  return out;
+}
+
 /** 软提示（不阻断录入）—— W1 系统占用、W2 F1-F12 单按。返回 i18n key 列表。 */
 export function getBindingWarnings(
   binding: HotkeyBinding,

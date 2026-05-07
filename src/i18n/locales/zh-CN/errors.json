@@ -1,4 +1,11 @@
 {
+  "hotkey_blocked": {
+    "title": "会议录制中",
+    "description": "{{action}}已被暂停——请先结束当前会议录制再使用",
+    "action_dictate": "听写",
+    "action_translate": "翻译",
+    "action_ask_ai": "问 AI"
+  },
   "auth": {
     "login_timeout": "登录超时，请重试",
     "login_failed": "登录失败，请重试",
@@ -59,9 +66,9 @@
   "meetings": {
     "go_to_settings": "前往设置",
     "meeting_provider_unsupported": "当前通道不支持会议转录",
-    "meeting_provider_unsupported_hint": "请到「设置 → 听写」切换到「自定义 → 腾讯」。",
+    "meeting_provider_unsupported_hint": "请到「设置 → 听写」切换到「SaaS」或「自定义 → 腾讯」。",
     "meeting_provider_not_configured": "未配置听写通道",
-    "meeting_provider_not_configured_hint": "请到「设置 → 听写」新增「自定义 → 腾讯」供应商。",
+    "meeting_provider_not_configured_hint": "请到「设置 → 听写」选择「SaaS」或新增「自定义 → 腾讯」供应商。",
     "network_exit": "连接已断开",
     "network_exit_hint": "实时语音识别连接被中断，请检查网络后重试。",
     "idle_timeout": "长时间无声音被断开",
@@ -78,6 +85,12 @@
     "insufficient_funds_hint": "请充值腾讯语音识别账户，或切换到其他供应商。",
     "engine_not_authorized": "腾讯账号未开通 16k_zh_en_speaker 引擎",
     "engine_not_authorized_hint": "「实时说话人分离」是腾讯独立 SKU，「实时语音识别大模型」资源包并不覆盖。请到腾讯云语音识别控制台开通该引擎，或提工单确认：",
-    "open_tencent_console": "打开"
+    "open_tencent_console": "打开",
+    "unauthenticated_saas": "SaaS 登录已失效",
+    "unauthenticated_saas_hint": "请重新登录 OpenSpeech 后再开始会议。",
+    "insufficient_funds_saas": "SaaS 积分不足",
+    "insufficient_funds_saas_hint": "请前往个人中心充值积分，或切换到「自定义 → 腾讯」。",
+    "not_authenticated": "未登录",
+    "not_authenticated_hint": "SaaS 通道需要先登录 OpenSpeech。请登录后再开始会议，或切换到「自定义 → 腾讯」。"
   }
 }

@@ -16,6 +16,18 @@ export type SettingsTabId =
   | "AI"
   | "ABOUT";
 
+/** AI 提示词编辑 Dialog 的 4 种类型，对应 AI 设置页的 4 行 PromptRow。 */
+export type AiPromptKind = "refine" | "translate" | "polish" | "meeting";
+
+/** SaaS 转写中途 401 → 弹登录 → 用户登录成功后续转完展示给用户的恢复 dialog。
+ *  pending：登录回来到转写返回之间；success/error：retry 完成的终态。 */
+export interface AuthRecoveryDialogState {
+  open: boolean;
+  status: "pending" | "success" | "error";
+  historyId: string | null;
+  errorMessage?: string;
+}
+
 /** 统计 Dialog 打开时聚焦的指标；null 表示无侧重，默认走 duration。 */
 export type StatsMetric =
   | "duration"
@@ -68,6 +80,16 @@ interface UIStore {
    * 单条 emit，前端聚合成数组让 HotkeyConflictDialog 一次列出全部。
    */
   hotkeyConflicts: HotkeyConflict[];
+  /** 当前打开的 AI 提示词编辑 Dialog；null 表示未打开。
+   *  打开时会被 dialog stack 自动顶到栈顶，SettingsDialog 自动隐藏。 */
+  aiPromptDialog: AiPromptKind | null;
+  /** SaaS 401 → 弹登录 → 登录回来后用待重转的 history id 续转写的入口。
+   *  recording.ts 在 401 路径写完 history 后塞 id 进来；main.tsx 监听 auth 切换
+   *  到已登录时取出来跑 history.retry。轮转完用 authRecoveryDialog 渲染结果。 */
+  pendingAuthRecoveryHistoryId: string | null;
+  /** 续转写过程 / 结果展示：跟 pendingAuthRecoveryHistoryId 联动；后者只是触发
+   *  数据，前者承载用户能看到的整个 dialog 生命周期（pending → success/error）。 */
+  authRecoveryDialog: AuthRecoveryDialogState;
   setLoginOpen: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
   setNoInternetOpen: (v: boolean) => void;
@@ -92,6 +114,17 @@ interface UIStore {
   clearHotkeyConflict: (id: string) => void;
   /** Dialog 关闭 / 跳设置后调用，清空 conflicts 让 Dialog 收起。 */
   clearHotkeyConflicts: () => void;
+  /** 从 AI 设置 tab 进入提示词编辑：直接弹出 Dialog，dialog stack 自动隐藏 Settings。 */
+  openAiPromptDialog: (kind: AiPromptKind) => void;
+  /** 关闭提示词 Dialog；Settings 仍在栈底，会自动复现。 */
+  closeAiPromptDialog: () => void;
+  /** recording.ts 在 401 路径写完 history 时调一次，让 main.tsx 等登录回来用。
+   *  传 null 表示清空（dialog 关闭、用户主动消费完 / 放弃恢复）。 */
+  setPendingAuthRecoveryHistoryId: (id: string | null) => void;
+  /** main.tsx 在 auth 翻转后内部调用——从 false → true 时切换 dialog 状态。 */
+  setAuthRecoveryDialog: (next: AuthRecoveryDialogState) => void;
+  /** 关闭恢复 dialog（用户复制完 / 看完结果），同时清掉 pending id 防止再次触发。 */
+  closeAuthRecoveryDialog: () => void;
 }
 
 const ensureMainWindowVisible = () => {
@@ -114,6 +147,13 @@ export const useUIStore = create<UIStore>((set, get) => ({
   statsFocusMetric: "duration",
   pendingUpdate: null,
   hotkeyConflicts: [],
+  aiPromptDialog: null,
+  pendingAuthRecoveryHistoryId: null,
+  authRecoveryDialog: {
+    open: false,
+    status: "pending",
+    historyId: null,
+  },
 
   setLoginOpen: (v) => set({ loginOpen: v }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
@@ -204,4 +244,22 @@ export const useUIStore = create<UIStore>((set, get) => ({
     }
     set({ hotkeyConflicts: [] });
   },
+
+  openAiPromptDialog: (kind) => {
+    set({ aiPromptDialog: kind });
+  },
+
+  closeAiPromptDialog: () => {
+    set({ aiPromptDialog: null });
+  },
+
+  setPendingAuthRecoveryHistoryId: (id) => set({ pendingAuthRecoveryHistoryId: id }),
+
+  setAuthRecoveryDialog: (next) => set({ authRecoveryDialog: next }),
+
+  closeAuthRecoveryDialog: () =>
+    set({
+      pendingAuthRecoveryHistoryId: null,
+      authRecoveryDialog: { open: false, status: "pending", historyId: null },
+    }),
 }));

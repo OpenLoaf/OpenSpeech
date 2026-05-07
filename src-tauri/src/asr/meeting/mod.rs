@@ -17,6 +17,7 @@
 // 子模块落进 `meeting/<vendor>.rs` 然后在 `mod.rs` 注册。
 
 pub mod provider;
+pub mod saas;
 pub mod tencent_speaker;
 
 #[cfg(test)]

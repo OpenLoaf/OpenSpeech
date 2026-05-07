@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
-import { Feather, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Feather, Pencil, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,45 +11,75 @@ import {
 } from "@/components/ui/dialog";
 import { SearchBox } from "@/components/SearchBox";
 import { useDictionaryStore, type DictEntry } from "@/stores/dictionary";
+import { useSettingsStore } from "@/stores/settings";
+import {
+  DOMAIN_ICONS,
+  DOMAIN_IDS,
+  DOMAIN_LIMIT,
+  isDomainId,
+  type DomainId,
+} from "@/lib/domains";
 
-type FilterKey = "all" | "auto" | "manual";
+type FilterKey = "all" | "domains" | "manual";
 
-const FILTERS: { key: FilterKey; Icon?: typeof Sparkles }[] = [
-  { key: "all" },
-  { key: "auto", Icon: Sparkles },
-  { key: "manual", Icon: Feather },
-];
+const FILTERS: FilterKey[] = ["all", "domains", "manual"];
 
 export default function DictionaryPage() {
   const { t } = useTranslation();
   const entries = useDictionaryStore((s) => s.entries);
   const addToDb = useDictionaryStore((s) => s.add);
   const removeFromDb = useDictionaryStore((s) => s.remove);
+  const selectedDomains = useSettingsStore((s) => s.aiRefine.selectedDomains);
+  const setSelectedDomains = useSettingsStore((s) => s.setSelectedDomains);
+
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+
+  const validSelected = useMemo<DomainId[]>(
+    () => selectedDomains.filter(isDomainId),
+    [selectedDomains],
+  );
 
   const addEntry = async (term: string) => {
     await addToDb({ term });
   };
 
-  const filtered = useMemo(() => {
+  const filteredEntries = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((e) => {
-      if (filter !== "all" && e.source !== filter) return false;
       if (!q) return true;
       if (e.term.toLowerCase().includes(q)) return true;
       return e.aliases.some((a) => a.toLowerCase().includes(q));
     });
-  }, [entries, filter, query]);
+  }, [entries, query]);
+
+  const filteredDomains = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return validSelected;
+    return validSelected.filter((id) =>
+      t(`pages:dictionary.domains.items.${id}`).toLowerCase().includes(q),
+    );
+  }, [validSelected, query, t]);
 
   const removeEntry = async (id: string) => {
     await removeFromDb(id);
   };
 
+  const toggleDomain = async (id: DomainId) => {
+    const exists = validSelected.includes(id);
+    let next: DomainId[];
+    if (exists) {
+      next = validSelected.filter((x) => x !== id);
+    } else {
+      if (validSelected.length >= DOMAIN_LIMIT) return;
+      next = [...validSelected, id];
+    }
+    await setSelectedDomains(next);
+  };
+
   return (
     <section className="flex h-full flex-col bg-te-bg">
-      {/* 顶部固定区：标题 + 新词按钮（可拖窗，按钮豁免） */}
       <div
         data-tauri-drag-region
         className="shrink-0 border-b border-te-gray/30 bg-te-bg"
@@ -86,23 +116,21 @@ export default function DictionaryPage() {
         </div>
       </div>
 
-      {/* 中部固定区：Tabs + 搜索框 */}
       <div className="shrink-0 border-b border-te-gray/40 bg-te-bg">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-[4vw] py-2">
           <div className="flex items-center gap-1">
-            {FILTERS.map((f) => {
-              const active = filter === f.key;
+            {FILTERS.map((key) => {
+              const active = filter === key;
               return (
                 <button
-                  key={f.key}
+                  key={key}
                   type="button"
-                  onClick={() => setFilter(f.key)}
+                  onClick={() => setFilter(key)}
                   className={`relative flex items-center gap-1.5 px-3 py-2 font-mono text-xs uppercase tracking-[0.15em] transition-colors ${
                     active ? "text-te-accent" : "text-te-light-gray hover:text-te-fg"
                   }`}
                 >
-                  {f.Icon ? <f.Icon className="size-3.5" /> : null}
-                  <span>{t(`pages:dictionary.filters.${f.key}`)}</span>
+                  <span>{t(`pages:dictionary.filters.${key}`)}</span>
                   {active ? (
                     <motion.span
                       layoutId="dict-filter-underline"
@@ -122,39 +150,21 @@ export default function DictionaryPage() {
         </div>
       </div>
 
-      {/* 滚动区：网格无限滚动 */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-[4vw] py-[clamp(1rem,2vw,2rem)]">
-          {filtered.length === 0 ? (
-            <motion.div
-              className="mt-16 text-center font-mono text-sm uppercase tracking-[0.3em] text-te-light-gray"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4 }}
-            >
-              {t("pages:dictionary.empty")}
-            </motion.div>
+          {filter === "domains" ? (
+            <DomainPicker
+              selected={validSelected}
+              onToggle={(id) => void toggleDomain(id)}
+            />
           ) : (
-            <>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-                {filtered.map((entry, index) => (
-                  <EntryCard
-                    key={entry.id}
-                    entry={entry}
-                    index={index}
-                    onDelete={() => {
-                      void removeEntry(entry.id);
-                    }}
-                  />
-                ))}
-              </div>
-
-              <div className="mt-10 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
-                {t("pages:dictionary.count_total", {
-                  count: filtered.length.toString().padStart(3, "0"),
-                })}
-              </div>
-            </>
+            <DictionaryGrid
+              filter={filter}
+              entries={filteredEntries}
+              selectedDomains={filteredDomains}
+              onDeleteEntry={(id) => void removeEntry(id)}
+              onRemoveDomain={(id) => void toggleDomain(id)}
+            />
           )}
         </div>
       </div>
@@ -166,6 +176,148 @@ export default function DictionaryPage() {
         existingTerms={entries.map((e) => e.term.toLowerCase())}
       />
     </section>
+  );
+}
+
+/* ---------------- Domain Picker (domains tab) ---------------- */
+
+interface DomainPickerProps {
+  selected: DomainId[];
+  onToggle: (id: DomainId) => void;
+}
+
+function DomainPicker({ selected, onToggle }: DomainPickerProps) {
+  const { t } = useTranslation();
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const atLimit = selected.length >= DOMAIN_LIMIT;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-te-light-gray">
+        <span>{t("pages:dictionary.domains.helper")}</span>
+        <span>
+          {t("pages:dictionary.domains.counter", {
+            count: selected.length,
+            limit: DOMAIN_LIMIT,
+          })}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+        {DOMAIN_IDS.map((id, index) => {
+          const Icon = DOMAIN_ICONS[id];
+          const active = selectedSet.has(id);
+          const disabled = !active && atLimit;
+          return (
+            <motion.button
+              key={id}
+              type="button"
+              onClick={() => onToggle(id)}
+              disabled={disabled}
+              title={
+                disabled
+                  ? t("pages:dictionary.domains.limit_hint", { limit: DOMAIN_LIMIT })
+                  : undefined
+              }
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, delay: Math.min(index * 0.02, 0.2) }}
+              className={`group flex items-center gap-3 border px-3 py-2.5 transition-colors ${
+                active
+                  ? "border-te-accent bg-te-accent/10 text-te-accent"
+                  : disabled
+                    ? "cursor-not-allowed border-te-gray/30 bg-te-surface/40 text-te-light-gray/40"
+                    : "border-te-gray/40 bg-te-surface text-te-fg hover:border-te-accent hover:text-te-accent"
+              }`}
+            >
+              <Icon className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-left font-mono text-sm font-bold tracking-tight">
+                {t(`pages:dictionary.domains.items.${id}`)}
+              </span>
+            </motion.button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Mixed Grid (all / manual tabs) ---------------- */
+
+interface DictionaryGridProps {
+  filter: "all" | "manual";
+  entries: DictEntry[];
+  selectedDomains: DomainId[];
+  onDeleteEntry: (id: string) => void;
+  onRemoveDomain: (id: DomainId) => void;
+}
+
+function DictionaryGrid({
+  filter,
+  entries,
+  selectedDomains,
+  onDeleteEntry,
+  onRemoveDomain,
+}: DictionaryGridProps) {
+  const { t } = useTranslation();
+  const showDomains = filter === "all" && selectedDomains.length > 0;
+  const totalCount = entries.length + (showDomains ? selectedDomains.length : 0);
+
+  if (totalCount === 0) {
+    return (
+      <motion.div
+        className="mt-16 text-center font-mono text-sm uppercase tracking-[0.3em] text-te-light-gray"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.4 }}
+      >
+        {t("pages:dictionary.empty")}
+      </motion.div>
+    );
+  }
+
+  const showDivider = showDomains && entries.length > 0;
+
+  return (
+    <>
+      {showDomains ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+          {selectedDomains.map((id, index) => (
+            <DomainCard
+              key={`domain-${id}`}
+              id={id}
+              index={index}
+              onRemove={() => onRemoveDomain(id)}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {showDivider ? (
+        <div className="my-6 flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
+          <span className="h-px flex-1 bg-te-gray/40" />
+          <span>{t("pages:dictionary.divider_label")}</span>
+          <span className="h-px flex-1 bg-te-gray/40" />
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+        {entries.map((entry, index) => (
+          <EntryCard
+            key={entry.id}
+            entry={entry}
+            index={index}
+            onDelete={() => onDeleteEntry(entry.id)}
+          />
+        ))}
+      </div>
+
+      <div className="mt-10 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
+        {t("pages:dictionary.count_total", {
+          count: totalCount.toString().padStart(3, "0"),
+        })}
+      </div>
+    </>
   );
 }
 
@@ -287,7 +439,48 @@ function NewWordDialog({
   );
 }
 
-/* ---------------- Entry Card ---------------- */
+/* ---------------- Cards ---------------- */
+
+interface DomainCardProps {
+  id: DomainId;
+  index: number;
+  onRemove: () => void;
+}
+
+function DomainCard({ id, index, onRemove }: DomainCardProps) {
+  const { t } = useTranslation();
+  const Icon = DOMAIN_ICONS[id];
+  return (
+    <motion.article
+      className="group flex items-center gap-3 border border-te-accent/60 bg-te-accent/10 px-3 py-2.5 text-te-accent transition-colors hover:border-te-accent"
+      initial={{ opacity: 0, y: 8 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true }}
+      transition={{ duration: 0.3, delay: Math.min(index * 0.02, 0.2) }}
+    >
+      <span
+        className="shrink-0"
+        title={t("pages:dictionary.card.domain_tooltip")}
+      >
+        <Icon className="size-3.5" />
+      </span>
+      <h3 className="min-w-0 flex-1 truncate font-mono text-sm font-bold tracking-tight">
+        {t(`pages:dictionary.domains.items.${id}`)}
+      </h3>
+      <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <button
+          type="button"
+          aria-label={t("pages:dictionary.card.delete")}
+          title={t("pages:dictionary.card.delete")}
+          onClick={onRemove}
+          className="inline-flex size-6 items-center justify-center transition-colors hover:text-te-fg"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
+    </motion.article>
+  );
+}
 
 interface EntryCardProps {
   entry: DictEntry;
@@ -311,17 +504,9 @@ function EntryCard({ entry, index, onDelete }: EntryCardProps) {
     >
       <span
         className="shrink-0 text-te-light-gray"
-        title={
-          entry.source === "auto"
-            ? t("pages:dictionary.card.auto_tooltip")
-            : t("pages:dictionary.card.manual_tooltip")
-        }
+        title={t("pages:dictionary.card.manual_tooltip")}
       >
-        {entry.source === "auto" ? (
-          <Sparkles className="size-3.5" />
-        ) : (
-          <Feather className="size-3.5" />
-        )}
+        <Feather className="size-3.5" />
       </span>
 
       <h3

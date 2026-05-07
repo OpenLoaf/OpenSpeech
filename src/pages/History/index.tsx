@@ -34,11 +34,6 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { exportRecordingTo } from "@/lib/audio";
-import {
-  getEffectiveAiSystemPrompt,
-  getEffectiveAiTranslationSystemPrompt,
-} from "@/lib/defaultAiPrompts";
-import { resolveLang } from "@/i18n";
 import { AudioWavePlayer } from "@/components/AudioWavePlayer";
 import {
   Dialog,
@@ -822,27 +817,42 @@ function HistoryDetailDialog({
               {t(`pages:history.detail.segment_mode.${item.segment_mode}`)}
             </span>
           )}
-          {item.provider_kind && (
-            <span>
-              <span className="text-te-light-gray/60">
-                {t("pages:history.detail.meta.provider_kind")}
-              </span>{" "}
-              {t(`pages:history.detail.provider_kind.${item.provider_kind}`, {
-                defaultValue: item.provider_kind,
-              })}
-            </span>
-          )}
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
-          {hasRefined && !isFailed && !isCancelled && (
+          {!isFailed && !isCancelled && (hasRefined || rawText) && (
             <div className="mb-3 flex shrink-0 items-center gap-2">
-              <RefinedToggle
-                showRaw={showRaw}
-                onToggle={setShowRaw}
-                type={item.type}
-                targetLang={item.target_lang}
-              />
+              {hasRefined && (
+                <RefinedToggle
+                  showRaw={showRaw}
+                  onToggle={setShowRaw}
+                  type={item.type}
+                  targetLang={item.target_lang}
+                />
+              )}
+              {rawText && (
+                <button
+                  type="button"
+                  onClick={onCopy}
+                  className="ml-auto inline-flex items-center gap-1 rounded-sm border border-te-gray/30 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-te-light-gray transition-colors hover:border-te-gray/60 hover:text-te-fg"
+                  title={
+                    copied
+                      ? t("pages:history.row.copied")
+                      : t("pages:history.row.copy")
+                  }
+                >
+                  {copied ? (
+                    <Check className="size-3" strokeWidth={2.5} />
+                  ) : (
+                    <Copy className="size-3" />
+                  )}
+                  <span>
+                    {copied
+                      ? t("pages:history.row.copied")
+                      : t("pages:history.row.copy")}
+                  </span>
+                </button>
+              )}
             </div>
           )}
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -900,17 +910,6 @@ function HistoryDetailDialog({
         <DialogFooter className="m-0 flex shrink-0 flex-row flex-wrap items-center gap-x-3 gap-y-2 rounded-none border-t border-te-gray/40 bg-te-surface-hover px-4 py-3">
           <ModelMeta item={item} />
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {!isFailed && !isCancelled && rawText && (
-            <DetailActionButton
-              onClick={onCopy}
-              icon={copied ? <Check strokeWidth={2.5} /> : <Copy />}
-              label={
-                copied
-                  ? t("pages:history.row.copied")
-                  : t("pages:history.row.copy")
-              }
-            />
-          )}
           {(isFailed || isCancelled) && (
             <DetailActionButton
               onClick={onRetry}
@@ -951,10 +950,17 @@ function HistoryDetailDialog({
 
 function ModelMeta({ item }: { item: HistoryItem }) {
   const { t } = useTranslation();
-  if (!item.asr_source && !item.ai_model) return null;
-  const asrLabel = item.asr_source
-    ? t(`pages:history.detail.asr.${item.asr_source}`)
-    : null;
+  // provider_kind（schema v4+）含 vendor + 通道（如 "tencent-realtime"），是 ASR
+  // 真值；asr_source 仅 SaaS 三选一枚举，用户用 BYOK 时永远写死成 saas-* —— 老记录
+  // 没有 provider_kind 时才 fallback。
+  const asrLabel = item.provider_kind
+    ? t(`pages:history.detail.provider_kind.${item.provider_kind}`, {
+        defaultValue: item.provider_kind,
+      })
+    : item.asr_source
+      ? t(`pages:history.detail.asr.${item.asr_source}`)
+      : null;
+  if (!asrLabel && !item.ai_model) return null;
   const aiLabel = item.ai_model ?? t("pages:history.detail.ai.none");
   return (
     <div className="flex min-w-0 flex-col gap-0.5 text-[11px] leading-tight text-te-fg">
@@ -1042,52 +1048,14 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
   };
 
   const handleCopyDebugPrompt = async () => {
+    if (!item.debug_payload) {
+      toast.error(t("pages:history.toast.copy_debug_failed"), {
+        description: t("pages:history.toast.copy_debug_missing"),
+      });
+      return;
+    }
     try {
-      let absAudioPath: string | null = null;
-      if (item.audio_path) {
-        try {
-          absAudioPath = await invoke<string>("audio_recording_resolve", {
-            audioPath: item.audio_path,
-          });
-        } catch (e) {
-          console.warn("[history] resolve audio path failed:", e);
-        }
-      }
-      const aiSettings = useSettingsStore.getState().aiRefine;
-      const lang = resolveLang(
-        useSettingsStore.getState().general.interfaceLang,
-      );
-      const systemPrompt =
-        item.type === "translate"
-          ? getEffectiveAiTranslationSystemPrompt(
-              aiSettings.customTranslationSystemPrompt,
-              lang,
-            )
-          : getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
-      const rawText = (item.text ?? "").trim() || "(无)";
-      const refinedText = (item.refined_text ?? "").trim() || "(无)";
-      const audioLine = absAudioPath ?? "(无录音文件)";
-      const durationSec = (item.duration_ms / 1000).toFixed(2);
-      const payload = [
-        "# OpenSpeech 调试信息",
-        "",
-        "## 1. 音频文件路径",
-        audioLine,
-        "",
-        "## 2. 音频长度",
-        `${durationSec}s (${item.duration_ms} ms)`,
-        "",
-        "## 3. 音频解析后的文字（ASR 原始文本）",
-        rawText,
-        "",
-        "## 4. AI 优化后的文字",
-        refinedText,
-        "",
-        "## 5. AI 系统提示词",
-        systemPrompt,
-        "",
-      ].join("\n");
-      await writeText(payload);
+      await writeText(item.debug_payload);
       toast.success(t("pages:history.toast.copy_debug_success"));
     } catch (e) {
       console.error("[history] copy debug prompt failed:", e);
@@ -1186,7 +1154,8 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
         onSelect: () => void handleExport(),
       });
     }
-    if (import.meta.env.DEV) {
+    // debug_payload 仅 DEV 写入；正式版构建里恒为 NULL → 这条菜单永远不出。
+    if (item.debug_payload) {
       items.push({
         key: "copy_debug",
         label: t("pages:history.row.copy_debug"),

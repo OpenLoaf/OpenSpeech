@@ -1,8 +1,21 @@
 {
   "hotkey_conflict": {
     "title": "快速鍵衝突",
-    "description_one": "下面這條快速鍵無法被系統註冊，可能已被其他應用或系統佔用。請在此處直接綁定一個新組合。",
-    "description_other": "以下 {{count}} 條快速鍵無法被系統註冊，可能已被其他應用或系統佔用。請在此處直接綁定新組合。"
+    "description_one": "下面這條快速鍵目前無效（被系統佔用或不符合最新規則），請在此處重新綁定一個新組合。",
+    "description_other": "以下 {{count}} 條快速鍵目前無效（被系統佔用或不符合最新規則），請在此處重新綁定。"
+  },
+  "auth_recovery": {
+    "title_pending": "正在為你完成剛才的轉寫",
+    "title_success": "轉寫完成",
+    "title_error": "轉寫未完成",
+    "description_pending": "登入已恢復，正在用剛才的錄音繼續走雲端轉寫，請稍候…",
+    "description_success": "下面是這次錄音的最終結果，點擊右下角即可複製到剪貼簿。",
+    "description_error": "登入已恢復，但用錄音重新轉寫時再次失敗。可以從歷史記錄裡手動重試。",
+    "empty_transcript": "（未辨識到內容）",
+    "copy": "複製結果",
+    "copied": "已複製",
+    "close": "關閉",
+    "close_disabled": "請稍候…"
   },
   "login": {
     "title": "登入 OpenLoaf",

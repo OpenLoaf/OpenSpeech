@@ -35,6 +35,8 @@ import { LoginDialog } from "@/components/LoginDialog";
 import { NoInternetDialog } from "@/components/NoInternetDialog";
 import { FeedbackDialog } from "@/components/FeedbackDialog";
 import { HotkeyConflictDialog } from "@/components/HotkeyConflictDialog";
+import { AiPromptDialogHost } from "@/components/AiPromptDialogs";
+import { AuthRecoveryDialog } from "@/components/AuthRecoveryDialog";
 import { StatsDialog } from "@/components/StatsDialog";
 import { WindowControls } from "@/components/WindowControls";
 import { useAuthStore } from "@/stores/auth";
@@ -319,6 +321,18 @@ export default function Layout() {
       });
       // 全局快捷键 Ctrl+Alt+T toggle：已在 /toolbox 且窗口聚焦 → 隐藏到托盘；否则
       // 弹出 + 跳到 /toolbox。后端拿不到当前路由，所以把决定权放到这里。
+      // 会议录制中按下听写/翻译/AskAI 时后端拦截并 emit 这个事件，前端弹 toast。
+      await addSub<string>("openspeech://hotkey-blocked-by-meeting", (id) => {
+        const action =
+          id === "translate"
+            ? t("errors:hotkey_blocked.action_translate")
+            : id === "ask_ai"
+              ? t("errors:hotkey_blocked.action_ask_ai")
+              : t("errors:hotkey_blocked.action_dictate");
+        toast.warning(t("errors:hotkey_blocked.title"), {
+          description: t("errors:hotkey_blocked.description", { action }),
+        });
+      });
       await addSub<unknown>("openspeech://hotkey-open-toolbox", async () => {
         const w = getCurrentWebviewWindow();
         const visible = await w.isVisible().catch(() => false);
@@ -700,6 +714,8 @@ export default function Layout() {
         focusMetric={statsFocusMetric}
       />
       <HotkeyConflictDialog />
+      <AiPromptDialogHost />
+      <AuthRecoveryDialog />
     </div>
   );
 }

@@ -1,8 +1,21 @@
 {
   "hotkey_conflict": {
     "title": "Hotkey conflict",
-    "description_one": "The shortcut below couldn't be registered — it may be claimed by the system or another app. Bind a new combo right here.",
-    "description_other": "{{count}} shortcuts couldn't be registered — they may be claimed by the system or another app. Bind new combos right here."
+    "description_one": "The shortcut below is currently invalid (claimed by the system or against the latest rules). Bind a new combo right here.",
+    "description_other": "{{count}} shortcuts are currently invalid (claimed by the system or against the latest rules). Bind new combos right here."
+  },
+  "auth_recovery": {
+    "title_pending": "Finishing your last recording",
+    "title_success": "Transcription ready",
+    "title_error": "Transcription failed",
+    "description_pending": "You're signed back in — re-running the cloud transcription on your last recording, hang tight…",
+    "description_success": "Here is the final transcript. Tap the button below to copy it to the clipboard.",
+    "description_error": "Signed back in successfully, but re-transcribing the saved audio failed again. You can retry it manually from History.",
+    "empty_transcript": "(Nothing was recognized)",
+    "copy": "Copy",
+    "copied": "Copied",
+    "close": "Close",
+    "close_disabled": "Working…"
   },
   "login": {
     "title": "Sign in to OpenLoaf",

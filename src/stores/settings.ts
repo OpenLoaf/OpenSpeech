@@ -54,9 +54,6 @@ export interface GeneralSettings {
   cueSound: boolean;
   restoreClipboard: boolean;
   launchStartup: boolean;
-  // 仅 macOS：是否在 Dock 中显示应用图标。off ⇒ 应用变成纯菜单栏应用（Accessory
-  // activation policy），仍可通过托盘打开主窗口。其他平台无效果。
-  showDockIcon: boolean;
   // 自动更新策略：决定后台周期检查命中新版后的行为。详见 UpdatePolicy 注释。
   // 默认 PROMPT：下载完毕后弹 toast 让用户决定何时安装。
   updatePolicy: UpdatePolicy;
@@ -125,6 +122,8 @@ export interface AiRefineSettings {
   // 非 null = 用户自定义条目（可空数组表示"用户主动清空"）。
   customPolishScenarios: PolishScenario[] | null;
   includeHistory: boolean;
+  // 用户在词典页"常见领域"勾选的 ID 列表，最多 DOMAIN_LIMIT 项。注入到 refine prompt 头部。
+  selectedDomains: string[];
 }
 
 // ─── Dictation provider（听写云通道选择）────────────────────────
@@ -196,8 +195,7 @@ const DEFAULT_GENERAL: GeneralSettings = {
   cueSound: true,
   restoreClipboard: true,
   launchStartup: false,
-  showDockIcon: true,
-  updatePolicy: "PROMPT",
+  updatePolicy: "AUTO",
   updateCheckIntervalHours: 6,
   skippedUpdateVersion: "",
   closeBehavior: "ASK",
@@ -223,6 +221,7 @@ const DEFAULT_AI_REFINE: AiRefineSettings = {
   customMeetingSummaryPrompt: null,
   customPolishScenarios: null,
   includeHistory: true,
+  selectedDomains: [],
 };
 
 const DEFAULT_DICTATION: DictationSettings = {
@@ -257,6 +256,7 @@ interface SettingsState {
   setAiMeetingSummaryPrompt: (value: string | null) => Promise<void>;
   setPolishScenarios: (value: PolishScenario[] | null) => Promise<void>;
   setAiIncludeHistory: (v: boolean) => Promise<void>;
+  setSelectedDomains: (ids: string[]) => Promise<void>;
   setDictationMode: (mode: DictationProviderMode) => Promise<void>;
   setDictationLang: (lang: DictationLang) => Promise<void>;
   addDictationProvider: (provider: DictationCustomProvider) => Promise<void>;
@@ -455,6 +455,11 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
   // 让每次调用都"missing_custom_provider"再 fallback 一遍。
   const mode: AiRefineMode =
     r.mode === "custom" && active && providers.some((p) => p.id === active) ? "custom" : "saas";
+
+  const selectedDomains = Array.isArray(r.selectedDomains)
+    ? r.selectedDomains.filter((s): s is string => typeof s === "string" && s.length > 0).slice(0, 3)
+    : [];
+
   return {
     enabled,
     mode,
@@ -466,6 +471,7 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
     customMeetingSummaryPrompt,
     customPolishScenarios,
     includeHistory: typeof r.includeHistory === "boolean" ? r.includeHistory : true,
+    selectedDomains,
   };
 }
 
@@ -813,6 +819,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     setAiIncludeHistory: async (v) => {
       const cur = get().aiRefine;
       const next = { ...cur, includeHistory: v };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setSelectedDomains: async (ids) => {
+      const cur = get().aiRefine;
+      const seen = new Set<string>();
+      const cleaned: string[] = [];
+      for (const id of ids) {
+        if (typeof id !== "string" || !id || seen.has(id)) continue;
+        seen.add(id);
+        cleaned.push(id);
+        if (cleaned.length >= 3) break;
+      }
+      const next = { ...cur, selectedDomains: cleaned };
       set({ aiRefine: next });
       await persist({ aiRefine: next });
     },

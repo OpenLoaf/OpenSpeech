@@ -178,17 +178,6 @@ fn tray_refresh(app: tauri::AppHandle) {
     rebuild_tray_menu(&app);
 }
 
-// 前端在设置页切换"在 Dock 中显示应用"开关后调用，或 bootPromise 启动时调一次。
-// Rust 重读 settings.json 的 showDockIcon，立即把 ActivationPolicy 切到相应值。
-// 非 macOS 平台上是 no-op（Dock 概念不存在）。
-#[tauri::command]
-fn sync_dock_icon(_app: tauri::AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        apply_dock_icon_policy(&_app);
-    }
-}
-
 // "没有互联网连接"对话框上的"打开系统设置"按钮调用。
 // 直接 spawn 系统命令打开网络设置面板——`tauri-plugin-opener` 默认 scope 不允许
 // `x-apple.systempreferences:` / `ms-settings:` 这种自定义 scheme，自管更省事。
@@ -395,34 +384,11 @@ fn open_network_settings() {
     }
 }
 
-// macOS：启动时读 settings 决定初始 policy；主窗口可见/重新打开时也复用此逻辑。
-// 默认 true（显示 Dock 图标）。托盘隐藏路径不经此函数——hide_main_window 始终
-// 切 Accessory，隐藏时不需要 Dock 图标。
-#[cfg(target_os = "macos")]
-fn read_show_dock_icon<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
-    let Some(s) = app.store("settings.json").ok() else {
-        return true;
-    };
-    let Some(root) = s.get("root") else {
-        return true;
-    };
-    let Some(general) = root.get("general") else {
-        return true;
-    };
-    general
-        .get("showDockIcon")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true)
-}
-
+// 主窗口可见时把进程切回 Regular（显示 Dock 图标 + 出现在 Cmd+Tab）。
+// 与 hide_main_window 切 Accessory 配对：托盘隐藏期间 Dock 图标消失。
 #[cfg(target_os = "macos")]
 fn apply_dock_icon_policy<R: Runtime>(app: &tauri::AppHandle<R>) {
-    let policy = if read_show_dock_icon(app) {
-        ActivationPolicy::Regular
-    } else {
-        ActivationPolicy::Accessory
-    };
-    let _ = app.set_activation_policy(policy);
+    let _ = app.set_activation_policy(ActivationPolicy::Regular);
 }
 
 fn hide_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
@@ -468,11 +434,9 @@ pub(crate) fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
         caller.file(),
         caller.line()
     );
-    // macOS：按用户偏好切换 activation policy——默认 Regular（Dock 显示图标），
-    // 若设置里关了 showDockIcon 则切 Accessory（纯菜单栏应用）。前一次隐藏时
-    // hide_main_window 已统一切到 Accessory，这里必须再读一次用户设定重新 apply。
-    // 幂等检查（下面的 visible+focused+!minimized 短路）之前先 apply：dock 图标
-    // 状态独立于窗口可见性，跳过 set_focus 不代表跳过 dock policy 同步。
+    // macOS：hide_main_window 隐藏到托盘时切到了 Accessory，这里再切回 Regular。
+    // 幂等检查（visible+focused+!minimized 短路）之前先 apply：dock 图标状态
+    // 独立于窗口可见性，跳过 set_focus 不代表跳过 dock policy 同步。
     #[cfg(target_os = "macos")]
     {
         apply_dock_icon_policy(app);
@@ -795,6 +759,12 @@ pub fn run() {
                 openloaf::bootstrap(&app_handle_ol).await;
             });
 
+            // ---- fast_chat_variant 缓存维护 loop -----------------------------
+            // 启动后立刻挂上 50min 周期续期；用户登录 / restore 成功的钩子在
+            // openloaf 模块内部触发首次 prefetch，配合 1h TTL 保证前台 refine
+            // 直接命中缓存，省掉一次串行 RTT。
+            ai_refine::spawn_fast_variant_refresh_loop(app.handle().clone());
+
             // ---- 预创建悬浮录音条窗口（hidden，快捷键触发时 show）-----------
             if let Err(e) = overlay::ensure_overlay(&app.handle()) {
                 log::warn!("[overlay] ensure failed: {e:?}");
@@ -818,9 +788,8 @@ pub fn run() {
             let mo_state = hotkey::modifier_only::create_state();
             app.manage(mo_state);
 
-            // ---- macOS：按 settings.showDockIcon 设置初始 ActivationPolicy ----
-            // 默认 true（Regular / 显示 Dock 图标）；用户上次关过则启动后即切 Accessory，
-            // 不经过一次 Dock 闪烁。
+            // ---- macOS：启动后保持 Regular（显示 Dock 图标）。
+            // 隐藏到托盘时由 hide_main_window 切到 Accessory，show_main_window 切回。
             #[cfg(target_os = "macos")]
             {
                 apply_dock_icon_policy(&app.handle());
@@ -995,7 +964,6 @@ pub fn run() {
             show_main_window_cmd,
             tray_refresh,
             update_tray_labels,
-            sync_dock_icon,
             open_network_settings,
             open_log_dir,
             read_recent_log_tail,

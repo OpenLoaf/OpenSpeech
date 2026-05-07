@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import {
@@ -23,6 +23,11 @@ import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-mana
 import { cn } from "@/lib/utils";
 import { useHistoryStore } from "@/stores/history";
 import { useRecordingStore, type RecordingState } from "@/stores/recording";
+import { useHotkeysStore } from "@/stores/hotkeys";
+import { Kbd, tokensFromBinding } from "@/components/HotkeyPreview";
+import { LiveDictationPanel } from "@/components/LiveDictationPanel";
+import { detectPlatform } from "@/lib/platform";
+import type { BindingId } from "@/lib/hotkey";
 import {
   useSettingsStore,
   DEFAULT_POLISH_SCENARIOS,
@@ -32,8 +37,10 @@ import {
   type TranslateTargetLang,
 } from "@/stores/settings";
 import { resolveLang } from "@/i18n";
-import { refineTextViaChatStream } from "@/lib/ai-refine";
+import { refineTextViaChatStream, isSaasAuthError } from "@/lib/ai-refine";
 import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
+import { useAuthStore } from "@/stores/auth";
+import { useUIStore } from "@/stores/ui";
 
 type ToolKey = "translate" | "polish" | "tts";
 
@@ -70,11 +77,20 @@ type ToolStatus =
 
 type RunMeta = { tool: ToolKey; durationMs: number; chars: number };
 
+// 事件 handler 同步流里 setState 后立即调用 runImmediate，stateRef.current 还没更新
+// （render body 同步赋值的镜像在下次 render 后才生效）。所以改 text / 参数后第一次跑
+// 必须把新值通过这里直接传过去，避免 runTool 读到上一拍的 stateRef。
+type RunOverrides = {
+  text?: string;
+  targetLang?: TranslateTargetLang;
+  polishScenarioId?: string;
+};
+
 const ICON_BTN =
-  "inline-flex h-7 items-center gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.18em] text-te-light-gray transition-colors hover:text-te-fg disabled:opacity-40 disabled:hover:text-te-light-gray";
+  "inline-flex h-8 items-center gap-1.5 px-2.5 font-mono text-[11px] uppercase tracking-[0.18em] text-te-light-gray transition-colors hover:text-te-fg disabled:opacity-40 disabled:hover:text-te-light-gray";
 
 const CHIP_TRIGGER =
-  "inline-flex h-6 items-center gap-1 border border-te-gray/50 bg-te-bg px-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent";
+  "inline-flex h-7 items-center gap-1.5 border border-te-gray/50 bg-te-bg px-2 font-mono text-[11px] uppercase tracking-[0.18em] text-te-fg transition-colors hover:border-te-accent hover:text-te-accent";
 
 function useClickOutside<T extends HTMLElement>(
   open: boolean,
@@ -263,16 +279,64 @@ function InputCard({
     setHistoryOpen(false),
   );
   const [pasted, setPasted] = useState(false);
+  const [hasPasteable, setHasPasteable] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const refocusTextarea = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    const len = el.value.length;
+    try {
+      el.setSelectionRange(len, len);
+    } catch {}
+  }, []);
+  const recState = useRecordingStore((s) => s.state);
+  const audioLevels = useRecordingStore((s) => s.audioLevels);
+  const liveTranscript = useRecordingStore((s) => s.liveTranscript);
+  const escArmed = useRecordingStore((s) => s.escArmed);
+  const activeBindingId = useRecordingStore((s) => s.activeId);
+  const segmentModeOverride = useRecordingStore((s) => s.segmentModeOverride);
+  const settingsSegmentMode = useSettingsStore((s) => s.general.asrSegmentMode);
+  const segmentMode = segmentModeOverride ?? settingsSegmentMode;
+  const errorMessage = useRecordingStore((s) => s.errorMessage);
+  const isLive = recState !== "idle";
+  // mount 时（recState===idle）+ 录音结束切回 idle 时都跑一次。textarea 在 isLive 时
+  // 不渲染，所以这里只负责 idle 状态下保证光标在 textarea 内。
+  useEffect(() => {
+    if (recState === "idle") refocusTextarea();
+  }, [recState, refocusTextarea]);
+
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const txt = (await readClipboardText())?.trim() ?? "";
+        if (alive) setHasPasteable(txt.length > 0);
+      } catch {
+        if (alive) setHasPasteable(false);
+      }
+    };
+    void check();
+    const onRefocus = () => void check();
+    window.addEventListener("focus", onRefocus);
+    document.addEventListener("visibilitychange", onRefocus);
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", onRefocus);
+      document.removeEventListener("visibilitychange", onRefocus);
+    };
+  }, []);
 
   const handlePaste = async () => {
     await doPaste();
     setPasted(true);
+    setHasPasteable(true);
     window.setTimeout(() => setPasted(false), 800);
   };
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col bg-te-bg">
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-te-gray/30 bg-te-bg/40 px-3">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-te-gray/30 bg-te-bg/40 px-3">
         <div className="relative" ref={historyRef}>
           <button
             type="button"
@@ -313,6 +377,7 @@ function InputCard({
           <button
             type="button"
             onClick={handlePaste}
+            disabled={!hasPasteable}
             className={cn(ICON_BTN, pasted && "text-te-accent")}
           >
             {pasted ? (
@@ -391,12 +456,129 @@ function InputCard({
         ) : null}
       </AnimatePresence>
 
-      <textarea
-        value={text}
-        onChange={(e) => onTextInput(e.target.value)}
-        placeholder={t("pages:toolbox.input.text_placeholder")}
-        className="min-h-0 w-full flex-1 resize-none bg-te-bg px-4 py-3 font-mono text-base leading-relaxed text-te-fg/90 outline-none transition-colors placeholder:text-te-light-gray/40 focus:bg-te-surface/40 focus:text-te-fg"
-      />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {isLive ? (
+          <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
+            <LiveDictationPanel
+              state={recState}
+              audioLevels={audioLevels}
+              liveTranscript={liveTranscript}
+              segmentMode={segmentMode}
+              escArmed={escArmed}
+              activeBindingId={activeBindingId}
+              errorMessage={errorMessage}
+              stack
+              hideActions
+            />
+          </div>
+        ) : (
+          <>
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(e) => onTextInput(e.target.value)}
+              placeholder={t("pages:toolbox.input.text_placeholder")}
+              className="min-h-0 w-full flex-1 resize-none bg-te-bg px-4 py-3 font-mono text-base leading-relaxed text-te-fg/90 outline-none transition-colors placeholder:text-te-light-gray/40 focus:bg-te-surface/40 focus:text-te-fg"
+            />
+            {!hasText && !clipboardPreview ? <DictateHint /> : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RecordingActionsCard() {
+  const { t } = useTranslation();
+  const escArmed = useRecordingStore((s) => s.escArmed);
+  const activeBindingId = useRecordingStore((s) => s.activeId);
+  const isTranslate = activeBindingId === "translate";
+  const activeKey: BindingId = isTranslate ? "translate" : "dictate_ptt";
+  const activeBinding = useHotkeysStore((s) => s.bindings[activeKey]);
+  const platform = detectPlatform();
+  const activeTokens = useMemo(
+    () => tokensFromBinding(activeBinding, platform),
+    [activeBinding, platform],
+  );
+  return (
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center bg-te-surface px-6">
+      <div
+        className={cn(
+          "absolute right-3 top-3 flex items-center gap-2",
+          escArmed && "animate-pulse",
+        )}
+      >
+        <Kbd highlight={escArmed}>{t("overlay:panel.action.kbd_esc")}</Kbd>
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-widest",
+            escArmed ? "text-te-accent" : "text-te-light-gray",
+          )}
+        >
+          {escArmed
+            ? t("overlay:toast.esc_arm.title")
+            : t("overlay:panel.action.cancel")}
+        </span>
+      </div>
+      <div className="flex flex-col items-center gap-3">
+        <div className="flex items-center gap-1.5">
+          {activeTokens.map((tok, i) => (
+            <Fragment key={i}>
+              {i > 0 ? (
+                <span className="font-mono text-[10px] text-te-light-gray">
+                  +
+                </span>
+              ) : null}
+              <Kbd highlight>
+                {tok.kind !== "prefix" && tok.icon ? (
+                  <span aria-hidden className="mr-1 opacity-60">
+                    {tok.icon}
+                  </span>
+                ) : null}
+                {tok.label}
+              </Kbd>
+            </Fragment>
+          ))}
+        </div>
+        <span className="font-mono text-[10px] uppercase tracking-widest text-te-accent md:text-xs">
+          {t(
+            isTranslate
+              ? "overlay:panel.action.stop_translate"
+              : "overlay:panel.action.stop",
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function DictateHint() {
+  const { t } = useTranslation();
+  const platform = detectPlatform();
+  const binding = useHotkeysStore((s) => s.bindings["dictate_ptt"]);
+  const tokens = useMemo(
+    () => tokensFromBinding(binding, platform),
+    [binding, platform],
+  );
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center">
+      <div className="flex items-center gap-2.5 font-mono text-[10px] uppercase tracking-[0.22em] text-te-light-gray/60">
+        <span className="flex items-center gap-1.5">
+          {tokens.length === 0 ? (
+            <span>{t("pages:toolbox.input.dictate_unbound")}</span>
+          ) : (
+            tokens.map((tok, i) => (
+              <Fragment key={i}>
+                {i > 0 ? (
+                  <span className="text-te-light-gray/40">+</span>
+                ) : null}
+                <Kbd>{tok.label}</Kbd>
+              </Fragment>
+            ))
+          )}
+        </span>
+        <span>{t("pages:toolbox.input.dictate_hint")}</span>
+      </div>
     </div>
   );
 }
@@ -414,7 +596,7 @@ function ToolTabs({ tool, onChange }: ToolTabsProps) {
     { key: "tts", icon: Volume2 },
   ];
   return (
-    <div className="flex shrink-0 items-stretch self-end">
+    <div className="flex shrink-0 items-stretch gap-px self-end border border-te-gray/40 bg-te-gray/40">
       {items.map(({ key, icon: Icon }) => {
         const active = tool === key;
         return (
@@ -423,17 +605,14 @@ function ToolTabs({ tool, onChange }: ToolTabsProps) {
             type="button"
             onClick={() => onChange(key)}
             className={cn(
-              "relative flex h-9 items-center justify-center gap-1.5 px-4 font-mono text-[11px] uppercase tracking-[0.22em] transition-colors",
+              "inline-flex h-8 items-center gap-1.5 px-3 font-mono text-[10px] uppercase tracking-[0.22em] transition-colors",
               active
-                ? "text-te-accent"
-                : "text-te-light-gray hover:bg-te-surface-hover hover:text-te-fg",
+                ? "bg-te-accent text-te-bg"
+                : "bg-te-bg text-te-light-gray hover:bg-te-surface-hover hover:text-te-fg",
             )}
           >
             <Icon className="size-3.5" />
             <span>{t(`pages:toolbox.tools.tabs.${key}`)}</span>
-            {active ? (
-              <span className="absolute inset-x-0 -bottom-px h-0.5 bg-te-accent" />
-            ) : null}
           </button>
         );
       })}
@@ -478,6 +657,7 @@ function OutputCard({
 }: OutputCardProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const recState = useRecordingStore((s) => s.state);
 
   const outputText =
     status.kind === "done"
@@ -554,9 +734,11 @@ function OutputCard({
     );
   })();
 
+  if (recState !== "idle") return <RecordingActionsCard />;
+
   return (
     <div className="flex min-h-0 min-w-0 flex-col bg-te-surface">
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-te-gray/30 bg-te-bg/40 px-3">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-te-gray/30 bg-te-bg/40 px-3">
         <div className="flex items-center gap-2">{paramRow}</div>
         <div className="flex items-center gap-0.5">
           <button
@@ -620,6 +802,12 @@ function OutputCard({
               <Download className="size-3" />
               {t("pages:toolbox.tools.download")}
             </button>
+          </div>
+        ) : status.kind === "idle" ? (
+          <div className="flex flex-1 items-center justify-center px-6">
+            <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-te-light-gray/50">
+              {t("pages:toolbox.output.waiting_input")}
+            </p>
           </div>
         ) : (
           <p className="h-full overflow-y-auto whitespace-pre-wrap bg-te-bg px-4 py-3 font-mono text-base leading-relaxed text-te-fg">
@@ -775,16 +963,35 @@ export default function ToolboxPage() {
   };
 
   const runTool = useCallback(
-    async (tool: ToolKey, textOverride?: string) => {
+    async (tool: ToolKey, overrides?: RunOverrides) => {
       const myRunId = ++runIdRef.current;
       const snap = stateRef.current;
-      const value = textOverride ?? snap.text;
+      const value = overrides?.text ?? snap.text;
       if (!value.trim()) {
+        if (runIdRef.current !== myRunId) return;
         setStatus({ kind: "idle" });
         setRunMeta(null);
         return;
       }
+      if (runIdRef.current !== myRunId) return;
       setActiveTool(tool);
+
+      // 前置 gate：SaaS chat 通道未登录时直接弹登录框，不发 invoke。靠后端报错
+      // 再正则识别本来就是反模式——登录态前端已知，应在源头拦住。BYOK custom
+      // 路径自带凭证跳过此 gate；token 过期但 isAuthenticated=true 的兜底由后端
+      // handle_session_expired 走 auth-lost 事件触发全局拦截器。
+      if (tool !== "tts") {
+        const aiMode = useSettingsStore.getState().aiRefine.mode;
+        if (aiMode === "saas" && !useAuthStore.getState().isAuthenticated) {
+          useUIStore.getState().openLogin();
+          if (runIdRef.current !== myRunId) return;
+          setStatus({ kind: "error", message: t("errors:auth.session_expired") });
+          setRunMeta(null);
+          return;
+        }
+      }
+
+      if (runIdRef.current !== myRunId) return;
       setStatus({ kind: "running", partial: "" });
       setRunMeta(null);
       const start = performance.now();
@@ -806,14 +1013,16 @@ export default function ToolboxPage() {
             snap.aiRefine.customTranslationSystemPrompt,
             snap.promptLang,
           );
-          sysPrompt = `${base}\n\nTarget language: ${TRANSLATE_LANG_NAMES[snap.targetLang]}`;
+          const targetLang = overrides?.targetLang ?? snap.targetLang;
+          sysPrompt = `${base}\n\nTarget language: ${TRANSLATE_LANG_NAMES[targetLang]}`;
         } else {
           const base = getEffectiveAiPolishSystemPrompt(
             snap.aiRefine.customPolishSystemPrompt,
             snap.promptLang,
           );
+          const scenarioId = overrides?.polishScenarioId ?? snap.polishScenarioId;
           const scenario = snap.polishScenarios.find(
-            (s) => s.id === snap.polishScenarioId,
+            (s) => s.id === scenarioId,
           );
           sysPrompt = scenario ? `${base}\n\n${scenario.instruction}` : base;
         }
@@ -828,7 +1037,8 @@ export default function ToolboxPage() {
       } catch (e) {
         if (runIdRef.current !== myRunId) return;
         await handleAiRefineCustomFailure(e);
-        const msg = e instanceof Error ? e.message : String(e);
+        const raw = e instanceof Error ? e.message : String(e);
+        const msg = isSaasAuthError(raw) ? t("errors:auth.session_expired") : raw;
         setStatus({ kind: "error", message: msg });
       }
     },
@@ -836,9 +1046,9 @@ export default function ToolboxPage() {
   );
 
   const runImmediate = useCallback(
-    (tool?: ToolKey, textOverride?: string) => {
+    (tool?: ToolKey, overrides?: RunOverrides) => {
       cancelDebounce();
-      void runTool(tool ?? stateRef.current.activeTool, textOverride);
+      void runTool(tool ?? stateRef.current.activeTool, overrides);
     },
     [cancelDebounce, runTool],
   );
@@ -854,7 +1064,14 @@ export default function ToolboxPage() {
     [cancelDebounce, runTool],
   );
 
-  const setTextValue = (next: string, options: { autoRun: boolean }) => {
+  // 写入 textarea 的统一入口：清掉 revertSnapshot / clipboardPreview，按 mode 决定后续是否激活。
+  // - "immediate"：粘贴 / 历史 / 录音结束等，下一帧立刻跑；text 通过 override 直接传入避免 stateRef 滞后。
+  // - "debounce"：用户打字，800ms 防抖。
+  // - "none"：仅写入文本，不激活（外部场景如 setTextValue autoRun:false）。
+  const applyTextChange = (
+    next: string,
+    mode: "immediate" | "debounce" | "none",
+  ) => {
     setTextRaw(next);
     if (revertSnapshot !== null) setRevertSnapshot(null);
     if (clipboardPreview !== null) setClipboardPreview(null);
@@ -864,21 +1081,17 @@ export default function ToolboxPage() {
       setRunMeta(null);
       return;
     }
-    if (options.autoRun) runImmediate();
+    if (mode === "immediate") runImmediate(undefined, { text: next });
+    else if (mode === "debounce") runDebounced();
     else cancelDebounce();
   };
 
+  const setTextValue = (next: string, options: { autoRun: boolean }) => {
+    applyTextChange(next, options.autoRun ? "immediate" : "none");
+  };
+
   const handleTextInput = (next: string) => {
-    setTextRaw(next);
-    if (revertSnapshot !== null) setRevertSnapshot(null);
-    if (clipboardPreview !== null) setClipboardPreview(null);
-    if (next.trim().length === 0) {
-      cancelDebounce();
-      setStatus({ kind: "idle" });
-      setRunMeta(null);
-      return;
-    }
-    runDebounced();
+    applyTextChange(next, "debounce");
   };
 
   useEffect(() => {
@@ -953,7 +1166,7 @@ export default function ToolboxPage() {
     setRevertSnapshot(text);
     setTextRaw(next);
     setRunMeta(null);
-    runImmediate("polish", next);
+    runImmediate("polish", { text: next });
   };
 
   const revertText = () => {
@@ -976,13 +1189,13 @@ export default function ToolboxPage() {
     setTargetLang(l);
     void setGeneral("translateTargetLang", l);
     if (text.trim().length > 0 && stateRef.current.activeTool === "translate") {
-      runImmediate("translate");
+      runImmediate("translate", { targetLang: l });
     }
   };
   const handleSetPolishScenarioId = (id: string) => {
     setPolishScenarioId(id);
     if (text.trim().length > 0 && stateRef.current.activeTool === "polish") {
-      runImmediate("polish");
+      runImmediate("polish", { polishScenarioId: id });
     }
   };
   const handleSetVoice = (v: (typeof TTS_VOICES)[number]) => {
@@ -1042,7 +1255,7 @@ export default function ToolboxPage() {
         </div>
       </div>
 
-      <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col px-[4vw] pt-[clamp(0.5rem,2vh,1.25rem)] pb-[clamp(1rem,3vw,2rem)]">
+      <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col px-[4vw] pt-2 pb-[clamp(1rem,3vw,2rem)]">
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}

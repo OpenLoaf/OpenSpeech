@@ -40,6 +40,7 @@ import { refineTextViaChatStream } from "@/lib/ai-refine";
 import { handleAiRefineCustomFailure } from "@/lib/ai-refine-fallback";
 import { resolveLang } from "@/i18n";
 import { getHotwordsArray } from "@/lib/hotwordsCache";
+import { getDomainNamesForPrompt } from "@/lib/domains";
 import { newId } from "@/lib/ids";
 import { cuePlay, cueSetActive } from "@/lib/cue";
 import { getActiveAppName } from "@/lib/activeApp";
@@ -374,6 +375,15 @@ let resolvedProviderKindForCurrentSession:
 // history.target_app；超快录音 / 失败时 null，由 add() 接受 null。
 let currentSessionTargetApp: string | null = null;
 
+// 本次 finalize 是否撞过 SaaS 401。文件转写或 refine 抛出 isSaasAuthError 时置 true，
+// 等 finalize 末尾 history.add 落库拿到 id 再把 id 推给 ui store，让 main.tsx 在
+// 用户登录回来后用这个 id 自动续转写并弹结果 dialog。
+//
+// 模块级而非闭包：401 路径分散在 finalize 内三处 try/catch（file / finalize / refine），
+// 用闭包要在 finalize 入口就把"标记 + reset"挂到栈上，调用面更乱；模块级配合
+// "录音开始时 reset" 已经够用——同一时刻只有一次 finalize 在跑。
+let pendingAuthLossThisSession = false;
+
 // 失败原因翻译：Rust 端 stt_start 失败典型文案：
 //   "not authenticated; login first"
 //   "audio stream not running; start mic first"
@@ -512,6 +522,9 @@ const isSaasAuthError = (msg: string) =>
 const openLoginAfterSaasAuthLost = () => {
   if (!IS_MAIN_WINDOW) return;
   console.warn("[stt] saas auth lost (401) → opening login (recording/history preserved)");
+  // 标记本次 finalize 撞了 401。finalize 末尾的 history.add 会读这个标记，把
+  // 刚落库的 history id 透给 ui store，由 main.tsx 在登录回来后续转 + 弹 dialog。
+  pendingAuthLossThisSession = true;
   useUIStore.getState().openLogin();
 };
 
@@ -582,6 +595,9 @@ const startRecordingSession = (id: string) => {
   // 把上一次的 sessionId 误带给本次 refine。
   currentSttSessionId = null;
   resolvedProviderKindForCurrentSession = null;
+  // 上一次的 401 标记同样属于上一会话残留，必须清——否则本次成功的录音也会
+  // 被误推给 ui 触发"登录后续转"。
+  pendingAuthLossThisSession = false;
   // 全局快捷键不会改变前台焦点，此刻拿到的就是用户原本在用的 app。invoke 通常
   // < 100ms 完成，录音持续 1s+，结束时大概率已回填；超短录音兜底为 null。
   currentSessionTargetApp = null;
@@ -870,6 +886,9 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
   let translationOnlyText: string | null = null;
   // history 详情底部要显示"实际调用的 AI 模型"。即便 refine 失败也要记录"试过谁"。
   let aiModelLabel: string | null = null;
+  // DEV 构建：累积发出的 LLM 请求快照，最后写到 history.debug_payload。
+  // 单段 refine 是单 envelope；翻译模式收集 phase1+phase2 两条；正式版恒空。
+  const debugEnvelopes: string[] = [];
   console.info(
     `[refine] gate textLen=${text.length} segmentMode=${segmentMode} refineEnabled=${refineActive} willCallRefine=${!!text && refineActive}`,
   );
@@ -971,6 +990,7 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       const noopChunk = (_chunk: string) => {};
       const phase1OnChunk =
         translateMode && !bilingual ? noopChunk : onChunk;
+      const domainsForPrompt = getDomainNamesForPrompt(aiSettings.selectedDomains);
       const r = await refineTextViaChatStream(
         {
           mode: aiSettings.mode,
@@ -979,11 +999,16 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           hotwords: hotwords.length > 0 ? hotwords : undefined,
           historyEntries,
           requestTime,
+          targetApp: currentSessionTargetApp ?? undefined,
+          domains: domainsForPrompt.length > 0 ? domainsForPrompt : undefined,
           ...customParams,
           taskId: currentSttSessionId ?? undefined,
         },
         phase1OnChunk,
       );
+      if (import.meta.env.DEV && r.requestEnvelope) {
+        debugEnvelopes.push(r.requestEnvelope);
+      }
       const refinedSrc = r.refinedText;
       translatePhase1Done = true;
       // phase 2 = translate：用独立 translation prompt 翻译 phase 1 的清洗版。
@@ -1022,11 +1047,15 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
             userText: refinedSrc,
             hotwords: hotwords.length > 0 ? hotwords : undefined,
             requestTime,
+            domains: domainsForPrompt.length > 0 ? domainsForPrompt : undefined,
             ...customParams,
             taskId: currentSttSessionId ?? undefined,
           },
           phase2OnChunk,
         );
+        if (import.meta.env.DEV && r2.requestEnvelope) {
+          debugEnvelopes.push(r2.requestEnvelope);
+        }
         refinedText = bilingual ? streamedSoFar : r2.refinedText;
         translationOnlyText = r2.refinedText;
       } else {
@@ -1156,7 +1185,24 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       status = "success";
       errorForHistory = undefined;
     }
-    await useHistoryStore.getState().add({
+    // DEV：单段 envelope 直接落串；多段（翻译 phase1+phase2）合成 JSON 数组保存。
+    let debugPayload: string | null = null;
+    if (import.meta.env.DEV && debugEnvelopes.length > 0) {
+      if (debugEnvelopes.length === 1) {
+        debugPayload = debugEnvelopes[0];
+      } else {
+        try {
+          debugPayload = JSON.stringify(
+            debugEnvelopes.map((s) => JSON.parse(s)),
+            null,
+            2,
+          );
+        } catch {
+          debugPayload = debugEnvelopes.join("\n\n");
+        }
+      }
+    }
+    const addedItem = await useHistoryStore.getState().add({
       type: translateMode ? "translate" : "dictation",
       text: text || transcriptPlaceholder(),
       refined_text: translateMode ? translationOnlyText : refinedText,
@@ -1174,7 +1220,24 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
         : null,
       asr_ms: asrMsForHistory,
       refine_ms: refineMsForHistory,
+      debug_payload: debugPayload,
     });
+
+    // 401 路径只对"raw STT 都没跑通"的情形挂 pending —— text 是空、status=failed、
+    // audio 还在盘上时才有重转价值。如果 raw text 已经拿到（仅 refine 401），
+    // 用户已经能在末尾兜底 paste 拿到原文，再弹一个续转 dialog 反而打扰。
+    if (
+      pendingAuthLossThisSession &&
+      status === "failed" &&
+      !text &&
+      addedItem.audio_path
+    ) {
+      console.info(
+        `[recording] saas auth lost during finalize → pending recovery historyId=${addedItem.id}`,
+      );
+      useUIStore.getState().setPendingAuthRecoveryHistoryId(addedItem.id);
+    }
+    pendingAuthLossThisSession = false;
   }
 
   // 末尾兜底：把"还没敲到光标的剩余部分"补完。三种模式统一走 lastInjectedText
@@ -2522,6 +2585,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           if (aiSettings.mode === "custom" && !activeProvider) {
             throw new Error("no_active_custom_provider");
           }
+          const debugDomains = getDomainNamesForPrompt(aiSettings.selectedDomains);
           const r = await refineTextViaChatStream(
             {
               mode: aiSettings.mode,
@@ -2530,6 +2594,8 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
               hotwords: hotwords.length > 0 ? hotwords : undefined,
               historyEntries,
               requestTime,
+              targetApp: currentSessionTargetApp ?? undefined,
+              domains: debugDomains.length > 0 ? debugDomains : undefined,
               customBaseUrl: activeProvider?.baseUrl,
               customModel: activeProvider?.model,
               customKeyringId: activeProvider
@@ -2654,6 +2720,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           ) ?? null;
         if (!activeProvider) throw new Error("no_active_custom_provider");
       }
+      const debugRefineDomains = getDomainNamesForPrompt(aiSettings.selectedDomains);
       const r = await refineTextViaChatStream(
         {
           mode: aiSettings.mode,
@@ -2661,6 +2728,7 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           userText: trimmed,
           hotwords: hotwords.length > 0 ? hotwords : undefined,
           requestTime,
+          domains: debugRefineDomains.length > 0 ? debugRefineDomains : undefined,
           customBaseUrl: activeProvider?.baseUrl,
           customModel: activeProvider?.model,
           customKeyringId: activeProvider

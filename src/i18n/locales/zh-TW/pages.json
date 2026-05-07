@@ -17,6 +17,17 @@
     },
     "hotkey_hint": "按一下快捷鍵開始錄音，再按一下結束並把文字寫入目前輸入框。按 <esc>Esc</esc> 取消；焦點必須在可編輯區域。",
     "translate_hint": "按一下翻譯快捷鍵開始錄音，再按一下結束。系統會先轉寫再翻譯為目標語言，並寫入目前輸入框。",
+    "translate_bilingual": "雙語輸出",
+    "translate_bilingual_aria": "雙語輸出（原文 + 譯文）",
+    "edit_hotkey": "編輯快捷鍵",
+    "edit_hotkey_dialog_title": "編輯快捷鍵",
+    "edit_hotkey_dialog_description": "錄入或修改目前快捷鍵綁定。",
+    "quick_dict": {
+      "button_aria": "新增詞條",
+      "title": "我的詞典",
+      "empty": "// 尚無任何詞條 //",
+      "domains_label": "// 常用領域"
+    },
     "hotkey_tab": {
       "dictate": "聽寫",
       "translate": "翻譯"
@@ -212,6 +223,10 @@
       "failed": "失敗",
       "cancelled": "已取消"
     },
+    "player": {
+      "play": "播放",
+      "pause": "暫停"
+    },
     "row": {
       "play": "播放原始錄音",
       "pause": "暫停",
@@ -233,7 +248,7 @@
       "view_translation": "譯文",
       "view_raw": "原始文字",
       "view_details": "查看詳情",
-      "copy_debug": "複製除錯提示詞"
+      "copy_debug": "複製除錯請求 JSON"
     },
     "detail": {
       "title": "記錄詳情",
@@ -274,8 +289,9 @@
     "toast": {
       "copy_success": "已複製到剪貼簿",
       "copy_failed": "複製失敗",
-      "copy_debug_success": "除錯提示詞已複製",
-      "copy_debug_failed": "複製除錯提示詞失敗",
+      "copy_debug_success": "除錯請求 JSON 已複製",
+      "copy_debug_failed": "複製除錯請求 JSON 失敗",
+      "copy_debug_missing": "該紀錄未擷取到請求快照（可能為正式版錄入或呼叫前已失敗）",
       "retry_success": "重試成功",
       "retry_failed": "重試失敗",
       "delete_failed": "刪除失敗",
@@ -298,16 +314,39 @@
     "search_placeholder": "搜尋詞條...",
     "filters": {
       "all": "全部",
-      "auto": "自動新增",
+      "domains": "常見領域",
       "manual": "手動新增"
     },
     "empty": "// 暫無詞條 //",
     "count_total": "// 共 {{count}} 條 //",
+    "divider_label": "自訂詞條",
     "card": {
-      "auto_tooltip": "自動新增",
+      "domain_tooltip": "常用領域",
       "manual_tooltip": "手動新增",
       "edit": "編輯",
       "delete": "刪除"
+    },
+    "domains": {
+      "helper": "勾選你常聊的領域，AI 會優先依這些場景調整術語與措辭",
+      "limit_hint": "最多選 {{limit}} 個",
+      "counter": "已選 {{count}} / {{limit}}",
+      "items": {
+        "programming": "軟體開發",
+        "ai_ml": "AI / 機器學習",
+        "medicine": "醫學健康",
+        "law": "法律",
+        "finance": "金融投資",
+        "academic": "學術科研",
+        "engineering": "工程製造",
+        "marketing": "行銷增長",
+        "psychology": "心理學",
+        "design": "設計創意",
+        "film_production": "影視製作",
+        "cybersecurity": "網路安全",
+        "photography": "攝影",
+        "tcm": "中醫",
+        "automotive": "汽車"
+      }
     },
     "new_dialog": {
       "title": "新詞",
@@ -358,6 +397,8 @@
         "file": "音訊檔案"
       },
       "text_placeholder": "在這裡輸入或貼上文字…",
+      "dictate_hint": "按下快捷鍵 · 直接開口聽寫",
+      "dictate_unbound": "未綁定聽寫快捷鍵",
       "voice_hint": "按住按鈕說話，鬆開自動轉寫。",
       "voice_button_idle": "按住說話",
       "voice_button_recording": "正在聆聽…",
@@ -407,6 +448,7 @@
       "polish": {
         "scenario_label": "場景",
         "scenarios_empty": "尚未設定場景",
+        "add_scenario": "+ 新增",
         "examples": {
           "email": "郵件",
           "wechat": "微信",
@@ -456,6 +498,8 @@
     "output": {
       "idle_label": "等待執行",
       "ready": "READY",
+      "waiting_input": "等待輸入完成…",
+      "generating": "生成中…",
       "meta_chars": "{{count}} 字",
       "meta_elapsed": "耗時 {{seconds}}s"
     },

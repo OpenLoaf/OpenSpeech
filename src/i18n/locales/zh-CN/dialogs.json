@@ -1,8 +1,21 @@
 {
   "hotkey_conflict": {
     "title": "快捷键冲突",
-    "description_one": "下面这条快捷键无法被系统注册，可能已被其他应用或系统占用。请在此处直接绑定一个新组合。",
-    "description_other": "以下 {{count}} 条快捷键无法被系统注册，可能已被其他应用或系统占用。请在此处直接绑定新组合。"
+    "description_one": "下面这条快捷键当前无效（被系统占用或不符合最新规则），请在此处重新绑定一个新组合。",
+    "description_other": "以下 {{count}} 条快捷键当前无效（被系统占用或不符合最新规则），请在此处重新绑定。"
+  },
+  "auth_recovery": {
+    "title_pending": "正在为你完成刚才的转写",
+    "title_success": "转写完成",
+    "title_error": "转写未完成",
+    "description_pending": "登录已恢复，正在用刚才的录音继续走云端转写，请稍候…",
+    "description_success": "下面是这次录音的最终结果，点击右下角即可复制到剪贴板。",
+    "description_error": "登录已恢复，但用录音重新转写时再次失败。可以从历史记录里手动重试。",
+    "empty_transcript": "（未识别到内容）",
+    "copy": "复制结果",
+    "copied": "已复制",
+    "close": "关闭",
+    "close_disabled": "请稍候…"
   },
   "login": {
     "title": "登录 OpenLoaf",

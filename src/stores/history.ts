@@ -110,6 +110,13 @@ export interface HistoryItem {
   asr_ms?: number | null;
   /** AI refine 耗时（ms）：refine chat stream 整段时长。null = 未启用 refine 或失败。 */
   refine_ms?: number | null;
+  /**
+   * DEV 构建捕获的 LLM 请求快照（URL / model / body 的 pretty JSON）。
+   * 单次 refine 是单个 envelope；翻译模式下是包含 refine + translate 两段的 JSON 数组。
+   * 正式版构建恒为 null——不为终端用户落盘 prompt / token 等敏感字段。
+   * 历史详情 / 复制按钮直接消费这一列，不再前端实时拼接。
+   */
+  debug_payload?: string | null;
 }
 
 /** 新增一条记录时的入参；id 与 created_at 由 store 生成。 */
@@ -129,6 +136,7 @@ export interface HistoryInput {
   target_lang?: string | null;
   asr_ms?: number | null;
   refine_ms?: number | null;
+  debug_payload?: string | null;
 }
 
 // SQLite 取出来的原始行（bind 会回 camelCase 的字段，这里统一保留 snake_case）。
@@ -150,6 +158,7 @@ interface Row {
   target_lang: string | null;
   asr_ms: number | null;
   refine_ms: number | null;
+  debug_payload: string | null;
 }
 
 function rowToItem(r: Row): HistoryItem {
@@ -171,6 +180,7 @@ function rowToItem(r: Row): HistoryItem {
     target_lang: r.target_lang,
     asr_ms: r.asr_ms,
     refine_ms: r.refine_ms,
+    debug_payload: r.debug_payload,
   };
 }
 
@@ -183,6 +193,8 @@ interface HistoryStore {
   reload: () => Promise<void>;
   add: (input: HistoryInput) => Promise<HistoryItem>;
   setRefinedText: (id: string, refined: string) => Promise<void>;
+  /** DEV 模式：把已捕获的请求 envelope JSON 串落到 history.debug_payload。 */
+  setDebugPayload: (id: string, payload: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
   /**
@@ -234,7 +246,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const d = await db();
     // type='meeting' 由 useMeetingsStore 自管列表，不混进听写主历史。
     const rows = await d.select<Row[]>(
-      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms FROM history WHERE type != 'meeting' ORDER BY created_at DESC",
+      "SELECT id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms, debug_payload FROM history WHERE type != 'meeting' ORDER BY created_at DESC",
     );
     set({ items: rows.map(rowToItem) });
   },
@@ -258,6 +270,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       target_lang: input.target_lang ?? null,
       asr_ms: input.asr_ms ?? null,
       refine_ms: input.refine_ms ?? null,
+      debug_payload: input.debug_payload ?? null,
     };
 
     // retention='off'：不写 DB，只塞内存；重启后清空，与 docs/history.md 一致。
@@ -276,7 +289,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
     const d = await db();
     await d.execute(
-      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+      "INSERT INTO history (id, type, text, refined_text, status, error, duration_ms, created_at, target_app, audio_path, asr_source, ai_model, segment_mode, provider_kind, target_lang, asr_ms, refine_ms, debug_payload) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
       [
         item.id,
         item.type,
@@ -295,6 +308,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         item.target_lang,
         item.asr_ms,
         item.refine_ms,
+        item.debug_payload,
       ],
     );
     set({ items: [item, ...get().items] });
@@ -309,6 +323,16 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     set({
       items: get().items.map((it) =>
         it.id === id ? { ...it, refined_text: refined } : it,
+      ),
+    });
+  },
+
+  setDebugPayload: async (id: string, payload: string) => {
+    const d = await db();
+    await d.execute("UPDATE history SET debug_payload = $1 WHERE id = $2", [payload, id]);
+    set({
+      items: get().items.map((it) =>
+        it.id === id ? { ...it, debug_payload: payload } : it,
       ),
     });
   },
@@ -380,6 +404,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         useSettingsStore.getState().aiRefine.enabled === true;
       let refinedText: string | null = null;
       let aiModel: string | null = null;
+      let debugPayload: string | null = null;
       if (text && refineEnabled) {
         const aiSettings = useSettingsStore.getState().aiRefine;
         const lang = resolveLang(useSettingsStore.getState().general.interfaceLang);
@@ -446,6 +471,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
             () => {},
           );
           refinedText = rr.refinedText;
+          if (import.meta.env.DEV && rr.requestEnvelope) {
+            debugPayload = rr.requestEnvelope;
+          }
         } catch (e) {
           const raw = e instanceof Error ? e.message : String(e);
           if (raw.includes("not authenticated") || raw.includes("unauthorized")) {
@@ -459,8 +487,8 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
       const d = await db();
       await d.execute(
-        "UPDATE history SET text = $1, refined_text = $2, status = 'success', error = NULL, asr_source = $3, ai_model = $4, segment_mode = $5, provider_kind = $6 WHERE id = $7",
-        [text, refinedText, asrSource, aiModel, segmentMode, providerKind, id],
+        "UPDATE history SET text = $1, refined_text = $2, status = 'success', error = NULL, asr_source = $3, ai_model = $4, segment_mode = $5, provider_kind = $6, debug_payload = COALESCE($7, debug_payload) WHERE id = $8",
+        [text, refinedText, asrSource, aiModel, segmentMode, providerKind, debugPayload, id],
       );
       set({
         items: get().items.map((it) =>
@@ -475,6 +503,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
                 ai_model: aiModel,
                 segment_mode: segmentMode,
                 provider_kind: providerKind,
+                debug_payload: debugPayload ?? it.debug_payload ?? null,
               }
             : it,
         ),

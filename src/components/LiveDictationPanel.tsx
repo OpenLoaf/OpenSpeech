@@ -101,6 +101,8 @@ export function LiveDictationPanel({
   resultParts,
   errorMessage,
   onClose,
+  stack = false,
+  hideActions = false,
 }: {
   state: RecordingState;
   audioLevels: number[];
@@ -112,6 +114,10 @@ export function LiveDictationPanel({
   resultParts?: ResultParts | null;
   errorMessage?: string | null;
   onClose?: () => void;
+  /** 窄容器（toolbox 输入区）走纵向布局：波形在上、计时器在下、底部按钮分两行。 */
+  stack?: boolean;
+  /** 隐藏底部按钮区（toolbox 把停止 / 取消快捷键挪到 OutputCard 时用）。 */
+  hideActions?: boolean;
 }) {
   const { t } = useTranslation();
   const isTranslate = activeBindingId === "translate";
@@ -210,17 +216,17 @@ export function LiveDictationPanel({
       </div>
 
       {waveActive ? (
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,65%)_minmax(0,1fr)] items-center gap-4 md:gap-5">
-          <Waveform levels={audioLevels} />
-          <div className="flex min-h-0 flex-col items-end justify-center">
+        stack ? (
+          <div className="flex min-h-0 flex-1 flex-col items-stretch justify-center gap-4">
+            <Waveform levels={audioLevels} />
             {showBigTimer ? (
-              <span className="font-mono text-5xl font-bold tabular-nums tracking-tighter text-te-accent md:text-6xl">
+              <span className="self-center font-mono text-5xl font-bold tabular-nums tracking-tighter text-te-accent md:text-6xl">
                 {formatMmSs(elapsedMs)}
               </span>
             ) : (
               <p
                 className={cn(
-                  "min-h-0 max-h-full w-full text-right font-sans text-sm leading-relaxed md:text-base",
+                  "min-h-0 max-h-full w-full font-sans text-sm leading-relaxed md:text-base",
                   "overflow-y-auto",
                   hasText ? textToneClass : "text-te-fg/40",
                 )}
@@ -229,7 +235,28 @@ export function LiveDictationPanel({
               </p>
             )}
           </div>
-        </div>
+        ) : (
+          <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,65%)_minmax(0,1fr)] items-center gap-4 md:gap-5">
+            <Waveform levels={audioLevels} />
+            <div className="flex min-h-0 flex-col items-end justify-center">
+              {showBigTimer ? (
+                <span className="font-mono text-5xl font-bold tabular-nums tracking-tighter text-te-accent md:text-6xl">
+                  {formatMmSs(elapsedMs)}
+                </span>
+              ) : (
+                <p
+                  className={cn(
+                    "min-h-0 max-h-full w-full text-right font-sans text-sm leading-relaxed md:text-base",
+                    "overflow-y-auto",
+                    hasText ? textToneClass : "text-te-fg/40",
+                  )}
+                >
+                  {hasText ? liveTranscript : t("overlay:panel.placeholder")}
+                </p>
+              )}
+            </div>
+          </div>
+        )
       ) : isResultMode && resultParts ? (
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
           <div className="flex shrink-0 flex-col gap-1">
@@ -278,7 +305,15 @@ export function LiveDictationPanel({
         </div>
       )}
 
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5">
+      <div
+        className={cn(
+          "flex shrink-0 gap-x-4 gap-y-2",
+          stack
+            ? "flex-col items-start"
+            : "flex-wrap items-center gap-y-1.5",
+          hideActions && "hidden",
+        )}
+      >
         {isResultMode && resultStats ? (
           (() => {
             // 端到端响应时间 = ASR + AI refine（如果有）。把两段合并成单一指标，
@@ -345,7 +380,8 @@ export function LiveDictationPanel({
             </div>
             <div
               className={cn(
-                "ml-auto flex items-center gap-1.5",
+                "flex items-center gap-1.5",
+                !stack && "ml-auto",
                 escArmed && "animate-pulse",
               )}
             >
