@@ -1030,6 +1030,7 @@ pub fn run() {
             audio::audio_recording_cancel,
             audio::audio_recording_load,
             audio::audio_recording_export,
+            audio::audio_recording_resolve,
             audio::audio_recording_delete,
             cue::cue_set_enabled,
             cue::cue_set_active,

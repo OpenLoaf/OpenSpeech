@@ -27,7 +27,10 @@ use rdev::{Event, EventType, Key};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::hotkey::{BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload};
+use crate::hotkey::{
+    binding_to_mod_sides, BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload, ModSide,
+    Side,
+};
 
 /// 录入模式下，HotkeyField 订阅此事件拿到 press/release，代替 WebView DOM keydown
 /// （macOS 上 Fn 键不会产生 DOM 事件，所以 DOM 监听器录不到）。
@@ -92,22 +95,19 @@ struct KeyPreviewEvent {
     is_repeat: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Mod {
-    Ctrl,
-    Alt,
-    Shift,
-    Meta,
-    Fn,
-}
-
-fn rdev_key_to_mod(k: Key) -> Option<Mod> {
+/// rdev `Key` → 精确的 (修饰键, 左右)。fn 没有左右概念，直接 ModSide::Fn。
+/// rdev 0.5 的 `Alt` 是左 Alt、`AltGr` 是右 Alt（命名沿用历史 X11 习惯）。
+fn rdev_key_to_mod_side(k: Key) -> Option<ModSide> {
     match k {
-        Key::ControlLeft | Key::ControlRight => Some(Mod::Ctrl),
-        Key::Alt | Key::AltGr => Some(Mod::Alt),
-        Key::ShiftLeft | Key::ShiftRight => Some(Mod::Shift),
-        Key::MetaLeft | Key::MetaRight => Some(Mod::Meta),
-        Key::Function => Some(Mod::Fn),
+        Key::ControlLeft => Some(ModSide::Ctrl(Side::Left)),
+        Key::ControlRight => Some(ModSide::Ctrl(Side::Right)),
+        Key::Alt => Some(ModSide::Alt(Side::Left)),
+        Key::AltGr => Some(ModSide::Alt(Side::Right)),
+        Key::ShiftLeft => Some(ModSide::Shift(Side::Left)),
+        Key::ShiftRight => Some(ModSide::Shift(Side::Right)),
+        Key::MetaLeft => Some(ModSide::Meta(Side::Left)),
+        Key::MetaRight => Some(ModSide::Meta(Side::Right)),
+        Key::Function => Some(ModSide::Fn),
         _ => None,
     }
 }
@@ -118,8 +118,9 @@ fn rdev_key_to_mod(k: Key) -> Option<Mod> {
 /// 立即被算成 Ctrl+Meta 触发 PTT）。
 ///
 /// Windows：`GetAsyncKeyState` 返回最近一次查询以来的物理按键状态，无关 hook
-/// 是否漏报；高位 1 = 当前按下。VK_CONTROL/VK_SHIFT/VK_MENU 已合并左右键，
-/// VK_LWIN/VK_RWIN 需要分别查。
+/// 是否漏报；高位 1 = 当前按下。
+/// 用细粒度 VK_LCONTROL/VK_RCONTROL/VK_LSHIFT/VK_RSHIFT/VK_LMENU/VK_RMENU/VK_LWIN/VK_RWIN
+/// 区分左右，与 binding 的 modSides 严格匹配。
 ///
 /// Fn 键 Windows 没标准 VK，跳过：返回的集合不含 Fn，调用方需保留原 pressed
 /// 里 Fn 的状态（`Fn` 仅 macOS 实际可用，Windows 上从不进入 pressed）。
@@ -127,33 +128,46 @@ fn rdev_key_to_mod(k: Key) -> Option<Mod> {
 /// 非 Windows 平台返回 None，调用方走原 ghost 兜底逻辑。macOS 后续可加
 /// CGEventSourceFlagsState 的实现。
 #[cfg(target_os = "windows")]
-fn query_real_modifier_state() -> Option<HashSet<Mod>> {
+fn query_real_modifier_state() -> Option<HashSet<ModSide>> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        GetAsyncKeyState, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU,
+        VK_RSHIFT, VK_RWIN,
     };
     fn down(vk: i32) -> bool {
         // i16 的高位（0x8000）= 当前按下；低位（0x0001）= 自上次查询以来按过，
         // 我们只关心当前是否按住，所以只看高位。
         (unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000) != 0
     }
-    let mut s: HashSet<Mod> = HashSet::new();
-    if down(VK_CONTROL as i32) {
-        s.insert(Mod::Ctrl);
+    let mut s: HashSet<ModSide> = HashSet::new();
+    if down(VK_LCONTROL as i32) {
+        s.insert(ModSide::Ctrl(Side::Left));
     }
-    if down(VK_SHIFT as i32) {
-        s.insert(Mod::Shift);
+    if down(VK_RCONTROL as i32) {
+        s.insert(ModSide::Ctrl(Side::Right));
     }
-    if down(VK_MENU as i32) {
-        s.insert(Mod::Alt);
+    if down(VK_LSHIFT as i32) {
+        s.insert(ModSide::Shift(Side::Left));
     }
-    if down(VK_LWIN as i32) || down(VK_RWIN as i32) {
-        s.insert(Mod::Meta);
+    if down(VK_RSHIFT as i32) {
+        s.insert(ModSide::Shift(Side::Right));
+    }
+    if down(VK_LMENU as i32) {
+        s.insert(ModSide::Alt(Side::Left));
+    }
+    if down(VK_RMENU as i32) {
+        s.insert(ModSide::Alt(Side::Right));
+    }
+    if down(VK_LWIN as i32) {
+        s.insert(ModSide::Meta(Side::Left));
+    }
+    if down(VK_RWIN as i32) {
+        s.insert(ModSide::Meta(Side::Right));
     }
     Some(s)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn query_real_modifier_state() -> Option<HashSet<Mod>> {
+fn query_real_modifier_state() -> Option<HashSet<ModSide>> {
     None
 }
 
@@ -270,27 +284,16 @@ fn rdev_key_to_code(k: Key) -> String {
     .to_string()
 }
 
-fn str_to_mod(s: &str) -> Option<Mod> {
-    match s {
-        "ctrl" => Some(Mod::Ctrl),
-        "alt" => Some(Mod::Alt),
-        "shift" => Some(Mod::Shift),
-        "meta" => Some(Mod::Meta),
-        "fn" => Some(Mod::Fn),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone)]
 struct ModBinding {
     id: BindingId,
     id_str: String,
-    mods: HashSet<Mod>,
+    mods: HashSet<ModSide>,
 }
 
 pub struct ModifierOnlyState {
     bindings: Vec<ModBinding>,
-    pressed: HashSet<Mod>,
+    pressed: HashSet<ModSide>,
     active_ids: HashSet<BindingId>,
 }
 
@@ -389,7 +392,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
             // "按某个键导致主窗激活"时，回看日志判断到底是 binding 命中、ghost 路径，
             // 还是根本没进 hotkey 子系统。仅修饰键 + Fn 进 trace（与 should_emit_preview
             // 同集合），其它键不打——按 KeyPreview 注释的隐私 / 噪声原则。
-            if rdev_key_to_mod(key).is_some() {
+            if rdev_key_to_mod_side(key).is_some() {
                 let pressed_snapshot = state_clone
                     .lock()
                     .ok()
@@ -464,7 +467,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 let _ = app_clone.emit(KEY_PREVIEW_EVENT, preview);
             }
 
-            let Some(m) = rdev_key_to_mod(key) else {
+            let Some(m) = rdev_key_to_mod_side(key) else {
                 return;
             };
 
@@ -491,11 +494,11 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 let os_synced = if let Some(real) = query_real_modifier_state() {
                     // Fn 仅 macOS 走 rdev::Key::Function 路径，Windows 永远不会进入
                     // pressed；此处保留 had_fn 是面向"将来 macOS 也接入校准"的预留。
-                    let had_fn = s.pressed.contains(&Mod::Fn);
+                    let had_fn = s.pressed.contains(&ModSide::Fn);
                     let prev = s.pressed.clone();
                     s.pressed = real;
                     if had_fn {
-                        s.pressed.insert(Mod::Fn);
+                        s.pressed.insert(ModSide::Fn);
                     }
                     if prev != s.pressed {
                         // 两类 correction 都是预期、可重现、自动兜底的，全走 debug：
@@ -506,7 +509,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                         // 两路都不代表 bug，留 debug 仅供排查"PTT 错触发/不触发"时按时
                         // 序追状态。如果未来真出新问题（PTT 没响、误响），症状会在更
                         // 高层暴露，那时再回看这里的 debug 流水。
-                        let removed: HashSet<Mod> =
+                        let removed: HashSet<ModSide> =
                             prev.difference(&s.pressed).cloned().collect();
                         if !removed.is_empty() {
                             log::debug!(
@@ -663,6 +666,20 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
     });
 }
 
+/// 暴露当前真实按住的 (mod, side) 集合给 combo handler 做二次校验。
+/// 实现：优先调 OS 同步 API（Windows）；macOS/Linux 当前 fallback 到内部 pressed
+/// 缓存——足够 combo handler 用，因为 combo handler 是被 OS 在用户刚按下主键的瞬间
+/// 触发的，pressed 缓存几乎不会过时（rdev 与 OS 触发先后差异 < 1ms）。
+pub fn current_pressed(state: &SharedModifierOnlyState) -> HashSet<ModSide> {
+    if let Some(real) = query_real_modifier_state() {
+        return real;
+    }
+    state
+        .lock()
+        .map(|s| s.pressed.clone())
+        .unwrap_or_default()
+}
+
 /// 从 apply_bindings 调用：用当前快照替换已注册的 modifier-only bindings。
 /// 同时清掉 `active_ids`（但不清 `pressed`），避免切换绑定时漏发 released。
 pub fn apply(
@@ -685,7 +702,7 @@ pub fn apply(
             log::warn!("[modifier_only]   skip unknown id: {id_str}");
             continue;
         };
-        let mods: HashSet<Mod> = b.mods.iter().filter_map(|s| str_to_mod(s)).collect();
+        let mods: HashSet<ModSide> = binding_to_mod_sides(b);
         if mods.is_empty() {
             log::warn!("[modifier_only]   skip {id_str}: empty mods after parse");
             continue;
