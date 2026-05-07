@@ -1,7 +1,7 @@
 {
   "name": "openspeech",
   "private": true,
-  "version": "0.2.30-beta.15",
+  "version": "0.2.30-beta.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
