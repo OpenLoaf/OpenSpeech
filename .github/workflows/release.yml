@@ -378,14 +378,10 @@ jobs:
 
       # latest.json 是 Tauri updater 客户端 fetch 的入口（plugins.updater.endpoints 指向它）。
       # 字段：version / pub_date / platforms[<platform-arch>].{signature, url}。
-      # signature 取 .sig 文件全文；url **直接指向 COS**（按版本号归档），让所有客户端
-      # （包括老版本 < 0.2.26，endpoint 写死 GitHub 的）从这一份 manifest 解析后下载安装包
-      # 也走 COS。代价：COS 全挂时无自动 fallback——发版时手工 gh release upload --clobber
-      # 一份 GitHub-url 版 manifest 顶替即可应急。
-      # manifest 里的 url 统一写 R2 自定义域名（海外口）；客户端 update_channel.rs 在国内
-      # 运行时按地区把 host 重写成 openspeech-cdn.hexems.com，所以这里写哪个 host 都行——
-      # 选 R2 海外是因为：(1) endpoints 顺序里它本来就在；(2) GitHub Release 上传一份
-      # 一致的 manifest 给老客户端兜底（老客户端不会 rewrite，直接按 url 下载，hit R2 海外）。
+      # signature 取 .sig 文件全文；url 写 R2 自定义域名（海外口 openspeech-r2.hexems.com）；
+      # 客户端 update_channel.rs 在国内运行时按地区把 host 重写成 openspeech-cdn.hexems.com，
+      # 所以这里写哪个 host 都行——选 R2 海外是因为它本来就在 endpoints 顺序里，且 GitHub
+      # Release 上传一份一致的 manifest 给不会 rewrite 的客户端兜底（直接 hit R2 海外）。
       - name: Generate latest.json
         shell: bash
         env:
@@ -654,49 +650,3 @@ jobs:
           fi
           echo "Uploaded to R2: s3://${R2_BUCKET}/v${version}/"
 
-      # ==========================================================================
-      # 兼容老客户端：仅同步 manifest（latest.json / latest-beta.json）到旧 COS。
-      # 已发布的 ≤0.2.30-beta.2 客户端 endpoints 写死 cos.accelerate.myqcloud.com，
-      # 必须保留这两个文件让它们能升级；二进制大文件不再镜像 COS——manifest 里的 url
-      # 已指向 R2 海外域名，老客户端按 url 直接下载到 R2（国内会慢但能拿到）。
-      # 老客户端基本升级完后（约 1~2 个月），可整段删除并清理 TENCENT_* secrets。
-      - name: Install coscli (legacy compat)
-        run: |
-          curl -fsSL "https://github.com/tencentyun/coscli/releases/download/v1.0.8/coscli-v1.0.8-linux-amd64" -o /tmp/coscli
-          chmod +x /tmp/coscli
-          sudo mv /tmp/coscli /usr/local/bin/coscli
-          coscli --version
-
-      - name: Configure coscli (legacy compat)
-        env:
-          TENCENT_SECRET_ID:  ${{ secrets.TENCENT_SECRET_ID }}
-          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
-          TENCENT_COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
-          TENCENT_COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
-        run: |
-          cat > ~/.cos.yaml <<EOF
-          cos:
-            base:
-              secretid: ${TENCENT_SECRET_ID}
-              secretkey: ${TENCENT_SECRET_KEY}
-              sessiontoken: ""
-              protocol: https
-            buckets:
-              - name: ${TENCENT_COS_BUCKET}
-                alias: openspeech
-                region: ${TENCENT_COS_REGION}
-                endpoint: cos.accelerate.myqcloud.com
-          EOF
-
-      - name: Mirror manifests to COS (legacy clients)
-        env:
-          IS_BETA: ${{ steps.channel.outputs.is_beta }}
-        run: |
-          set -euo pipefail
-          coscli cp latest-beta.json cos://openspeech/latest-beta.json \
-            --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
-          if [[ "$IS_BETA" != "true" ]]; then
-            coscli cp latest.json cos://openspeech/latest.json \
-              --meta "Cache-Control:no-cache,max-age=0;Content-Type:application/json"
-          fi
-          echo "Mirrored manifests to COS for legacy ≤0.2.30-beta.2 clients"
