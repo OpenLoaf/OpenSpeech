@@ -33,51 +33,64 @@
 }
 ```
 
-## 历史上下文 / 热词 / 时间（context message）
+## 历史上下文 / 热词 / 时间（统一走 system_prompt）
 
-历史 / 热词 / 请求时间不走 chat memory pair，而是合并到**第一条 user message**里，封装为 `<system-tag>` 块；用户实际文本作为**第二条 user message**。提示词约定见 `src/lib/defaultAiPrompts.ts`。
+ASR 阶段（OL-TL-003）和 refine 阶段共用同一份 prompt 组装逻辑：`src/lib/asrSystemPrompt.ts::buildSpeechSystemPrompt`。区别只在 `corePrompt`——ASR 用 `ASR_CORE_RULES[lang]`（短偏置规则），refine 用 `getEffectiveAiSystemPrompt(...)`（长清洗规则）。其余 HotWords / ConversationHistory / MessageContext / TargetApp 四段两边完全一致；**Domains 段两边形式不同**：ASR 展开为"领域名: 高频术语清单"喂给上游 ASR 做同音偏置（`expandDomainKeywords: true`），refine 只放领域名让模型自行理解风格——展开会让 system message 每个领域多 ~200 字符，对 chat 阶段无收益反而吃 cache + token。
 
-- `includeHistory` 默认 `true`。从 `historyStore` 取最近 `N=5` 条 `success` 记录，按时间正序拼成 `[<分钟前> 文本]` 字符串数组。"分钟前" 走 i18n key `settings:ai.minutes_ago`。
-- **按目标应用隔离**：当本次会话的 `target_app` 已知（OS 拿到了前台应用名）时，仅取 `target_app` 完全相同的历史条目；拿不到（null）时不过滤。理由：在微信里的口语化输入和在 VSCode 里说的代码段彼此是噪音，跨应用上下文会污染 refine。retry 路径以"被重试那条记录的 `target_app`"作为当前应用判断依据。
-- 热词从 `getHotwordsForRefine().hotwords` 拿，逗号串拆数组传给 Rust。
-- requestTime 由前端取 `new Date().toISOString() + " (UTC)"`。
+输出整体作为**单一 system message**送上游；user message 只放用户实际文本（refine）或音频本体（ASR）。前端**不再**单独传 `hotwords / historyEntries / requestTime / targetApp / domains` 给 Rust——`build_context_message` 在这些字段全 None 时返回 None，refine 自动跳过 context user message，messages 结构变成 `[system, user]` 两条。Rust 端结构体保留这些 Option 字段做兼容兜底，但本仓库前后端协同改动后实际只走 `system_prompt`。
 
-Rust `build_context_message` 负责把这三段合成单一 user message；任一段为空就跳过该段；三段全空则不插 context message（直接 system → user）。
+- `includeHistory` 默认 `true`。从 `historyStore` 取最近 `N=5` 条 `success` 记录，按时间正序拼成 `[<分钟前> · focusTitle=<title>] <text>` 一行。当前 target 已知时整段统一同 app，`targetApp` 提到 tag attribute（`<system-tag type="ConversationHistory" targetApp="VSCode">`）避免每行重复；target 未知（罕见）时退化为行内 `targetApp=`。`focusTitle` 字段缺失的老记录或 retry 路径自动省略。翻译 phase 2 路径调 `buildSpeechSystemPrompt({ ..., skipHistory: true })`，因为历史已被 phase 1 融入 refined 结果。
+- **按目标应用隔离**：当本次会话的 `target_app` 已知时，仅取 `target_app` 完全相同的历史条目；拿不到（null）时不过滤。retry 路径以"被重试那条记录的 `target_app`"作为当前应用，并 `excludeHistoryId` 排除自身。
+- `MessageContext` 内含 `requestTime`（本地时间 + 时区偏移 + IANA 时区名）/ `platform`（macOS / Windows / Linux）/ `appLanguage`（OpenSpeech UI 语言）/ `dictationLanguage`（听写设置语言）/ `systemLocale`（navigator 给的）。`MachineInfo` 已合进这一段，不再单独 emit。
 
-### ASR 阶段也复用同一份 prompt（OL-TL-003 短音频）
-
-SDK ≥ 0.3.18 起，`OL-TL-003 asrShort` 的 `system_prompt` 字段允许把上下文偏置 / 专有名词送到 Qwen3-ASR-Flash 阶段。OpenSpeech 在文件转写（`saas-file`）时拼一份**ASR 专用**的 system_prompt，**不复用 refine 那条几千字的清洗 prompt**——后者全是文本整理规则，ASR 阶段不需要看，灌进去只会浪费上下文 + 误导上游模型试图改写文本。
-
-ASR system_prompt 段落顺序：
+### system_prompt 段落顺序（ASR / refine 共用）
 
 ```
-<ASR-only core rules>      // 三语短规则，见 asrSystemPrompt.ts::ASR_CORE_RULES
-<system-tag type="Domains"> ... </system-tag>
+<corePrompt>     // ASR 用 ASR_CORE_RULES[lang]；refine 用 getEffectiveAiSystemPrompt(...)
+<system-tag type="Domains"> ... </system-tag>     // ASR 展开关键词；refine 仅领域名
+<system-tag type="Trending"> ... </system-tag>    // 仅 ASR：30 个跨领域热门专有名词（Claude / Cursor / DeepSeek 等）
 <system-tag type="HotWords"> ... </system-tag>
 <system-tag type="ConversationHistory"> ... </system-tag>
-<system-tag type="MachineInfo"> platform / locale / languages </system-tag>
-<system-tag type="MessageContext"> requestTime: 本地时间+offset (IANA TZ) </system-tag>
-<system-tag type="TargetApp"> name: <appName> </system-tag>
+<system-tag type="MessageContext">
+    requestTime: 2026-05-07T22:36:55+08:00 (Asia/Shanghai)   // 本地时间，不是 UTC
+    platform: macOS                                           // 由 Rust std::env::consts::OS 归一
+    appLanguage: zh-CN                                        // OpenSpeech UI 语言
+    deviceName: Zhao 的 MacBook Pro                          // whoami::devicename，友好设备名
+    hostname: Zhaos-MacBook-Pro.local                         // 与 deviceName 相同则省略
+    username: zhao                                            // OS 用户名
+    audioDuration: 21.2s                                      // 本次录音长度，调用方传 ms
+</system-tag>
+<system-tag type="TargetApp">
+    name: VSCode
+    focusTitle: VSCode — main.rs                              // 录音开始瞬间窗口标题；retry 路径无
+</system-tag>
 ```
 
-核心规则约 4 条：用 Domains/HotWords/History/TargetApp 偏置同音替代；不要清洗/补全/翻译；保留口语停顿与重复（清洗在后续 refine 模块完成）；冲突时音频优先。三语版本按 `interfaceLang` 选。
+ASR core rules 是约 150 字的三语短规则：用 Domains/HotWords/History/TargetApp 偏置同音替代；不要清洗/补全/翻译；保留口语停顿与重复；冲突时音频优先。三语版本按 `interfaceLang` 选。
 
-`MessageContext.requestTime` 使用**本地时间 + 时区偏移 + IANA 时区名**（如 `2026-05-07T22:36:55+08:00 (Asia/Shanghai)`），而非 UTC——上游模型按用户所在时区理解 "今天 / 上午 / 晚上" 这类隐含线索更准。`MachineInfo.platform` 归一为 `macOS` / `Windows` / `Linux`，由 `navigator.userAgentData.platform`（Chromium webview）或 `navigator.platform`（webkit2gtk 兜底）解析得来——不引 plugin-os，不走 invoke。
+`platform` 归一为 `macOS` / `Windows` / `Linux`，来源是 Rust 端 `std::env::consts::OS`。`hostname` / `deviceName` / `username` 由 Rust 调 `whoami` crate，前端在 boot 阶段 `loadMachineInfo()` invoke 一次缓存到 `src/lib/machineInfo.ts` 模块级 cache，`buildSpeechSystemPrompt` 同步读——不每次录音都 invoke 往返。失败时全部 fallback 为空串，对应字段直接不出。
 
-组装逻辑统一在 `src/lib/asrSystemPrompt.ts::buildAsrSystemPrompt`，三处调用：
+`focusTitle` 来自 Rust `get_active_window_info_cmd`（`active-win-pos-rs` crate 的 `ActiveWindow.title`），录音开始瞬间与 `target_app` 一起 invoke 抓快照存到 `recording.ts` 的模块级 `currentSessionFocusTitle`。retry 路径没有焦点上下文，传 undefined 即可，helper 自动跳过该字段。`audioDuration` 由调用方传 ms（`rec.duration_ms` / `target.duration_ms`），格式化为 `21.2s` / `1m 5s`。`lastEntry` 在 helper 内从 `items` 推导：仅当上一条 success 的 `target_app` 与本次不同时输出，避免与 ConversationHistory 段冗余。
 
-| 触发点 | 文件:行 | targetApp 来源 |
-|---|---|---|
-| UTTERANCE 主路径 degraded → file 转写 | `src/stores/recording.ts` | `currentSessionTargetApp` |
-| Debug simulate 模式 | `src/stores/recording.ts` | `currentSessionTargetApp` |
-| 历史记录 retry | `src/stores/history.ts` | `target.target_app`（被重试那条），并以 `id` 作为 `excludeHistoryId` 排除自身 |
+调用点：
+
+| 阶段 | 触发点 | 文件 | targetApp 来源 |
+|---|---|---|---|
+| ASR | UTTERANCE 主路径 degraded → file 转写 | `src/stores/recording.ts` | `currentSessionTargetApp` |
+| ASR | Debug simulate | `src/stores/recording.ts` | `currentSessionTargetApp` |
+| ASR | 历史记录 retry | `src/stores/history.ts` | `target.target_app` + `excludeHistoryId=id` |
+| refine | finalize phase 1 | `src/stores/recording.ts` | `currentSessionTargetApp` |
+| refine | finalize phase 2 (translate) | `src/stores/recording.ts` | `currentSessionTargetApp` + `skipHistory=true` |
+| refine | Debug simulate refine | `src/stores/recording.ts` | `currentSessionTargetApp` |
+| refine | 历史记录 retry refine | `src/stores/history.ts` | `target.target_app` + `excludeHistoryId=id` |
 
 约束：
 - ASR 阶段的 system_prompt 与 `aiRefine.enabled` **解耦**：refine.enabled 只决定"录音结束后是否做文本清洗"，跟 ASR 阶段是否带识别偏置无关。即使关掉 AI 优化（直接落原文），ASR 阶段仍会带 system_prompt。
-- `includeHistory === false` ⇒ 仅 system prompt 不带历史。
-- **不主动截断**长度。SDK 建议 ≤ 2000 字，超过时 Rust 侧 `[transcribe] asr_short system_prompt chars=N exceeds the SDK-recommended 2000-char soft limit` warn 暴露真实长度，由用户自行精简。隐式截断会让"半句被砍"无声发生反而更难调。
-- 仅 SaaS short audio (≤5min, OL-TL-003) 路径透传；OL-TL-004 长音频、腾讯 file、阿里 file 路径都打 warn 后丢弃。
-- 详细日志：`log::info!` 打 chars/bytes/lines + 前 200 字预览（换行替成 ⏎）；`log::debug!` 打全文（DEV 构建默认开，正式版默认 Info 级别不输出）。
+- `includeHistory === false` ⇒ 不出 ConversationHistory 段；其他段不变。`skipHistory: true` 同等效果（phase 2 翻译用）。
+- **不主动截断**长度。SDK 建议 ≤ 2000 字，超过时 Rust 侧 `[transcribe] asr_short system_prompt chars=N exceeds the SDK-recommended 2000-char soft limit` warn 暴露真实长度，由用户自行精简。
+- ASR：仅 SaaS short audio (≤5min, OL-TL-003) 路径透传；OL-TL-004 长音频、腾讯 file、阿里 file 路径都打 warn 后丢弃。
+- refine：合并到 system_prompt 后前端**不再**单独传 `hotwords / historyEntries / requestTime / targetApp / domains` 给 Rust。Rust `build_context_message` 这些字段全 None ⇒ return None ⇒ messages 变为 `[system, user]` 两条；struct 字段保留作为兼容兜底。
+- 详细日志：前端 `console.info` 各调用点打 `len=N chars`；ASR 路径 Rust 侧 `log::info!` 打 chars/bytes/lines + 前 200 字预览（换行替成 ⏎），`log::debug!` 打全文。
 
 ## 系统提示词
 

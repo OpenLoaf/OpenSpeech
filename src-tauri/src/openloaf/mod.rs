@@ -192,14 +192,15 @@ impl OpenLoafState {
 
     /// 给不走 `call_authed` 的链路（realtime WebSocket / saas-file 转写 / ai_refine
     /// chat completions 等）连接前用：解 access_token 的 JWT exp，已过期 / 距离过期
-    /// ≤ 30s 才走 ensure_fresh_token。没 token 直接 false，调用方自己决定清场策略。
-    pub async fn ensure_access_token_fresh(&self) -> bool {
+    /// ≤ 30s 才走 refresh。返回 `RefreshOutcome`，调用方据此决定清场或回退业务错。
+    pub async fn ensure_access_token_fresh(&self) -> RefreshOutcome {
         let Some(token) = self.client.access_token() else {
             log::warn!("openloaf: ensure_access_token_fresh: no access token in memory");
-            return false;
+            // 内存里没 token，但 storage 还可能有 family/refresh —— 让 refresh 自己判。
+            return self.ensure_fresh_token().await;
         };
         if access_token_still_fresh(&token, 30) {
-            return true;
+            return RefreshOutcome::Refreshed;
         }
         log::info!(
             "openloaf: access token near/past exp, kicking off pre-flight refresh; jwt {}",
@@ -208,15 +209,20 @@ impl OpenLoafState {
         self.ensure_fresh_token().await
     }
 
-    /// 在 Mutex 内尝试刷新 access token。
-    /// - 进入 Mutex 前先记下当前 token，入 Mutex 后再读一次：如果已变化，说明别的任务
-    ///   刚刚已经 refresh 成功了，本次直接 true 返回，避免重复请求；
-    /// - 否则调 SDK `auth.bootstrap` —— SDK 内部从注入的 storage 读 family/refresh
-    ///   token，挑首选路径调 `/auth/family/exchange` 或 `/auth/refresh`，成功就自动
-    ///   把新 access_token 写进 client + 把新 session persist 回 storage。
-    /// - SDK 明确判失效（在 bootstrap 内部接住）→ storage 已被 SDK 清，返回 false
-    ///   由调用方负责清场（emit auth-lost）。
-    pub async fn ensure_fresh_token(&self) -> bool {
+    /// 在 Mutex 内尝试刷新 access token，**绕开 SDK 自带的 `bootstrap`**。
+    ///
+    /// SDK 0.3.18 的 `auth.bootstrap` 在 family_exchange / refresh 失败时一律调
+    /// `clear_storage()` 清 keychain，**无论错误来源是网络还是服务端拒绝**。
+    /// 这意味着用户在服务器宕机 / 没网时打开 App 就会被强行登出，体验非常差。
+    ///
+    /// 这里直接读自家 storage，挨个调 `family_exchange` / `refresh`，按 `SaaSError`
+    /// 分类区分"真失效"和"暂时不可达"两类：
+    /// - `RefreshOutcome::Refreshed`: 成功，新 token 已写入 client + storage。
+    /// - `RefreshOutcome::AuthLost`: 服务端明确拒绝（HTTP 4xx）/ 没存任何凭据。
+    ///   storage 已被本地清掉，调用方应清场 + 弹登录框。
+    /// - `RefreshOutcome::Network`: 网络问题或服务端 5xx。**storage 保留**，调用方
+    ///   不应清场——网络恢复 / 服务端恢复后还能续登录态。
+    pub async fn ensure_fresh_token(&self) -> RefreshOutcome {
         let stale = self.client.access_token();
         let _guard = self.refresh_lock.lock().await;
 
@@ -224,18 +230,17 @@ impl OpenLoafState {
         let current = self.client.access_token();
         if current.is_some() && current != stale {
             log::info!("openloaf: refresh skipped, token already rotated by concurrent task");
-            return true;
+            return RefreshOutcome::Refreshed;
         }
 
-        log::info!("openloaf: refreshing access token via SDK bootstrap…");
+        log::info!("openloaf: refreshing access token via family_exchange / refresh …");
         let client = self.client.clone();
-        let result =
-            tokio::task::spawn_blocking(move || client.auth().bootstrap(Some(&client_info())))
-                .await;
+        let storage = self.storage.clone();
+        let result = tokio::task::spawn_blocking(move || refresh_session_blocking(&client, &storage))
+            .await;
 
         match result {
-            Ok(Ok(Some(restored))) => {
-                // SDK 已写好 access_token + storage；这里只补 user 缓存 + dev_session dump。
+            Ok(Ok(restored)) => {
                 let user: PublicUser = restored.user.into();
                 self.set_user(Some(user));
                 dump_dev_session(&restored.access_token, &restored.refresh_token);
@@ -244,22 +249,158 @@ impl OpenLoafState {
                     restored.via,
                     summarize_jwt_claims(&restored.access_token)
                 );
-                true
+                RefreshOutcome::Refreshed
             }
-            Ok(Ok(None)) => {
-                log::warn!("openloaf: refresh aborted — storage empty or token rejected");
-                false
+            Ok(Err(RefreshFailure::AuthLost)) => {
+                log::warn!("openloaf: refresh rejected by server, treating as auth-lost");
+                RefreshOutcome::AuthLost
             }
-            Ok(Err(err)) => {
-                log::warn!("openloaf: auto-refresh failed: {err}");
-                false
+            Ok(Err(RefreshFailure::NoStoredCredentials)) => {
+                log::warn!("openloaf: refresh skipped — no stored credentials");
+                RefreshOutcome::AuthLost
+            }
+            Ok(Err(RefreshFailure::Network(e))) => {
+                log::warn!(
+                    "openloaf: refresh failed transiently (network/5xx, keeping session): {e}"
+                );
+                RefreshOutcome::Network
             }
             Err(join_err) => {
                 log::warn!("openloaf: refresh join error: {join_err}");
-                false
+                RefreshOutcome::Network
             }
         }
     }
+}
+
+/// `ensure_fresh_token` 的三态返回。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    /// 内存里有 fresh access_token，可直接发请求。
+    Refreshed,
+    /// 服务端明确判 token 失效（4xx）或本地无任何凭据。调用方应清场 + 弹登录框。
+    AuthLost,
+    /// 网络 / 5xx 等暂时性失败。**保留**登录态与 keychain，调用方应回退为业务错。
+    Network,
+}
+
+impl RefreshOutcome {
+    pub fn is_refreshed(self) -> bool {
+        matches!(self, RefreshOutcome::Refreshed)
+    }
+}
+
+#[derive(Debug)]
+enum RefreshFailure {
+    /// 服务端拒绝（4xx）。
+    AuthLost,
+    /// storage 里没 family / refresh token。
+    NoStoredCredentials,
+    /// 网络错 / 5xx / 解析失败 —— 重试可能成功，不动 storage。
+    Network(String),
+}
+
+/// 自己重走 SDK bootstrap 的核心逻辑，但**不**在失败时清 storage。
+/// SDK 在 family_exchange / refresh **成功**时会自动 persist 新 token，
+/// 所以这里只需要负责按错误类型分类。
+fn refresh_session_blocking(
+    client: &SaaSClient,
+    storage: &Arc<AuthStorageImpl>,
+) -> Result<BootstrapRestored, RefreshFailure> {
+    let stored = match storage.load() {
+        Ok(Some(v)) => v,
+        Ok(None) => return Err(RefreshFailure::NoStoredCredentials),
+        Err(e) => {
+            return Err(RefreshFailure::Network(format!("storage load: {e}")));
+        }
+    };
+
+    let info = client_info();
+    let mut last_network_err: Option<String> = None;
+
+    if let Some(family_token) = stored.family_token.as_deref() {
+        match client.auth().family_exchange(family_token, Some(&info)) {
+            Ok(session) => {
+                return Ok(BootstrapRestored {
+                    access_token: session.access_token,
+                    refresh_token: session.refresh_token,
+                    user: session.user,
+                    via: BootstrapVia::Family,
+                });
+            }
+            Err(e) => match classify_refresh_error(&e) {
+                RefreshErrorClass::AuthLost => {
+                    log::warn!("openloaf: family_exchange rejected (4xx): {e}");
+                    // family 被 reject 时还可以 fallthrough 试 refresh_token，
+                    // 真没 refresh_token 才走 AuthLost。
+                    last_network_err = None;
+                }
+                RefreshErrorClass::Network => {
+                    last_network_err = Some(format!("family_exchange: {e}"));
+                }
+            },
+        }
+    }
+
+    if let Some(refresh_token) = stored.refresh_token.as_deref() {
+        match client.auth().refresh(refresh_token, Some(&info)) {
+            Ok(session) => {
+                return Ok(BootstrapRestored {
+                    access_token: session.access_token,
+                    refresh_token: session.refresh_token,
+                    user: session.user,
+                    via: BootstrapVia::Refresh,
+                });
+            }
+            Err(e) => match classify_refresh_error(&e) {
+                RefreshErrorClass::AuthLost => {
+                    log::warn!("openloaf: refresh rejected (4xx): {e}");
+                    return Err(RefreshFailure::AuthLost);
+                }
+                RefreshErrorClass::Network => {
+                    return Err(RefreshFailure::Network(format!("refresh: {e}")));
+                }
+            },
+        }
+    }
+
+    if let Some(err) = last_network_err {
+        Err(RefreshFailure::Network(err))
+    } else {
+        // family_exchange 4xx 且没 refresh_token 可退路 → 真失效。
+        Err(RefreshFailure::AuthLost)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RefreshErrorClass {
+    /// HTTP 4xx：服务端明确拒绝凭据。
+    AuthLost,
+    /// 网络层 / 5xx / 解析错误：暂时性，可重试，不动 storage。
+    Network,
+}
+
+fn classify_refresh_error(err: &SaaSError) -> RefreshErrorClass {
+    match err {
+        SaaSError::Http { status, .. } if (400..500).contains(&(*status as u16)) => {
+            RefreshErrorClass::AuthLost
+        }
+        _ => RefreshErrorClass::Network,
+    }
+}
+
+#[derive(Debug)]
+struct BootstrapRestored {
+    access_token: String,
+    refresh_token: String,
+    user: AuthUser,
+    via: BootstrapVia,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BootstrapVia {
+    Family,
+    Refresh,
 }
 
 fn client_info() -> AuthClientInfo {
@@ -535,7 +676,7 @@ pub fn openloaf_is_authenticated(state: State<'_, SharedOpenLoaf>) -> bool {
     state.client.access_token().is_some()
 }
 
-/// 主动调一次 SDK `auth.bootstrap` 静默恢复登录态。
+/// 主动尝试静默恢复登录态。**绕开 SDK bootstrap**，避免网络错时被强制登出。
 ///
 /// 调用时机：
 ///   - 用户按下听写快捷键、recording gate 发现未登录 → await 这个命令再判 gate；
@@ -544,11 +685,12 @@ pub fn openloaf_is_authenticated(state: State<'_, SharedOpenLoaf>) -> bool {
 ///
 /// 行为：
 ///   - 已登录（内存有 access_token）→ 直接返回 true，不动网络；
-///   - 否则调 SDK `bootstrap` —— 内部从 keychain 读 StoredAuth，命中 family_token 优先调
-///     `/auth/family/exchange`，否则 fallback `/auth/refresh`。
-///     成功 → SDK 自动 set_access_token + 写 storage；这里再 emit `RESTORED_EVENT`，返回 true；
-///     storage 为空 / token 已被服务端 reject → 返回 false；
-///     网络瞬时错误 → SDK 保留 storage 不清，下次再调时还能试，返回 false。
+///   - 否则从 keychain 读 StoredAuth，命中 family_token 优先调 `/auth/family/exchange`，
+///     否则 fallback `/auth/refresh`：
+///     - 成功 → set_access_token + 写 storage，emit `RESTORED_EVENT`，返回 true；
+///     - 服务端明确 4xx 拒绝 → 主动清场，返回 false；
+///     - 网络 / 5xx → **保留** storage，返回 false（下次 online 还能试）；
+///     - storage 空 → 返回 false。
 #[tauri::command]
 pub async fn openloaf_try_recover(
     app: AppHandle,
@@ -561,12 +703,14 @@ pub async fn openloaf_try_recover(
     }
 
     let client = ol.client.clone();
-    let result = tokio::task::spawn_blocking(move || client.auth().bootstrap(Some(&client_info())))
-        .await
-        .map_err(|e| format!("join error: {e}"))?;
+    let storage = ol.storage.clone();
+    let result =
+        tokio::task::spawn_blocking(move || refresh_session_blocking(&client, &storage))
+            .await
+            .map_err(|e| format!("join error: {e}"))?;
 
     match result {
-        Ok(Some(restored)) => {
+        Ok(restored) => {
             let user = apply_session_local(
                 &ol,
                 &restored.access_token,
@@ -587,9 +731,16 @@ pub async fn openloaf_try_recover(
             });
             Ok(true)
         }
-        Ok(None) => Ok(false),
-        Err(err) => {
-            log::warn!("openloaf: on-demand bootstrap failed: {err}");
+        Err(RefreshFailure::AuthLost) => {
+            log::warn!("openloaf: try_recover rejected by server, clearing session");
+            clear_session(&ol);
+            Ok(false)
+        }
+        Err(RefreshFailure::NoStoredCredentials) => Ok(false),
+        Err(RefreshFailure::Network(err)) => {
+            log::warn!(
+                "openloaf: try_recover hit network/5xx (keeping keychain): {err}"
+            );
             Ok(false)
         }
     }
@@ -750,38 +901,43 @@ where
     match first {
         Err(SaaSError::Http { status: 401, .. }) => {
             log::warn!("openloaf: call_authed got 401, attempting refresh + retry");
-            if ol.ensure_fresh_token().await {
-                // 成功续期，重试一次
-                let client = ol.client.clone();
-                let retried = tokio::task::spawn_blocking(move || op(client))
-                    .await
-                    .map_err(|e| SaaSError::Input(format!("join error: {e}")))?;
-                match &retried {
-                    Ok(_) => log::info!("openloaf: call_authed retry after refresh succeeded"),
-                    Err(SaaSError::Http { status: 401, .. }) => {
-                        log::warn!(
-                            "openloaf: call_authed retry still 401 after refresh; clearing session"
-                        );
-                        clear_session(ol);
-                        if let Err(e) = app.emit(AUTH_LOST_EVENT, ()) {
-                            log::warn!("openloaf: emit auth-lost failed: {e}");
+            match ol.ensure_fresh_token().await {
+                RefreshOutcome::Refreshed => {
+                    // 成功续期，重试一次
+                    let client = ol.client.clone();
+                    let retried = tokio::task::spawn_blocking(move || op(client))
+                        .await
+                        .map_err(|e| SaaSError::Input(format!("join error: {e}")))?;
+                    match &retried {
+                        Ok(_) => log::info!("openloaf: call_authed retry after refresh succeeded"),
+                        Err(SaaSError::Http { status: 401, .. }) => {
+                            log::warn!(
+                                "openloaf: call_authed retry still 401 after refresh; clearing session"
+                            );
+                            handle_session_expired(app, ol);
                         }
+                        Err(e) => log::warn!("openloaf: call_authed retry returned non-401 error: {e}"),
                     }
-                    Err(e) => log::warn!("openloaf: call_authed retry returned non-401 error: {e}"),
+                    retried
                 }
-                retried
-            } else {
-                // refresh 也失败 → 登录彻底失效
-                log::warn!("openloaf: call_authed refresh failed, clearing session");
-                clear_session(ol);
-                if let Err(e) = app.emit(AUTH_LOST_EVENT, ()) {
-                    log::warn!("openloaf: emit auth-lost failed: {e}");
+                RefreshOutcome::AuthLost => {
+                    log::warn!("openloaf: call_authed refresh rejected, clearing session");
+                    handle_session_expired(app, ol);
+                    Err(SaaSError::Http {
+                        status: 401,
+                        message: "session expired".into(),
+                        body: None,
+                    })
                 }
-                Err(SaaSError::Http {
-                    status: 401,
-                    message: "session expired".into(),
-                    body: None,
-                })
+                RefreshOutcome::Network => {
+                    // 网络 / 服务端 5xx：保留登录态，让调用方按业务错处理。
+                    log::warn!(
+                        "openloaf: call_authed refresh hit network error, keeping session"
+                    );
+                    Err(SaaSError::Network(
+                        "auth refresh unreachable; keeping session".into(),
+                    ))
+                }
             }
         }
         other => other,
@@ -878,30 +1034,33 @@ pub async fn bootstrap(app: &AppHandle) {
     // 老条目对新版本无意义，留着只是噪音。`NoEntry` 静默忽略。
     cleanup_legacy_keychain();
 
-    // SDK 自身的 bootstrap：从注入的 storage 读 family/refresh token，
+    // 自管 bootstrap：从注入的 storage 读 family/refresh token，
     // 命中 family → `/auth/family/exchange`（首选，跨 App SSO），
-    // 否则 fallback `/auth/refresh`，都失败 → SDK 自动清 storage。
+    // 否则 fallback `/auth/refresh`。**绕开 SDK 自带 bootstrap**——它在 4xx / 网络
+    // 错都会清 storage，会让用户在服务器宕机时被强行登出。这里只在服务端**明确**
+    // 拒绝时才清，网络 / 5xx 一律保留 keychain，下次启动 / online 事件再试。
     //
-    // 30s 硬超时：bootstrap 内部走 ureq 同步 HTTP，base_url 不可达时（典型场景：
+    // 30s 硬超时：refresh 内部走 ureq 同步 HTTP，base_url 不可达时（典型场景：
     // dev keychain 污染导致 base_url=localhost:5180 但 dev server 已关，或网络
     // 大面积故障）默认超时叠加重试可能堆到几分钟，前端启动直接挂死在 Loading。
     // 这里超时只 warn，不清 storage——下一次启动还能再试。
     let client = shared.client.clone();
+    let storage = shared.storage.clone();
     let bootstrap_fut =
-        tokio::task::spawn_blocking(move || client.auth().bootstrap(Some(&client_info())));
+        tokio::task::spawn_blocking(move || refresh_session_blocking(&client, &storage));
     let result = match tokio::time::timeout(std::time::Duration::from_secs(30), bootstrap_fut).await
     {
         Ok(joined) => joined,
         Err(_) => {
             log::warn!(
-                "openloaf: bootstrap timeout (>30s); base_url unreachable? skipping restore, UI will require manual login"
+                "openloaf: bootstrap timeout (>30s); base_url unreachable? keeping keychain, UI will retry on next launch"
             );
             return;
         }
     };
 
     match result {
-        Ok(Ok(Some(restored))) => {
+        Ok(Ok(restored)) => {
             let user = apply_session_local(
                 &shared,
                 &restored.access_token,
@@ -921,11 +1080,17 @@ pub async fn bootstrap(app: &AppHandle) {
                 crate::ai_refine::prefetch_fast_variant(&app_clone).await;
             });
         }
-        Ok(Ok(None)) => {
-            // 无凭据或凭据被服务端 reject：SDK 已自动 clear storage。无需任何动作，UI 走 OAuth。
+        Ok(Err(RefreshFailure::NoStoredCredentials)) => {
+            // 没存过任何凭据 —— UI 直接走 OAuth。
         }
-        Ok(Err(err)) => {
-            log::warn!("openloaf: bootstrap failed transiently: {err}");
+        Ok(Err(RefreshFailure::AuthLost)) => {
+            log::warn!("openloaf: bootstrap rejected by server, clearing storage");
+            clear_session(&shared);
+        }
+        Ok(Err(RefreshFailure::Network(err))) => {
+            log::warn!(
+                "openloaf: bootstrap network error (server unreachable / offline), keeping keychain: {err}"
+            );
         }
         Err(join_err) => {
             log::warn!("openloaf: bootstrap join error: {join_err}");

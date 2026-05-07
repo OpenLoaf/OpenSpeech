@@ -264,7 +264,7 @@ fn collect_event(
         RealtimeEvent::Ready { session_id, .. } => {
             println!("[{ms:>6} ms] ready · {session_id}");
         }
-        RealtimeEvent::Partial { sentence_id, text } => {
+        RealtimeEvent::Partial { sentence_id, text, .. } => {
             println!("[{ms:>6} ms] partial · sid={sentence_id} {text}");
             partials.push((ms, *sentence_id, text.clone()));
         }

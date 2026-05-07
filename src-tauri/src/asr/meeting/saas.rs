@@ -1,33 +1,19 @@
 // SaaS 实时 ASR provider（OpenLoaf 端 OL-TL-RT-003，腾讯上游 16k_zh_en_speaker）。
 //
-// **为什么不直接用 SDK 0.3.17 的 `RealtimeAsrSession`**：
-//   SDK 0.3.17 changelog 声称 `RealtimePartialFrame` / `RealtimeFinalFrame` 已加
-//   `speaker_id`，但 Rust 端这一版只更新了 changelog，source 里 `RealtimeEvent`
-//   enum 仍只有 `sentence_id` + `text`——服务端推过来的 `speakerId` 字段被 serde
-//   忽略落到地板上，前端永远拿不到说话人分离结果。
+// 走 SDK typed API：`client.tools_v4().realtime_asr_ol_tl_rt_003(&params)` 拿到
+// `RealtimeAsrSession`，事件流由 SDK worker 解析成 `RealtimeEvent`。0.3.19 起
+// `Partial` / `Final` 都暴露了 `speaker_id: Option<i64>`，会议路径直接消费即可。
 //
-//   等 SDK 把字段补齐后，本文件可以整体回退到包装 `RealtimeAsrSession`（删掉
-//   raw WS worker，map_event 加上 speaker_id 透出即可）。
-//
-// 协议：参考 ~/.agents/skills/openloaf-saas-sdk/tools/OL-TL-RT-003-realtime-asr.md
-//   - URL: `wss://{base}/api/ai/v4/tools/OL-TL-RT-003/stream?token=<bearer>`
-//   - 客户端首帧 `{"type":"start","params":{...}}` —— 引擎 `16k_zh_en_speaker`
-//   - 后续二进制帧 = PCM16 LE / 16 kHz / mono / 100 ms/frame
-//   - 服务端推 `ready` / `partial` / `final` / `credits` / `error` / `closed`
-//   - 字段全 camelCase（`sentenceId` / `speakerId` / `beginMs` / `endMs`）
+// 引擎固定 `16k_zh_en_speaker`：腾讯独立 SKU，自带说话人分离 + 中英 + 多方言；
+// capabilities.speaker_diarization=true 与之对齐。
 
-use std::io::ErrorKind as IoErrorKind;
-use std::net::TcpStream;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use openloaf_saas::SaaSClient;
-use serde::Deserialize;
-use tungstenite::Message;
-use tungstenite::client::IntoClientRequest;
-use tungstenite::stream::MaybeTlsStream;
-use url::Url;
+use openloaf_saas::SaaSError;
+use openloaf_saas::v4_tools::{
+    RealtimeAsrOlTlRt003Engine, RealtimeAsrOlTlRt003Params, RealtimeAsrSession, RealtimeEvent,
+};
 
 use super::provider::{
     MeetingAsrProvider, MeetingEvent, MeetingProviderCapabilities, MeetingProviderError,
@@ -35,6 +21,7 @@ use super::provider::{
 };
 
 pub const PROVIDER_ID: &str = "saas";
+const LOG_TARGET: &str = "openspeech::asr::meeting::saas";
 
 /// 16k_zh_en_speaker 大模型自带中英 + 多方言识别 + 说话人分离。
 /// language 字段不传给上游——只用于前端 UI 校验。
@@ -42,24 +29,13 @@ pub const SUPPORTED_LANGUAGES: &[&str] = &[
     "zh", "en", "yue", "sc", "sx", "hn", "sh", "xn", "hb", "ah",
 ];
 
-const ENGINE_MODEL_TYPE: &str = "16k_zh_en_speaker";
-const VARIANT_ID: &str = "OL-TL-RT-003";
-const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
-const WS_LOG_TARGET: &str = "openspeech::asr::meeting::saas";
-
-// ---------- Provider 实例 ----------
-
 pub struct SaasMeetingProvider {
     client: SaaSClient,
-    base_url: String,
 }
 
 impl SaasMeetingProvider {
-    pub fn new(client: SaaSClient, base_url: impl Into<String>) -> Self {
-        Self {
-            client,
-            base_url: base_url.into(),
-        }
+    pub fn new(client: SaaSClient) -> Self {
+        Self { client }
     }
 }
 
@@ -96,345 +72,177 @@ impl MeetingAsrProvider for SaasMeetingProvider {
                 config.language
             )));
         }
-        let token = self
+
+        let params = RealtimeAsrOlTlRt003Params {
+            engine_model_type: Some(RealtimeAsrOlTlRt003Engine::Engine16kZhEnSpeaker),
+            voice_format: Some(1),
+            needvad: Some(1),
+            convert_num_mode: Some(1),
+            ..Default::default()
+        };
+
+        log::info!(
+            target: LOG_TARGET,
+            "[open] variant=OL-TL-RT-003 engine=16k_zh_en_speaker lang={} diarization={} token_present={}",
+            config.language,
+            config.enable_diarization,
+            self.client.access_token().is_some(),
+        );
+        let sess = self
             .client
-            .access_token()
-            .ok_or_else(|| MeetingProviderError::Unauthenticated(
-                "saas access_token missing (not signed in)".into(),
-            ))?;
-        SaasMeetingSession::connect(&self.base_url, &token).map(|s| Box::new(s) as Box<dyn MeetingSession>)
+            .tools_v4()
+            .realtime_asr_ol_tl_rt_003(&params)
+            .map_err(|e| {
+                log::warn!(target: LOG_TARGET, "[open] connect failed: {e}");
+                map_open_err(e)
+            })?;
+        log::info!(target: LOG_TARGET, "[open] WebSocket connected, awaiting Ready");
+        Ok(Box::new(SaasMeetingSession::new(sess)))
     }
 }
 
-// ---------- 会话实现 ----------
-
-pub struct SaasMeetingSession {
-    outbox: Sender<Outbound>,
-    inbox: Receiver<SessionRaw>,
-    worker: Option<JoinHandle<()>>,
+fn map_open_err(e: SaaSError) -> MeetingProviderError {
+    let raw = e.to_string();
+    if is_unauthorized(&raw) {
+        MeetingProviderError::Unauthenticated(raw)
+    } else {
+        MeetingProviderError::Network(raw)
+    }
 }
 
-enum Outbound {
-    Binary(Vec<u8>),
-    /// 主动 `{type:finish}` 通知服务端拉完最后一句。
-    Finish,
-    Close,
+fn is_unauthorized(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    l.contains("401") || l.contains("unauthorized") || l.contains("unauthenticated")
 }
 
-enum SessionRaw {
-    Event(MeetingEvent),
-    Network(String),
+struct SaasMeetingSession {
+    sess: RealtimeAsrSession,
 }
 
 impl SaasMeetingSession {
-    fn connect(base_url: &str, token: &str) -> Result<Self, MeetingProviderError> {
-        let url = build_ws_url(base_url, VARIANT_ID, token)
-            .map_err(|e| MeetingProviderError::BadConfig(e.to_string()))?;
-        log::info!(target: WS_LOG_TARGET, "[ws-connect] saas {VARIANT_ID} engine={ENGINE_MODEL_TYPE}");
-
-        let request = url
-            .as_str()
-            .into_client_request()
-            .map_err(|e| MeetingProviderError::BadConfig(e.to_string()))?;
-        let (mut ws, resp) = tungstenite::connect(request)
-            .map_err(|e| MeetingProviderError::Network(e.to_string()))?;
-        log::debug!(
-            target: WS_LOG_TARGET,
-            "[ws-debug] http_upgrade_response status={}",
-            resp.status()
-        );
-
-        match ws.get_mut() {
-            MaybeTlsStream::Plain(s) => s
-                .set_nonblocking(true)
-                .map_err(|e| MeetingProviderError::Network(e.to_string()))?,
-            MaybeTlsStream::Rustls(s) => s
-                .get_mut()
-                .set_nonblocking(true)
-                .map_err(|e| MeetingProviderError::Network(e.to_string()))?,
-            _ => {}
-        }
-
-        // start 帧——固定走 16k_zh_en_speaker，需要其它引擎时再考虑外露 params。
-        let start = serde_json::json!({
-            "type": "start",
-            "params": {
-                "engine_model_type": ENGINE_MODEL_TYPE,
-                "voice_format": 1,
-                "needvad": 1,
-                "convert_num_mode": 1,
-            },
-        });
-        ws.send(Message::Text(start.to_string()))
-            .map_err(|e| MeetingProviderError::Network(format!("send start: {e}")))?;
-        let _ = ws.flush();
-
-        let (outbox_tx, outbox_rx) = mpsc::channel::<Outbound>();
-        let (inbox_tx, inbox_rx) = mpsc::channel::<SessionRaw>();
-        let worker = thread::Builder::new()
-            .name("openspeech-saas-meeting".into())
-            .spawn(move || run_worker(ws, outbox_rx, inbox_tx))
-            .map_err(|e| MeetingProviderError::Network(format!("spawn worker: {e}")))?;
-
-        Ok(Self {
-            outbox: outbox_tx,
-            inbox: inbox_rx,
-            worker: Some(worker),
-        })
+    fn new(sess: RealtimeAsrSession) -> Self {
+        Self { sess }
     }
 }
 
 impl MeetingSession for SaasMeetingSession {
     fn send_audio(&mut self, pcm16: Vec<u8>) -> Result<(), String> {
-        self.outbox
-            .send(Outbound::Binary(pcm16))
-            .map_err(|_| "session closed".into())
+        self.sess.send_audio(pcm16).map_err(|e| e.to_string())
     }
 
     fn finish(&mut self) -> Result<(), String> {
-        self.outbox
-            .send(Outbound::Finish)
-            .map_err(|_| "session closed".into())
+        self.sess.finish().map_err(|e| e.to_string())
     }
 
     fn next_event(&mut self, dur: Duration) -> MeetingEvent {
-        match self.inbox.recv_timeout(dur) {
-            Ok(SessionRaw::Event(ev)) => ev,
-            Ok(SessionRaw::Network(m)) => MeetingEvent::NetworkExit(m),
-            Err(RecvTimeoutError::Timeout) => MeetingEvent::Idle,
-            Err(RecvTimeoutError::Disconnected) => MeetingEvent::NetworkExit("worker gone".into()),
+        match self.sess.next_event_timeout(dur) {
+            Ok(Some(ev)) => map_event(ev),
+            Ok(None) => MeetingEvent::Idle,
+            Err(SaaSError::Network(msg)) => MeetingEvent::NetworkExit(msg),
+            Err(e @ SaaSError::Decode(_)) => MeetingEvent::DecodeRecoverable(e.to_string()),
+            Err(e) => MeetingEvent::Error {
+                code: classify_saas_err(&e),
+                message: e.to_string(),
+            },
         }
     }
 }
 
-impl Drop for SaasMeetingSession {
-    fn drop(&mut self) {
-        let _ = self.outbox.send(Outbound::Close);
-        if let Some(h) = self.worker.take() {
-            let _ = h.join();
-        }
-    }
-}
-
-// ---------- WebSocket worker ----------
-
-fn build_ws_url(base_url: &str, variant_id: &str, token: &str) -> Result<Url, String> {
-    let mut base = Url::parse(base_url).map_err(|e| format!("invalid base_url: {e}"))?;
-    let new_scheme = match base.scheme() {
-        "http" | "ws" => "ws",
-        "https" | "wss" => "wss",
-        other => return Err(format!("unsupported scheme: {other}")),
-    };
-    base.set_scheme(new_scheme).map_err(|_| "scheme change failed".to_string())?;
-    base.set_path(&format!("/api/ai/v4/tools/{variant_id}/stream"));
-    base.query_pairs_mut().clear().append_pair("token", token);
-    Ok(base)
-}
-
-fn run_worker(
-    mut ws: tungstenite::WebSocket<MaybeTlsStream<TcpStream>>,
-    outbox_rx: Receiver<Outbound>,
-    inbox_tx: Sender<SessionRaw>,
-) {
-    loop {
-        let mut should_break = false;
-        loop {
-            match outbox_rx.try_recv() {
-                Ok(Outbound::Binary(bytes)) => {
-                    log::trace!(
-                        target: WS_LOG_TARGET,
-                        "[ws-out] saas audio binary {}B",
-                        bytes.len(),
-                    );
-                    if let Err(e) = ws.send(Message::Binary(bytes)) {
-                        if !is_would_block(&e) {
-                            let _ = inbox_tx.send(SessionRaw::Network(e.to_string()));
-                            return;
-                        }
-                    }
-                }
-                Ok(Outbound::Finish) => {
-                    log::debug!(target: WS_LOG_TARGET, "[ws-out] saas {{\"type\":\"finish\"}}");
-                    if let Err(e) = ws.send(Message::Text("{\"type\":\"finish\"}".into())) {
-                        if !is_would_block(&e) {
-                            let _ = inbox_tx.send(SessionRaw::Network(e.to_string()));
-                            return;
-                        }
-                    }
-                }
-                Ok(Outbound::Close) => {
-                    let _ = ws.close(None);
-                    let _ = ws.flush();
-                    should_break = true;
-                    break;
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    let _ = ws.close(None);
-                    let _ = ws.flush();
-                    should_break = true;
-                    break;
-                }
+fn map_event(ev: RealtimeEvent) -> MeetingEvent {
+    match ev {
+        RealtimeEvent::Ready { session_id, .. } => {
+            log::info!(target: LOG_TARGET, "[ready] session_id={session_id}");
+            MeetingEvent::Ready {
+                session_id: Some(session_id),
             }
         }
-        if should_break {
-            return;
-        }
-
-        if let Err(e) = ws.flush() {
-            if !is_would_block(&e) {
-                let _ = inbox_tx.send(SessionRaw::Network(e.to_string()));
-                return;
-            }
-        }
-
-        match ws.read() {
-            Ok(Message::Text(s)) => {
-                log::debug!(target: WS_LOG_TARGET, "[ws-in] saas text raw: {s}");
-                match parse_frame(&s) {
-                    Ok(Some(ev)) => {
-                        let terminal = matches!(
-                            ev,
-                            MeetingEvent::Error { .. } | MeetingEvent::EndOfStream
-                        );
-                        if inbox_tx.send(SessionRaw::Event(ev)).is_err() {
-                            return;
-                        }
-                        if terminal {
-                            let _ = ws.close(None);
-                            let _ = ws.flush();
-                            return;
-                        }
-                    }
-                    Ok(None) => {} // credits 等无关帧，吞掉
-                    Err(e) => {
-                        let _ = inbox_tx
-                            .send(SessionRaw::Event(MeetingEvent::DecodeRecoverable(e)));
-                    }
-                }
-            }
-            Ok(Message::Binary(b)) => {
-                log::debug!(target: WS_LOG_TARGET, "[ws-in] saas binary {}B", b.len());
-            }
-            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
-            Ok(Message::Close(frame)) => {
-                log::info!(target: WS_LOG_TARGET, "[ws-in] saas close frame: {frame:?}");
-                return;
-            }
-            Ok(Message::Frame(_)) => return,
-            Err(e) if is_would_block(&e) => {
-                thread::sleep(READ_POLL_INTERVAL);
-            }
-            Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                return;
-            }
-            Err(e) => {
-                log::warn!(target: WS_LOG_TARGET, "[ws-err] saas {e}");
-                let _ = inbox_tx.send(SessionRaw::Network(e.to_string()));
-                return;
-            }
-        }
-    }
-}
-
-fn is_would_block(err: &tungstenite::Error) -> bool {
-    matches!(err, tungstenite::Error::Io(e) if e.kind() == IoErrorKind::WouldBlock)
-}
-
-// ---------- Frame parser ----------
-//
-// 服务端 wire format 全是 camelCase。`speakerId` 在 16k_zh_en_speaker 引擎下才会
-// 推送（其它引擎不带），所以 default_speaker_id() 默认 -1（待识别）。
-
-// Credits.remaining_credits / Closed.reason 字段保留是为了未来日志或 UI 展示用，
-// 当前不读取——加 allow(dead_code) 而不是删字段，避免后面再加回来时还得对一遍 wire。
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-#[allow(dead_code)]
-enum SaasFrame {
-    #[serde(rename_all = "camelCase")]
-    Ready {
-        #[serde(default)]
-        session_id: Option<String>,
-    },
-    #[serde(rename_all = "camelCase")]
-    Partial {
-        sentence_id: i64,
-        #[serde(default)]
-        text: String,
-        #[serde(default = "default_speaker_id")]
-        speaker_id: i32,
-    },
-    #[serde(rename_all = "camelCase")]
-    Final {
-        sentence_id: i64,
-        #[serde(default)]
-        text: String,
-        #[serde(default)]
-        begin_ms: Option<i64>,
-        #[serde(default)]
-        end_ms: Option<i64>,
-        #[serde(default = "default_speaker_id")]
-        speaker_id: i32,
-    },
-    #[serde(rename_all = "camelCase")]
-    Credits {
-        #[serde(default)]
-        remaining_credits: Option<f64>,
-    },
-    #[serde(rename_all = "camelCase")]
-    Closed {
-        #[serde(default)]
-        reason: String,
-    },
-    #[serde(rename_all = "camelCase")]
-    Error {
-        #[serde(default)]
-        code: String,
-        #[serde(default)]
-        message: String,
-    },
-}
-
-fn default_speaker_id() -> i32 {
-    -1
-}
-
-fn parse_frame(raw: &str) -> Result<Option<MeetingEvent>, String> {
-    let frame: SaasFrame = serde_json::from_str(raw).map_err(|e| e.to_string())?;
-    Ok(Some(match frame {
-        SaasFrame::Ready { session_id } => MeetingEvent::Ready { session_id },
-        SaasFrame::Partial {
+        RealtimeEvent::Partial {
             sentence_id,
             text,
             speaker_id,
-        } => MeetingEvent::SegmentPartial(MeetingSegment {
-            sentence_id,
-            speaker_id,
-            text,
-            start_ms: 0,
-            end_ms: 0,
-        }),
-        SaasFrame::Final {
+            ..
+        } => {
+            // partial 流量大，用 debug；speaker_id 出现在 partial 上是 16k_zh_en_speaker 工作中的标志。
+            log::debug!(
+                target: LOG_TARGET,
+                "[partial] sid={sentence_id} speaker={:?} text={}B",
+                speaker_id,
+                text.len()
+            );
+            MeetingEvent::SegmentPartial(MeetingSegment {
+                sentence_id,
+                speaker_id: speaker_id_to_i32(speaker_id),
+                text,
+                start_ms: 0,
+                end_ms: 0,
+            })
+        }
+        RealtimeEvent::Final {
             sentence_id,
             text,
             begin_ms,
             end_ms,
             speaker_id,
-        } => MeetingEvent::SegmentFinal(MeetingSegment {
-            sentence_id,
-            speaker_id,
-            text,
-            start_ms: begin_ms.unwrap_or(0).max(0) as u64,
-            end_ms: end_ms.unwrap_or(0).max(0) as u64,
-        }),
-        SaasFrame::Closed { .. } => MeetingEvent::EndOfStream,
-        SaasFrame::Error { code, message } => MeetingEvent::Error {
-            code: classify_saas_code(&code),
-            message,
-        },
-        SaasFrame::Credits { .. } => return Ok(None),
-    }))
+            ..
+        } => {
+            log::info!(
+                target: LOG_TARGET,
+                "[final] sid={sentence_id} speaker={:?} begin_ms={:?} end_ms={:?} text={:?}",
+                speaker_id,
+                begin_ms,
+                end_ms,
+                text,
+            );
+            MeetingEvent::SegmentFinal(MeetingSegment {
+                sentence_id,
+                speaker_id: speaker_id_to_i32(speaker_id),
+                text,
+                start_ms: begin_ms.unwrap_or(0).max(0) as u64,
+                end_ms: end_ms.unwrap_or(0).max(0) as u64,
+            })
+        }
+        // Closed 是 SaaS 流的正常终止（finish 后服务端回 Closed）——映射为 EndOfStream。
+        RealtimeEvent::Closed { reason, total_seconds, total_credits, .. } => {
+            log::info!(
+                target: LOG_TARGET,
+                "[closed] reason={reason} total_seconds={total_seconds:?} total_credits={total_credits:?}"
+            );
+            MeetingEvent::EndOfStream
+        }
+        RealtimeEvent::Error { code, message } => {
+            log::warn!(target: LOG_TARGET, "[error] code={code} message={message}");
+            MeetingEvent::Error {
+                code: classify_saas_code(&code),
+                message,
+            }
+        }
+        // Credits 帧不影响识别流程，按 Idle 吞掉（前端不展示 SaaS 余额变化）。
+        RealtimeEvent::Credits { consumed_seconds, remaining_credits, .. } => {
+            log::debug!(
+                target: LOG_TARGET,
+                "[credits] consumed_seconds={consumed_seconds:?} remaining={remaining_credits:?}"
+            );
+            MeetingEvent::Idle
+        }
+    }
+}
+
+/// SDK 用 `Option<i64>`：None = vendor 未发（其他 engine）；i64 = 实际 cluster id。
+/// 我们的 `MeetingSegment::speaker_id` 是 i32，约定 -1 = 待识别 / 无诊断。
+fn speaker_id_to_i32(v: Option<i64>) -> i32 {
+    match v {
+        Some(n) if n >= 0 && n <= i32::MAX as i64 => n as i32,
+        _ => -1,
+    }
+}
+
+fn classify_saas_err(e: &SaaSError) -> String {
+    let raw = e.to_string();
+    if is_unauthorized(&raw) {
+        "unauthenticated_saas".into()
+    } else {
+        "saas_error".into()
+    }
 }
 
 fn classify_saas_code(code: &str) -> String {
@@ -453,70 +261,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_ready_frame() {
-        let raw = r#"{"type":"ready","sessionId":"abc","startedAt":123}"#;
-        match parse_frame(raw).unwrap().unwrap() {
-            MeetingEvent::Ready { session_id } => {
-                assert_eq!(session_id.as_deref(), Some("abc"));
-            }
-            other => panic!("expected Ready, got {other:?}"),
-        }
+    fn speaker_id_negative_or_none_becomes_minus_one() {
+        assert_eq!(speaker_id_to_i32(None), -1);
+        assert_eq!(speaker_id_to_i32(Some(-5)), -1);
     }
 
     #[test]
-    fn parse_partial_with_speaker_id() {
-        let raw = r#"{"type":"partial","sentenceId":7,"text":"hello","speakerId":1}"#;
-        match parse_frame(raw).unwrap().unwrap() {
+    fn speaker_id_positive_passes_through() {
+        assert_eq!(speaker_id_to_i32(Some(0)), 0);
+        assert_eq!(speaker_id_to_i32(Some(7)), 7);
+    }
+
+    #[test]
+    fn speaker_id_overflow_falls_back() {
+        assert_eq!(speaker_id_to_i32(Some(i64::MAX)), -1);
+    }
+
+    // 端到端：模拟服务端 wire JSON → SDK deserialize → 我们的 map_event。
+    // 任何一环对字段名 / 类型理解不一致都会被这组测试逮到。
+
+    #[test]
+    fn sdk_deserializes_partial_with_speaker_id() {
+        let raw = r#"{"type":"partial","sentenceId":3,"text":"你好","speakerId":1}"#;
+        let ev: RealtimeEvent = serde_json::from_str(raw).expect("partial deserialize");
+        match map_event(ev) {
             MeetingEvent::SegmentPartial(s) => {
-                assert_eq!(s.sentence_id, 7);
-                assert_eq!(s.speaker_id, 1);
-                assert_eq!(s.text, "hello");
+                assert_eq!(s.sentence_id, 3);
+                assert_eq!(s.speaker_id, 1, "speaker_id must propagate end-to-end");
+                assert_eq!(s.text, "你好");
             }
             other => panic!("expected SegmentPartial, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_partial_without_speaker_id_defaults_minus_one() {
-        let raw = r#"{"type":"partial","sentenceId":3,"text":"hi"}"#;
-        match parse_frame(raw).unwrap().unwrap() {
-            MeetingEvent::SegmentPartial(s) => assert_eq!(s.speaker_id, -1),
-            other => panic!("expected SegmentPartial, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_final_with_timing_and_speaker() {
-        let raw = r#"{"type":"final","sentenceId":2,"text":"world","beginMs":1000,"endMs":2200,"speakerId":0}"#;
-        match parse_frame(raw).unwrap().unwrap() {
+    fn sdk_deserializes_final_with_speaker_and_timing() {
+        let raw = r#"{"type":"final","sentenceId":4,"text":"再见","beginMs":1000,"endMs":2200,"speakerId":0}"#;
+        let ev: RealtimeEvent = serde_json::from_str(raw).expect("final deserialize");
+        match map_event(ev) {
             MeetingEvent::SegmentFinal(s) => {
+                assert_eq!(s.sentence_id, 4);
+                assert_eq!(s.speaker_id, 0);
                 assert_eq!(s.start_ms, 1000);
                 assert_eq!(s.end_ms, 2200);
-                assert_eq!(s.speaker_id, 0);
             }
             other => panic!("expected SegmentFinal, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_credits_frame_returns_none() {
-        let raw = r#"{"type":"credits","remainingCredits":12.5}"#;
-        assert!(parse_frame(raw).unwrap().is_none());
+    fn sdk_serializes_params_as_snake_case_with_speaker_engine() {
+        let p = RealtimeAsrOlTlRt003Params {
+            engine_model_type: Some(RealtimeAsrOlTlRt003Engine::Engine16kZhEnSpeaker),
+            voice_format: Some(1),
+            needvad: Some(1),
+            convert_num_mode: Some(1),
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        // 防止以后 SDK 加 rename_all 改驼峰、或者把枚举别名改了，把腾讯那边
+        // engine 名拼错——服务端默认会 fallback 到 16k_zh，没有诊断结果。
+        assert!(s.contains("\"engine_model_type\":\"16k_zh_en_speaker\""), "params={s}");
+        assert!(s.contains("\"voice_format\":1"));
+        assert!(s.contains("\"needvad\":1"));
     }
 
     #[test]
-    fn parse_closed_to_end_of_stream() {
-        let raw = r#"{"type":"closed","reason":"client_finish","totalSeconds":42.3}"#;
-        assert!(matches!(parse_frame(raw).unwrap().unwrap(), MeetingEvent::EndOfStream));
-    }
-
-    #[test]
-    fn parse_error_classifies_code() {
-        let raw = r#"{"type":"error","code":"insufficient_credits","message":"no balance"}"#;
-        match parse_frame(raw).unwrap().unwrap() {
-            MeetingEvent::Error { code, .. } => assert_eq!(code, "insufficient_funds_saas"),
-            other => panic!("expected Error, got {other:?}"),
+    fn sdk_deserializes_partial_without_speaker_defaults_to_unknown() {
+        let raw = r#"{"type":"partial","sentenceId":1,"text":"hi"}"#;
+        let ev: RealtimeEvent = serde_json::from_str(raw).unwrap();
+        match map_event(ev) {
+            MeetingEvent::SegmentPartial(s) => assert_eq!(s.speaker_id, -1),
+            other => panic!("expected SegmentPartial, got {other:?}"),
         }
     }
 }
-
