@@ -10,12 +10,16 @@ use tauri::{
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
-const WIDTH: f64 = 200.0;
-// 窗口固定为"最大可能高度"——pill 36 + toast 42 + gap 4 + debug strip 28 + gap 4
+// 260：pill 设计宽度 200 已经偏窄——失败 toast 的 description 在 200 logical px
+// 上即便放到 11px 字号也只能塞 1 行，常见错误（"自定义供应商凭证缺失，请到设置 →
+// 听写 → 自定义供应商配置"）会被 ellipsis 吞掉一半。260 让 toast 字号能升到 11px、
+// description 折两行可读，pill 形态（X · 波形 · ✓）依旧不显得稀疏。
+const WIDTH: f64 = 260.0;
+// 窗口固定为"最大可能高度"——pill 36 + toast 64 + gap 4 + debug strip 28 + gap 4
 // 还留 16 px 缓冲。固定窗口尺寸可以避免 toast 出现 / debug 切换那一瞬调
 // NSWindow setContentSize 引起的整窗同步重绘（pill 看起来"闪一下刷新"）。
 // pill 在 webview 内 flex justify-end 贴底，视觉位置与 36 高度时一致。
-const HEIGHT: f64 = 130.0;
+const HEIGHT: f64 = 150.0;
 // macOS 的 visibleFrame 在 Dock 上方多让出一段缓冲（约 10–20px），负值吃掉这段
 // 让胶囊真正贴近 Dock 顶边；Windows / Linux 的 work_area 已经精确排除任务栏，
 // 再压负值会盖在任务栏之上，所以保留几像素留白即可。

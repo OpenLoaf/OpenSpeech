@@ -87,6 +87,12 @@
     "error_prefix": "ERROR",
     "error_illegal_combo": "Illegal combination",
     "conflict_with": "Already used by \"{{name}}\"",
+    "conflict_reason": {
+      "equal": "Already used by \"{{name}}\"",
+      "subset_modifier_only": "Modifier set is a subset of \"{{name}}\" — will cause phantom triggers",
+      "subset_combo": "Modifier set is a subset of \"{{name}}\" — pressing this will double-fire",
+      "double_tap_overlap_modifier": "Shares a modifier with \"{{name}}\" — double-tap window will conflict"
+    },
     "replace": "Replace",
     "rebind": "Re-record",
     "cancel": "Cancel",

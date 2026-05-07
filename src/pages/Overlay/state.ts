@@ -11,7 +11,8 @@ export type ToastKind = "error" | "warning" | "info";
 export type ToastActionKey =
   | "open_login"
   | "open_no_internet"
-  | "open_settings_byo";
+  | "open_settings_byo"
+  | "switch_to_saas";
 
 export interface ToastPayload {
   kind: ToastKind;

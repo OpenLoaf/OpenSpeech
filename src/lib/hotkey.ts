@@ -3,21 +3,31 @@ import { detectPlatform, type Platform } from "@/lib/platform";
 
 export type HotkeyMod = "ctrl" | "alt" | "shift" | "meta" | "fn";
 
+/** 物理修饰键的左右；fn 没有左右概念，所以从此类型排除。 */
+export type Side = "left" | "right";
+
+/** 各修饰键实际左右选择；fn 永远不在内。缺失项视为 `"left"`（旧数据兼容）。 */
+export type ModSides = Partial<Record<Exclude<HotkeyMod, "fn">, Side>>;
+
 /**
  * 绑定形态：
  * - `combo`         —— 至少 1 修饰键 + 1 主键（`code` 非空），例：`Ctrl + Shift + Space`
- * - `modifierOnly`  —— 1 到 N 个修饰键，无主键（`code === ""`），例：`Fn` 单按
+ * - `modifierOnly`  —— 至少 2 个修饰键，无主键（`code === ""`）；单修饰键已在 isLegalBinding 拦截
  * - `doubleTap`     —— 双击单个修饰键（`mods.length === 1`，`code === ""`）
  */
 export type BindingKind = "combo" | "modifierOnly" | "doubleTap";
 
 /**
  * 全系统统一为 toggle 语义（按一下开始 · 再按一下结束），不再有 hold（长按）模式。
+ *
+ * `modSides` 在 v3 schema 引入：录入时按用户实际按下的物理键写左/右；旧数据 migrate
+ * 阶段全部填 left。fn 不出现在此对象。匹配时缺失的 mod 当作 left。
  */
 export interface HotkeyBinding {
   kind: BindingKind;
   mods: HotkeyMod[];
   code: string;
+  modSides?: ModSides;
 }
 
 export const MOD_ORDER: readonly HotkeyMod[] = [
@@ -54,25 +64,47 @@ export function getDefaultBindings(
 ): Record<BindingId, HotkeyBinding | null> {
   const ptt: HotkeyBinding =
     platform === "macos"
-      ? { kind: "modifierOnly", mods: ["fn", "ctrl"], code: "" }
-      : { kind: "modifierOnly", mods: ["ctrl", "meta"], code: "" };
+      ? {
+          kind: "modifierOnly",
+          mods: ["fn", "ctrl"],
+          code: "",
+          modSides: { ctrl: "left" },
+        }
+      : {
+          kind: "modifierOnly",
+          mods: ["ctrl", "meta"],
+          code: "",
+          modSides: { ctrl: "left", meta: "left" },
+        };
 
   // 翻译：默认 macOS = Fn + Shift；Windows = Win + Alt；Linux = Super + Alt（meta + alt）。
   const translate: HotkeyBinding =
     platform === "macos"
-      ? { kind: "modifierOnly", mods: ["fn", "shift"], code: "" }
-      : { kind: "modifierOnly", mods: ["alt", "meta"], code: "" };
+      ? {
+          kind: "modifierOnly",
+          mods: ["fn", "shift"],
+          code: "",
+          modSides: { shift: "left" },
+        }
+      : {
+          kind: "modifierOnly",
+          mods: ["alt", "meta"],
+          code: "",
+          modSides: { alt: "left", meta: "left" },
+        };
 
   const showMainWindow: HotkeyBinding = {
     kind: "combo",
     mods: ["ctrl", "alt"],
     code: "KeyO",
+    modSides: { ctrl: "left", alt: "left" },
   };
 
   const openToolbox: HotkeyBinding = {
     kind: "combo",
     mods: ["ctrl", "alt"],
     code: "KeyT",
+    modSides: { ctrl: "left", alt: "left" },
   };
 
   return {
@@ -129,37 +161,59 @@ export function normalizeMods(mods: HotkeyMod[]): HotkeyMod[] {
   );
 }
 
-const MOD_FROM_CODE: Record<string, HotkeyMod> = {
-  ControlLeft: "ctrl",
-  ControlRight: "ctrl",
-  AltLeft: "alt",
-  AltRight: "alt",
-  ShiftLeft: "shift",
-  ShiftRight: "shift",
-  MetaLeft: "meta",
-  MetaRight: "meta",
-  OSLeft: "meta",
-  OSRight: "meta",
+const MOD_INFO_FROM_CODE: Record<
+  string,
+  { mod: HotkeyMod; side: Side | null }
+> = {
+  ControlLeft: { mod: "ctrl", side: "left" },
+  ControlRight: { mod: "ctrl", side: "right" },
+  AltLeft: { mod: "alt", side: "left" },
+  AltRight: { mod: "alt", side: "right" },
+  ShiftLeft: { mod: "shift", side: "left" },
+  ShiftRight: { mod: "shift", side: "right" },
+  MetaLeft: { mod: "meta", side: "left" },
+  MetaRight: { mod: "meta", side: "right" },
+  OSLeft: { mod: "meta", side: "left" },
+  OSRight: { mod: "meta", side: "right" },
   // Fn 在 macOS KeyboardEvent.code 无稳定映射；此处接受自定义 "Fn" token，
-  // 由 Rust 侧 CGEventTap / rdev fork 事件归一化后传入
-  Fn: "fn",
+  // 由 Rust 侧 CGEventTap / rdev fork 事件归一化后传入。fn 没有左右概念。
+  Fn: { mod: "fn", side: null },
 };
 
 export function codeToMod(code: string): HotkeyMod | null {
-  return MOD_FROM_CODE[code] ?? null;
+  return MOD_INFO_FROM_CODE[code]?.mod ?? null;
+}
+
+export function codeToSide(code: string): Side | null {
+  return MOD_INFO_FROM_CODE[code]?.side ?? null;
 }
 
 export function isModifierCode(code: string): boolean {
-  return code in MOD_FROM_CODE;
+  return code in MOD_INFO_FROM_CODE;
 }
 
-const DISALLOWED_BARE: readonly string[] = [
-  "Escape",
+/** 取 binding 中某 mod 的实际 side。fn 永远返回 null；缺失项默认 left。 */
+export function getModSide(
+  binding: Pick<HotkeyBinding, "modSides">,
+  mod: HotkeyMod,
+): Side | null {
+  if (mod === "fn") return null;
+  return binding.modSides?.[mod] ?? "left";
+}
+
+// 即使 allowSpecialKeys 也不放行：误触代价高且无替代（Tab=焦点切换、
+// Backspace/Delete=误删文本、CapsLock=不可靠的 release）
+const ALWAYS_DISALLOWED_MAIN: readonly string[] = [
   "Tab",
-  "Enter",
   "Backspace",
   "Delete",
   "CapsLock",
+];
+
+// allowSpecialKeys=false 时拦截，开启后放行
+const SPECIAL_KEYS_GATED: readonly string[] = [
+  "Escape",
+  "Enter",
   "ArrowUp",
   "ArrowDown",
   "ArrowLeft",
@@ -176,7 +230,13 @@ export function isLegalMainKey(
   if (isModifierCode(code)) {
     return { ok: false, reason: i18n.t("hotkey:validation.needs_main_key") };
   }
-  if (!allowSpecialKeys && DISALLOWED_BARE.includes(code)) {
+  if (ALWAYS_DISALLOWED_MAIN.includes(code)) {
+    return {
+      ok: false,
+      reason: i18n.t("hotkey:validation.combo_disallowed_main"),
+    };
+  }
+  if (!allowSpecialKeys && SPECIAL_KEYS_GATED.includes(code)) {
     return { ok: false, reason: i18n.t("hotkey:validation.special_keys_locked") };
   }
   const isFnKey = ALWAYS_ALLOWED_BARE_PREFIX.some(
@@ -208,8 +268,12 @@ export function isLegalBinding(
     if (binding.code !== "") {
       return { ok: false, reason: i18n.t("hotkey:validation.modifier_only_no_main") };
     }
-    if (binding.mods.length === 0) {
-      return { ok: false, reason: i18n.t("hotkey:validation.modifier_only_min") };
+    // B1: 单修饰键 modifierOnly 会吞该键的所有原生组合，必须 ≥ 2 个修饰键
+    if (binding.mods.length < 2) {
+      return {
+        ok: false,
+        reason: i18n.t("hotkey:validation.modifier_only_min_two"),
+      };
     }
     return { ok: true };
   }
@@ -220,16 +284,185 @@ export function isLegalBinding(
     if (binding.mods.length !== 1) {
       return { ok: false, reason: i18n.t("hotkey:validation.double_tap_single_mod") };
     }
+    // B4: macOS 双击 Fn = 系统听写默认快捷键，会被系统先吞
+    if (platform === "macos" && binding.mods[0] === "fn") {
+      return {
+        ok: false,
+        reason: i18n.t("hotkey:validation.double_tap_fn_macos"),
+      };
+    }
     return { ok: true };
+  }
+  // combo 路径
+  // B3: fn 在 combo 里被 Carbon RegisterEventHotKey 静默丢弃，等于"实际注册了
+  // 不带 fn 的快捷键"——视觉欺骗用户，必须拦
+  if (binding.mods.includes("fn")) {
+    return { ok: false, reason: i18n.t("hotkey:validation.combo_no_fn") };
   }
   return isLegalMainKey(binding.code, binding.mods, allowSpecialKeys);
 }
 
+// 把 binding 的 (mod, side) 集合化用作子集判断；fn 单独序列化（无 side）
+function modSideKey(mod: HotkeyMod, side: Side | null): string {
+  return side ? `${mod}:${side}` : mod;
+}
+
+function bindingModSet(b: HotkeyBinding): Set<string> {
+  const s = new Set<string>();
+  for (const m of b.mods) s.add(modSideKey(m, getModSide(b, m)));
+  return s;
+}
+
+function isStrictSubset(a: Set<string>, b: Set<string>): boolean {
+  if (a.size >= b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
+/**
+ * 跨 binding 冲突检测——比 `findConflict`（仅完全相等）更严格。
+ *
+ * 返回首个命中的冲突；调用方拿 i18n key 自行渲染。
+ *
+ * 检查项：
+ *   C1 完全相等：现有 `findConflict` 行为，触发 replace flow
+ *   C2 modifierOnly 互为真子集：递进激活会导致 A 释放 + B 触发的"幻影录音"
+ *   C3 modifierOnly ⊊ combo.mods：按 modifierOnly 已 active，再按主键又触发 combo
+ *   C4 doubleTap.mod 类型与 modifierOnly 任一 mod 类型相同：双击窗口与子集匹配冲突
+ */
+export type BindingConflict =
+  | { kind: "equal"; with: BindingId }
+  | { kind: "subset_modifier_only"; with: BindingId }
+  | { kind: "subset_combo"; with: BindingId }
+  | { kind: "double_tap_overlap_modifier"; with: BindingId };
+
+export function findBindingConflict(
+  bindings: Record<BindingId, HotkeyBinding | null>,
+  candidate: HotkeyBinding,
+  excludeId: BindingId,
+): BindingConflict | null {
+  const candSet = bindingModSet(candidate);
+  const candModTypes = new Set(candidate.mods);
+
+  for (const id of BINDING_IDS) {
+    if (id === excludeId) continue;
+    const other = bindings[id];
+    if (!other) continue;
+
+    if (bindingsEqual(other, candidate)) {
+      return { kind: "equal", with: id };
+    }
+
+    const otherSet = bindingModSet(other);
+
+    // C2: 两个都是 modifierOnly 且互为真子集
+    if (candidate.kind === "modifierOnly" && other.kind === "modifierOnly") {
+      if (isStrictSubset(candSet, otherSet) || isStrictSubset(otherSet, candSet)) {
+        return { kind: "subset_modifier_only", with: id };
+      }
+    }
+
+    // C3: modifierOnly ⊊ combo.mods（任意方向都拦）
+    if (candidate.kind === "modifierOnly" && other.kind === "combo") {
+      if (isStrictSubset(candSet, otherSet) || candSet.size === otherSet.size) {
+        // size 相等已在 C1 等值分支或 mods 对比上处理；这里只看真子集
+        if (isStrictSubset(candSet, otherSet)) {
+          return { kind: "subset_combo", with: id };
+        }
+      }
+    }
+    if (candidate.kind === "combo" && other.kind === "modifierOnly") {
+      if (isStrictSubset(otherSet, candSet)) {
+        return { kind: "subset_combo", with: id };
+      }
+    }
+
+    // C4: doubleTap 与 modifierOnly 共用同种 mod 类型（不看 side）
+    if (candidate.kind === "doubleTap" && other.kind === "modifierOnly") {
+      const dtMod = candidate.mods[0];
+      if (dtMod && other.mods.includes(dtMod)) {
+        return { kind: "double_tap_overlap_modifier", with: id };
+      }
+    }
+    if (candidate.kind === "modifierOnly" && other.kind === "doubleTap") {
+      const dtMod = other.mods[0];
+      if (dtMod && candModTypes.has(dtMod)) {
+        return { kind: "double_tap_overlap_modifier", with: id };
+      }
+    }
+  }
+  return null;
+}
+
+/** 软提示（不阻断录入）—— W1 系统占用、W2 F1-F12 单按。返回 i18n key 列表。 */
+export function getBindingWarnings(
+  binding: HotkeyBinding,
+  platform: Platform,
+): string[] {
+  const warnings: string[] = [];
+
+  // W2: F1-F12 单按容易与系统亮度/音量等冲突
+  if (
+    binding.kind === "combo" &&
+    binding.mods.length === 0 &&
+    /^F([1-9]|1[0-2])$/.test(binding.code)
+  ) {
+    warnings.push("hotkey:warning.f_key_bare");
+  }
+
+  // W1: 命中常见系统快捷键
+  if (binding.kind === "combo" && isSystemReservedCombo(binding, platform)) {
+    warnings.push("hotkey:warning.system_shortcut");
+  }
+
+  return warnings;
+}
+
+// 系统占用快捷键表——常见、影响大、用户最容易踩。不求全。
+function isSystemReservedCombo(b: HotkeyBinding, platform: Platform): boolean {
+  const mods = new Set(b.mods);
+  const has = (m: HotkeyMod) => mods.has(m);
+  const only = (...need: HotkeyMod[]): boolean =>
+    mods.size === need.length && need.every((m) => mods.has(m));
+
+  if (platform === "macos") {
+    // Cmd + (Q/W/H/M/Tab/Space)
+    if (only("meta") && ["KeyQ", "KeyW", "KeyH", "KeyM", "Tab", "Space"].includes(b.code)) {
+      return true;
+    }
+    // Cmd+Shift + (3/4/5)
+    if (only("meta", "shift") && ["Digit3", "Digit4", "Digit5"].includes(b.code)) {
+      return true;
+    }
+    // Ctrl+Cmd+Q (Lock)
+    if (only("ctrl", "meta") && b.code === "KeyQ") return true;
+    // Cmd+Option+Esc (Force Quit)
+    if (only("meta", "alt") && b.code === "Escape") return true;
+    return false;
+  }
+  if (platform === "windows") {
+    // Win + (L/D/E/R/Tab/H/I/S)
+    if (only("meta") && ["KeyL", "KeyD", "KeyE", "KeyR", "Tab", "KeyH", "KeyI", "KeyS"].includes(b.code)) {
+      return true;
+    }
+    // Alt+F4
+    if (only("alt") && b.code === "F4") return true;
+    // Alt+Tab
+    if (only("alt") && b.code === "Tab") return true;
+    // Ctrl+Alt+Del
+    if (only("ctrl", "alt") && b.code === "Delete") return true;
+    return false;
+  }
+  // Linux: 桌面环境差异大，不做硬编码
+  void has;
+  return false;
+}
+
 const MOD_LABEL_MAC: Record<HotkeyMod, string> = {
-  ctrl: "⌃ Ctrl",
-  alt: "⌥ Option",
-  shift: "⇧ Shift",
-  meta: "⌘ Cmd",
+  ctrl: "Ctrl",
+  alt: "Option",
+  shift: "Shift",
+  meta: "Cmd",
   fn: "fn",
 };
 
@@ -323,18 +556,10 @@ export function bindingsEqual(
   if (a.kind !== b.kind) return false;
   if (a.code !== b.code) return false;
   if (a.mods.length !== b.mods.length) return false;
-  return a.mods.every((m, i) => m === b.mods[i]);
+  if (!a.mods.every((m, i) => m === b.mods[i])) return false;
+  for (const m of a.mods) {
+    if (getModSide(a, m) !== getModSide(b, m)) return false;
+  }
+  return true;
 }
 
-export function findConflict(
-  bindings: Record<BindingId, HotkeyBinding | null>,
-  candidate: HotkeyBinding,
-  excludeId: BindingId,
-): BindingId | null {
-  for (const id of BINDING_IDS) {
-    if (id === excludeId) continue;
-    const b = bindings[id];
-    if (b && bindingsEqual(b, candidate)) return id;
-  }
-  return null;
-}

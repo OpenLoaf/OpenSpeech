@@ -1422,6 +1422,19 @@ pub fn audio_recording_export<R: Runtime>(
     Ok(())
 }
 
+/// 把相对的 history.audio_path 解析成磁盘绝对路径字符串。仅供 dev 模式
+/// "复制调试提示词" 使用——前端不下载文件，只是把路径粘到外部 AI 工具。
+/// 校验同 audio_recording_load，避免暴露任意路径。
+#[tauri::command]
+pub fn audio_recording_resolve<R: Runtime>(
+    app: AppHandle<R>,
+    audio_path: String,
+) -> Result<String, String> {
+    let sub = validated_recording_subpath(&audio_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
+    Ok(abs.to_string_lossy().into_owned())
+}
+
 /// 删除 history 中某条录音对应的 WAV/OGG 文件。
 /// `audio_path` 沿用相对路径约定。文件不存在视为成功（idempotent）；前端
 /// retention sweep / 清空历史 / 单条删除时调用，DB 行的删除由调用方自己执行。

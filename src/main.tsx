@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { startUpdateScheduler } from "@/lib/updateScheduler";
 import { attachConsole } from "@tauri-apps/plugin-log";
@@ -19,7 +19,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useStatsStore } from "@/stores/stats";
 import { useUIStore } from "@/stores/ui";
 import { syncAutostart } from "@/lib/autostart";
-import { resolveLang } from "@/i18n";
+import i18n, { resolveLang } from "@/i18n";
 import "./i18n";
 import {
   applyLang,
@@ -96,6 +96,20 @@ const bootPromise = (async () => {
     // settings 必须在 history 之前 ready：history.init 会读 historyRetention 决定
     // 启动期 sweep 删多少。其它 store 与之无依赖，并行即可。
     await useSettingsStore.getState().init();
+
+    // 语言同步必须独立 try：之前与下面 hotkeys/history/dictionary init 共用一个
+    // try-catch，sqlite 还没 ready 时 history/dictionary reload SELECT 抛错会把
+    // syncI18nFromSettings 也带下水，i18n 留在 navigator.language（系统英文 ⇒
+    // 用户哪怕在设置里选了简体中文，启动后界面仍是全英文）。
+    try {
+      await syncI18nFromSettings(useSettingsStore.getState().general.interfaceLang);
+    } catch (e) {
+      console.warn("[boot] syncI18nFromSettings failed:", e);
+    }
+    // 主窗也订阅一次：自己 emit 出去的事件本窗也会收到，applyLang 同语言会跳过，
+    // 不会回环；额外的好处是任何第三方窗口（promo / future）也能联动。
+    void listenLangChanged();
+
     await Promise.all([
       useHotkeysStore.getState().init(),
       useAuthStore.getState().init(),
@@ -105,15 +119,6 @@ const bootPromise = (async () => {
     // stats 必须在 history 之后：首次启用时回扫现存 history.items 作为基线。
     await useStatsStore.getState().init();
     console.log("[boot] stores ready; bindings =", useHotkeysStore.getState().bindings);
-
-    // 用户偏好语言一旦从 settings 读出来就同步给 i18n + 托盘菜单；之后 settings store
-    // 写 interfaceLang 时也要走同一条函数（见 settings.ts 的 setGeneral）。
-    // 必须 await：i18n init 时只能拿到 navigator.language，若 fire-and-forget，
-    // setBooted(true) 后主窗会先按系统语言渲染一帧再才切到用户偏好。
-    await syncI18nFromSettings(useSettingsStore.getState().general.interfaceLang);
-    // 主窗也订阅一次：自己 emit 出去的事件本窗也会收到，applyLang 同语言会跳过，
-    // 不会回环；额外的好处是任何第三方窗口（promo / future）也能联动。
-    void listenLangChanged();
 
     // 开机自启：以 settings.launchStartup 为期望值同步到 OS（macOS LaunchAgent /
     // Windows HKCU Run / Linux .desktop）。空操作的判断在 syncAutostart 内做，失败
@@ -138,6 +143,22 @@ const bootPromise = (async () => {
       if (key === "open_login") ui.openLogin();
       else if (key === "open_no_internet") ui.openNoInternet();
       else if (key === "open_settings_byo") ui.openSettings("GENERAL");
+      else if (key === "switch_to_saas") {
+        // BYOK 失败时用户点 toast 上"切到云端"——立即切到 SaaS 模式，再发一条
+        // 提示让用户重新录一次。不自动重转保存的录音：focus 大概率已经丢了，
+        // 重转结果只能进剪贴板，还要再弹一次 toast 提示粘贴，反而绕。让用户
+        // 在原输入框直接按快捷键再说一遍是最直白的路径，OpenLoaf 云端走完整套即可。
+        void useSettingsStore.getState().setDictationMode("saas").then(() => {
+          void emitTo("overlay", "openspeech://overlay-toast", {
+            kind: "info",
+            title: i18n.t("overlay:toast.byok_switch_to_saas.switched_title"),
+            description: i18n.t(
+              "overlay:toast.byok_switch_to_saas.switched_description",
+            ),
+            durationMs: 4000,
+          });
+        });
+      }
       else console.warn("[boot] unknown overlay-toast-action:", key);
     });
 

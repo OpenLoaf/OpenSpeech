@@ -98,6 +98,11 @@
       "title": "转写失败",
       "no_transcript": "未识别到内容，可在历史里点重试"
     },
+    "byok_switch_to_saas": {
+      "action": "切到云端",
+      "switched_title": "已切换到 OpenLoaf 云端",
+      "switched_description": "请按快捷键重新录音"
+    },
     "recording_save_failed": {
       "title": "录音保存失败"
     },

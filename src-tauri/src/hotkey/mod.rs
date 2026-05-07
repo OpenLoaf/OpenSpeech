@@ -9,7 +9,7 @@
 // - Esc 取消 / PTT 松开 keystate 轮询：走 rdev 全局监听，在录音模块实现
 // - 实际录音 / 注入：录音模块
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,23 @@ pub enum BindingId {
     OpenToolbox,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// 修饰键 + 左右组合。fn 没有左右概念，单独占一项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModSide {
+    Ctrl(Side),
+    Alt(Side),
+    Shift(Side),
+    Meta(Side),
+    Fn,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct HotkeyBinding {
     /// `"combo"` | `"modifierOnly"` | `"doubleTap"`。v1 老数据没有此字段，
@@ -42,10 +59,44 @@ pub struct HotkeyBinding {
     pub kind: String,
     pub mods: Vec<String>,
     pub code: String,
+    /// v3 新增：每个非 fn 修饰键的左右选择。fn 永远不在内。缺失项视为 "left"。
+    /// 反序列化时接受 camelCase（`modSides`）字段。前端缺省时 None，匹配走"全 left"兜底。
+    #[serde(rename = "modSides", default)]
+    pub mod_sides: Option<HashMap<String, String>>,
 }
 
 fn default_kind() -> String {
     "combo".to_string()
+}
+
+/// 把 binding 的 mods + modSides 解析为精确的 (mod, side) 集合。
+/// 每个 mod 的 side：先看 modSides，没填就视为 left；fn 走 ModSide::Fn 单独项。
+/// 未识别的 mod 字符串会被静默忽略（log warn 由调用方做）。
+pub fn binding_to_mod_sides(b: &HotkeyBinding) -> std::collections::HashSet<ModSide> {
+    let sides = b.mod_sides.as_ref();
+    let mut out = std::collections::HashSet::new();
+    for m in &b.mods {
+        let side = sides
+            .and_then(|h| h.get(m.as_str()))
+            .map(|s| s.as_str())
+            .unwrap_or("left");
+        let side_enum = match side {
+            "right" => Side::Right,
+            _ => Side::Left,
+        };
+        let item = match m.as_str() {
+            "ctrl" => Some(ModSide::Ctrl(side_enum)),
+            "alt" => Some(ModSide::Alt(side_enum)),
+            "shift" => Some(ModSide::Shift(side_enum)),
+            "meta" => Some(ModSide::Meta(side_enum)),
+            "fn" => Some(ModSide::Fn),
+            _ => None,
+        };
+        if let Some(it) = item {
+            out.insert(it);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,9 +110,18 @@ pub struct HotkeyEventPayload {
     pub phase: &'static str, // "pressed" | "released"
 }
 
-// 当前已注册的 shortcut → BindingId 的映射
+/// active 表里每条 combo 同时携带"用户实际期望的 (mod, side) 集合"，handler
+/// 触发时用 modifier_only::current_pressed() 二次校验，命中错误左右就丢弃事件。
+/// expected 不含 fn（B3 已拦 fn 进 combo）。
+#[derive(Debug, Clone)]
+struct ActiveCombo {
+    id: BindingId,
+    id_str: String,
+    expected: HashSet<ModSide>,
+}
+
 pub struct HotkeyState {
-    active: HashMap<Shortcut, BindingId>,
+    active: HashMap<Shortcut, ActiveCombo>,
 }
 
 impl Default for HotkeyState {
@@ -109,6 +169,16 @@ fn parse_code(code: &str) -> Option<Code> {
 }
 
 fn build_shortcut(binding: &HotkeyBinding) -> Option<Shortcut> {
+    // B3: combo 路径不支持 fn——Carbon RegisterEventHotKey / Win RegisterHotKey 都
+    // 不接受 Fn 修饰位。前端 isLegalBinding 已拦，这里再拒一次防御。
+    if binding.mods.iter().any(|m| m == "fn") {
+        log::warn!(
+            "[hotkey]   refuse combo with fn modifier: mods={:?} code={}",
+            binding.mods,
+            binding.code
+        );
+        return None;
+    }
     let mods = parse_mods(&binding.mods);
     let code = parse_code(&binding.code)?;
     Some(Shortcut::new(Some(mods), code))
@@ -155,7 +225,7 @@ pub fn apply_bindings<R: Runtime>(
     }
 
     // 1. 先计算 combo 目标集合，便于幂等判断。
-    let mut desired: HashMap<Shortcut, (String, BindingId)> = HashMap::new();
+    let mut desired: HashMap<Shortcut, ActiveCombo> = HashMap::new();
     for (id_str, maybe) in &payload.bindings {
         let Some(id) = parse_binding_id(id_str) else {
             log::warn!("[hotkey]   skip unknown id: {id_str}");
@@ -186,14 +256,24 @@ pub fn apply_bindings<R: Runtime>(
             log::warn!("[hotkey]   duplicate shortcut skipped for {id_str}: {sc:?}");
             continue;
         }
-        desired.insert(sc, (id_str.clone(), id));
+        let expected = binding_to_mod_sides(binding);
+        desired.insert(
+            sc,
+            ActiveCombo {
+                id,
+                id_str: id_str.clone(),
+                expected,
+            },
+        );
     }
 
     // 幂等：如果目标与当前激活完全一致，跳过所有 OS 调用。
     let same = desired.len() == s.active.len()
-        && desired
-            .iter()
-            .all(|(sc, (_, id))| s.active.get(sc).is_some_and(|aid| aid == id));
+        && desired.iter().all(|(sc, want)| {
+            s.active
+                .get(sc)
+                .is_some_and(|cur| cur.id == want.id && cur.expected == want.expected)
+        });
     if same {
         log::warn!(
             "[hotkey] apply_bindings: no-op, already at target ({} active)",
@@ -210,12 +290,13 @@ pub fn apply_bindings<R: Runtime>(
     s.active.clear();
 
     // 3. register 新的
-    let mut next: HashMap<Shortcut, BindingId> = HashMap::new();
-    for (sc, (id_str, id)) in desired {
+    let mut next: HashMap<Shortcut, ActiveCombo> = HashMap::new();
+    for (sc, combo) in desired {
         let result = plugin.register(sc).or_else(|first_err| {
             // OS 层可能残留（上次 crash / HMR 残留）；先 unregister 再重试一次。
             log::warn!(
-                "[hotkey]   first register failed for {id_str}: {first_err:?}; retry after unregister"
+                "[hotkey]   first register failed for {}: {first_err:?}; retry after unregister",
+                combo.id_str
             );
             let _ = plugin.unregister(sc);
             plugin.register(sc)
@@ -223,14 +304,21 @@ pub fn apply_bindings<R: Runtime>(
 
         match result {
             Ok(()) => {
-                log::warn!("[hotkey]   registered {id_str} -> {sc:?}");
-                next.insert(sc, id);
+                log::warn!(
+                    "[hotkey]   registered {} -> {sc:?} expected={:?}",
+                    combo.id_str,
+                    combo.expected
+                );
+                next.insert(sc, combo);
             }
             Err(e) => {
-                log::warn!("[hotkey]   REGISTER FAILED for {id_str} -> {sc:?}: {e:?}");
+                log::warn!(
+                    "[hotkey]   REGISTER FAILED for {} -> {sc:?}: {e:?}",
+                    combo.id_str
+                );
                 let _ = app.emit(
                     "openspeech://hotkey/register-failed",
-                    serde_json::json!({ "id": id_str, "error": format!("{e:?}") }),
+                    serde_json::json!({ "id": combo.id_str, "error": format!("{e:?}") }),
                 );
             }
         }
@@ -253,15 +341,32 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
         log::warn!("[hotkey] handler: SharedHotkeyState missing");
         return;
     };
-    let Ok(s) = state.lock() else {
-        log::warn!("[hotkey] handler: lock poisoned");
-        return;
+    let (id, expected) = {
+        let Ok(s) = state.lock() else {
+            log::warn!("[hotkey] handler: lock poisoned");
+            return;
+        };
+        let Some(combo) = s.active.get(shortcut) else {
+            log::warn!("[hotkey] handler: unrecognized shortcut {shortcut:?}");
+            return;
+        };
+        (combo.id, combo.expected.clone())
     };
-    let Some(&id) = s.active.get(shortcut) else {
-        log::warn!("[hotkey] handler: unrecognized shortcut {shortcut:?}");
-        return;
-    };
-    drop(s);
+
+    // D2 二次校验：OS Carbon / Win API 触发时不区分左右，rdev 维护着真实物理按键
+    // 状态。expected 必须是当前真实按下集合的子集（用户允许多按其它键，但绑定要求
+    // 的左右必须全在）。校验失败时静默丢弃事件，不 emit / 不 overlay / 不 cue，
+    // 跟用户感知一致。
+    if let Some(mo_state) = app.try_state::<SharedModifierOnlyState>() {
+        let actual = modifier_only::current_pressed(&mo_state);
+        if !expected.is_subset(&actual) {
+            log::debug!(
+                "[hotkey] handler: side mismatch on {shortcut:?} id={id:?} \
+                 expected={expected:?} actual={actual:?} — drop"
+            );
+            return;
+        }
+    }
 
     let phase = match event.state() {
         ShortcutState::Pressed => "pressed",

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, AlertCircle, RotateCcw, Command, Diamond } from "lucide-react";
+import { X, AlertCircle, RotateCcw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -9,17 +9,25 @@ import {
   BINDING_IDS,
   BINDING_LABELS,
   codeToMod,
-  findConflict,
+  codeToSide,
+  findBindingConflict,
   formatCode,
   formatMod,
+  getBindingWarnings,
+  getModSide,
+  isLegalBinding,
   isLegalMainKey,
   isModifierCode,
   normalizeMods,
+  type BindingConflict,
   type BindingId,
   type HotkeyBinding,
   type HotkeyMod,
+  type ModSides,
+  type Side,
 } from "@/lib/hotkey";
 import { detectPlatform, type Platform } from "@/lib/platform";
+import { MAIN_ICON, modIcon as sharedModIcon } from "@/lib/hotkeyVisual";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useUIStore } from "@/stores/ui";
@@ -33,13 +41,22 @@ interface RecordingPayload {
   phase: "pressed" | "released";
 }
 
-// recording 子态只存 everPressedMods——视觉上只增不减；当前按住的集合 + 主键标志
-// 保留在 ref 里，避免松开过程中触发无谓 setState / re-render。
+// recording 子态只存 everPressedMods + 与之同序的 everPressedSides——视觉上只增不减；
+// 当前按住的集合 + 主键标志保留在 ref 里，避免松开过程中触发无谓 setState / re-render。
 type RowState =
   | { kind: "idle" }
-  | { kind: "recording"; everPressedMods: HotkeyMod[] }
+  | {
+      kind: "recording";
+      everPressedMods: HotkeyMod[];
+      everPressedSides: ModSides;
+    }
   | { kind: "error"; message: string }
-  | { kind: "conflict"; with: BindingId; candidate: HotkeyBinding };
+  | {
+      kind: "conflict";
+      with: BindingId;
+      candidate: HotkeyBinding;
+      reason: BindingConflict["kind"];
+    };
 
 type BinderSize = "comfortable" | "compact";
 
@@ -118,12 +135,47 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
 
   const pressedModsRef = useRef<HotkeyMod[]>([]);
   const everPressedModsRef = useRef<HotkeyMod[]>([]);
+  // 与 everPressedMods 同步：每个非 fn mod 第一次按下时记录其物理键 side。
+  // fn 不进此 map（无左右概念）。后续 isLegalBinding / findBindingConflict 都基于此。
+  const everPressedSidesRef = useRef<ModSides>({});
   const sawMainKeyRef = useRef<boolean>(false);
   const recordingActiveRef = useRef<boolean>(false);
   // DOM keydown/keyup 与 rdev message 是双路上报，同一次按键会被处理两次。
   // 该闸门在第一次完成（commit / 进入 conflict / 退出录入）后立即翻 true，
   // 后续重复事件直接 return，避免触发第二次 setState / setBinding。
   const finishedRef = useRef<boolean>(false);
+
+  // DOM listener 必须在 enterRecording 调用瞬间就挂上——之前放在 useEffect
+  // [state.kind] 里有 React commit/调度的微小延迟窗口，用户在窗口内按 ESC 会
+  // 漏到 base-ui useDismiss 的 document bubble listener，把整个 Dialog 关掉。
+  // 同步注册彻底消除这个窗口。
+  const domListenersRef = useRef<{
+    down?: (e: KeyboardEvent) => void;
+    up?: (e: KeyboardEvent) => void;
+  }>({});
+
+  const detachDomListeners = () => {
+    const { down, up } = domListenersRef.current;
+    if (down) document.removeEventListener("keydown", down, { capture: true });
+    if (up) document.removeEventListener("keyup", up, { capture: true });
+    domListenersRef.current = {};
+  };
+
+  const attachDomListeners = () => {
+    detachDomListeners();
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      handlePressRef.current(e.code);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      handleReleaseRef.current(e.code);
+    };
+    document.addEventListener("keydown", onKeyDown, { capture: true });
+    document.addEventListener("keyup", onKeyUp, { capture: true });
+    domListenersRef.current = { down: onKeyDown, up: onKeyUp };
+  };
 
   const startRustRecording = () => {
     if (recordingActiveRef.current) return;
@@ -145,22 +197,28 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
     if (state.kind === "recording") return;
     pressedModsRef.current = [];
     everPressedModsRef.current = [];
+    everPressedSidesRef.current = {};
     sawMainKeyRef.current = false;
     finishedRef.current = false;
     if (errorTimeoutRef.current) {
       window.clearTimeout(errorTimeoutRef.current);
       errorTimeoutRef.current = null;
     }
+    // 必须在 setState 之前同步挂上 listener——否则 Dialog 内 base-ui useDismiss
+    // 会先收到 ESC 把 Dialog 整个关掉
+    attachDomListeners();
     startRustRecording();
-    setState({ kind: "recording", everPressedMods: [] });
+    setState({ kind: "recording", everPressedMods: [], everPressedSides: {} });
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
+      detachDomListeners();
       stopRustRecording();
       setState({ kind: "idle" });
     }, RECORDING_TIMEOUT_MS);
   };
 
   const exitToIdle = () => {
+    detachDomListeners();
     stopRustRecording();
     if (timeoutRef.current) {
       window.clearTimeout(timeoutRef.current);
@@ -169,9 +227,10 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
     setState({ kind: "idle" });
   };
 
-  // 卸载兜底：rdev 录入模式必须关，否则会持续吞 keys
+  // 卸载兜底：rdev 录入模式必须关，否则会持续吞 keys；DOM listener 也要清掉
   useEffect(() => {
     return () => {
+      detachDomListeners();
       stopRustRecording();
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (errorTimeoutRef.current) window.clearTimeout(errorTimeoutRef.current);
@@ -180,6 +239,7 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
   }, []);
 
   const flashError = (message: string) => {
+    detachDomListeners();
     stopRustRecording();
     if (timeoutRef.current) {
       window.clearTimeout(timeoutRef.current);
@@ -232,6 +292,7 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
     if (isModifierCode(code)) {
       const mod = codeToMod(code);
       if (!mod) return;
+      const side = codeToSide(code);
       const alreadyPressed = pressedModsRef.current.includes(mod);
       const alreadyEver = everPressedModsRef.current.includes(mod);
       if (alreadyPressed && alreadyEver) return;
@@ -246,10 +307,23 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
           ...everPressedModsRef.current,
           mod,
         ]);
+        if (mod !== "fn" && side) {
+          everPressedSidesRef.current = {
+            ...everPressedSidesRef.current,
+            [mod]: side,
+          };
+        }
         // 仅在 ever 集合变了时才 setState；release 路径完全不 setState。
-        const next = everPressedModsRef.current;
+        const nextMods = everPressedModsRef.current;
+        const nextSides = everPressedSidesRef.current;
         setState((s) =>
-          s.kind === "recording" ? { kind: "recording", everPressedMods: next } : s,
+          s.kind === "recording"
+            ? {
+                kind: "recording",
+                everPressedMods: nextMods,
+                everPressedSides: nextSides,
+              }
+            : s,
         );
       }
       return;
@@ -262,7 +336,12 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
       flashError(legal.reason ?? t("dialogs:hotkey_field.error_illegal_combo"));
       return;
     }
-    const candidate: HotkeyBinding = { kind: "combo", mods, code };
+    const candidate: HotkeyBinding = {
+      kind: "combo",
+      mods,
+      code,
+      modSides: pickSides(everPressedSidesRef.current, mods),
+    };
     finishCandidate(candidate);
   };
 
@@ -282,6 +361,10 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
         kind: "modifierOnly",
         mods: everPressedModsRef.current,
         code: "",
+        modSides: pickSides(
+          everPressedSidesRef.current,
+          everPressedModsRef.current,
+        ),
       };
       finishCandidate(candidate);
     }
@@ -290,46 +373,39 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
   const finishCandidate = (candidate: HotkeyBinding) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    const conflictId = findConflict(
+    // 形态校验（B1-B4）：先于跨 binding 冲突检查，错误信息更具体
+    const legal = isLegalBinding(candidate, platform, allowSpecialKeys);
+    if (!legal.ok) {
+      finishedRef.current = false;
+      flashError(legal.reason ?? t("dialogs:hotkey_field.error_illegal_combo"));
+      return;
+    }
+    const conflict = findBindingConflict(
       useHotkeysStore.getState().bindings,
       candidate,
       id,
     );
-    if (conflictId) {
+    if (conflict) {
+      detachDomListeners();
       stopRustRecording();
       if (timeoutRef.current) {
         window.clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
       }
-      setState({ kind: "conflict", with: conflictId, candidate });
+      setState({
+        kind: "conflict",
+        with: conflict.with,
+        candidate,
+        reason: conflict.kind,
+      });
       return;
     }
     void commit(candidate);
     exitToIdle();
   };
 
-  // DOM keyboard 监听（macOS Fn 键无 DOM 事件，由下方 rdev 通道补齐）。
-  // 监听点选 document capture，比 base-ui Dialog 在 document bubble 注册的
-  // useDismiss(escapeKey) 更早；同时调 stopImmediatePropagation，避免 Escape
-  // 冒到 base-ui 把 Dialog 关掉——录入态只想退到 idle，不想关 Dialog。
-  useEffect(() => {
-    if (state.kind !== "recording") return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      handlePressRef.current(e.code);
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      handleReleaseRef.current(e.code);
-    };
-    document.addEventListener("keydown", onKeyDown, { capture: true });
-    document.addEventListener("keyup", onKeyUp, { capture: true });
-    return () => {
-      document.removeEventListener("keydown", onKeyDown, { capture: true });
-      document.removeEventListener("keyup", onKeyUp, { capture: true });
-    };
-  }, [state.kind]);
+  // DOM keydown/keyup 监听由 enterRecording 同步注册（详见 attachDomListeners
+  // 注释——避免 useEffect 调度延迟漏 ESC 给 base-ui useDismiss 关 Dialog）。
 
   // rdev 通道：macOS Fn 键唯一可达路径
   useEffect(() => {
@@ -394,6 +470,10 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
   const showClear =
     canClear && !!value && state.kind !== "recording";
 
+  // W1/W2 软提示：仅在 idle 态展示，避免覆盖 conflict / error / recording 自身的状态文案
+  const warnings =
+    state.kind === "idle" && value ? getBindingWarnings(value, platform) : [];
+
   return (
     <div className={cn("flex flex-col gap-1.5", sz.row)} ref={rootRef}>
       <div className="flex items-center justify-between gap-4">
@@ -435,7 +515,13 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
                   </span>
                 ) : (
                   <ChipRow
-                    items={state.everPressedMods.map((m) => modChip(m, platform))}
+                    items={state.everPressedMods.map((m) =>
+                      modChip(
+                        m,
+                        platform,
+                        m === "fn" ? null : state.everPressedSides[m] ?? null,
+                      ),
+                    )}
                     tone="active"
                     size={size}
                   />
@@ -552,7 +638,7 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
             className="flex flex-col items-end gap-1.5 font-mono text-[11px]"
           >
             <span className="text-te-light-gray">
-              {t("dialogs:hotkey_field.conflict_with", {
+              {t(`dialogs:hotkey_field.conflict_reason.${state.reason}`, {
                 name: BINDING_LABELS[state.with],
               })}
             </span>
@@ -570,9 +656,37 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
             </div>
           </motion.div>
         ) : null}
+        {warnings.length > 0 ? (
+          <motion.div
+            key="warning-bar"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="flex flex-col items-end gap-0.5 font-mono text-[11px] text-te-accent/70"
+          >
+            {warnings.map((key) => (
+              <span key={key} className="flex items-center gap-1.5">
+                <AlertCircle className="size-3" />
+                {t(key)}
+              </span>
+            ))}
+          </motion.div>
+        ) : null}
       </AnimatePresence>
     </div>
   );
+}
+
+// 把 modSides 里属于本次 mods 集合的 entry 摘出来，丢掉 fn / 多余 mod。
+// Used in finishCandidate 拼 candidate.modSides。
+function pickSides(all: ModSides, mods: HotkeyMod[]): ModSides {
+  const out: ModSides = {};
+  for (const m of mods) {
+    if (m === "fn") continue;
+    const v = all[m as Exclude<HotkeyMod, "fn">];
+    if (v) out[m as Exclude<HotkeyMod, "fn">] = v;
+  }
+  return out;
 }
 
 // idle / active 两态共用 chip 视觉：仅边框 + 背景色不同，宽高 / 字号 / 留白完全
@@ -580,11 +694,13 @@ function BinderRow({ id, size }: { id: BindingId; size: BinderSize }) {
 function ModChip({
   label,
   icon,
+  side,
   tone,
   size,
 }: {
   label: string;
   icon?: ReactNode;
+  side?: Side;
   tone: "idle" | "active";
   size: BinderSize;
 }) {
@@ -603,6 +719,11 @@ function ModChip({
           {icon}
         </span>
       ) : null}
+      {side ? (
+        <span aria-hidden className="mr-1 text-[0.7em] font-bold opacity-70">
+          {side === "left" ? "L" : "R"}
+        </span>
+      ) : null}
       {label}
     </span>
   );
@@ -611,6 +732,7 @@ function ModChip({
 interface ChipItem {
   label: string;
   icon?: ReactNode;
+  side?: Side;
 }
 
 function ChipRow({
@@ -640,6 +762,7 @@ function ChipRow({
           <ModChip
             label={item.label}
             icon={item.icon}
+            side={item.side}
             tone={tone}
             size={size}
           />
@@ -649,69 +772,37 @@ function ChipRow({
   );
 }
 
-// Win 键 SVG（与 HotkeyPreview 保持视觉一致）
-function WinIcon() {
-  return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path d="M1 3.5l5.5-.75v5.5H1V3.5z" />
-      <path d="M7.5 2.5L15 1v7H7.5V2.5z" />
-      <path d="M1 9h5.5v5.5L1 13.5V9z" />
-      <path d="M7.5 9H15v7l-7.5-1.5V9z" />
-    </svg>
-  );
-}
-
-// macOS: 沿用 ⌃ ⌥ ⇧ ⌘ 系统符号，Mac 用户都认。
-// Windows / Linux: 只给 meta 键（Win / Super）加 logo，Ctrl / Alt / Shift 保持纯文字——
-// Windows 用户不认识 ⌃ ⌥，硬塞反而显得不专业。
+// chip 风格用 11px 图标
 function modIcon(mod: HotkeyMod, platform: Platform): ReactNode {
-  if (mod === "fn") return null;
-  if (platform === "macos") {
-    if (mod === "ctrl") return "⌃";
-    if (mod === "shift") return "⇧";
-    if (mod === "alt") return "⌥";
-    if (mod === "meta") return <Command size={11} strokeWidth={2.5} />;
-    return null;
-  }
-  if (mod === "meta") {
-    return platform === "windows" ? (
-      <WinIcon />
-    ) : (
-      <Diamond size={10} strokeWidth={2.5} />
-    );
-  }
-  return null;
+  return sharedModIcon(mod, platform, 11);
 }
 
-const MAIN_ICON: Record<string, ReactNode> = {
-  Enter: "↵",
-  Escape: "⎋",
-  Tab: "⇥",
-  Backspace: "⌫",
-  Delete: "⌦",
-  Space: "␣",
-  ArrowUp: "↑",
-  ArrowDown: "↓",
-  ArrowLeft: "←",
-  ArrowRight: "→",
-};
-
-function modChip(mod: HotkeyMod, platform: Platform): ChipItem {
-  return { label: formatMod(mod, platform), icon: modIcon(mod, platform) };
+function modChip(
+  mod: HotkeyMod,
+  platform: Platform,
+  side?: Side | null,
+): ChipItem {
+  return {
+    label: formatMod(mod, platform),
+    icon: modIcon(mod, platform),
+    side: side ?? undefined,
+  };
 }
 
 function bindingToChips(binding: HotkeyBinding, platform: Platform): ChipItem[] {
   if (binding.kind === "doubleTap" && binding.mods.length > 0) {
     const m = binding.mods[0]!;
-    return [{ label: `2× ${formatMod(m, platform)}`, icon: modIcon(m, platform) }];
+    return [
+      {
+        label: `2× ${formatMod(m, platform)}`,
+        icon: modIcon(m, platform),
+        side: getModSide(binding, m) ?? undefined,
+      },
+    ];
   }
-  const out: ChipItem[] = binding.mods.map((m) => modChip(m, platform));
+  const out: ChipItem[] = binding.mods.map((m) =>
+    modChip(m, platform, getModSide(binding, m)),
+  );
   if (binding.kind === "combo" && binding.code) {
     out.push({ label: formatCode(binding.code), icon: MAIN_ICON[binding.code] });
   }

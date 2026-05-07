@@ -87,6 +87,12 @@
     "error_prefix": "ERROR",
     "error_illegal_combo": "非法組合",
     "conflict_with": "已被「{{name}}」使用",
+    "conflict_reason": {
+      "equal": "已被「{{name}}」使用",
+      "subset_modifier_only": "與「{{name}}」修飾鍵集合互為子集，會出現幻影錄音",
+      "subset_combo": "與「{{name}}」修飾鍵集合互為子集，按下時會雙觸發",
+      "double_tap_overlap_modifier": "與「{{name}}」共用同一顆修飾鍵，雙擊窗口會衝突"
+    },
     "replace": "取代",
     "rebind": "重新錄入",
     "cancel": "取消",

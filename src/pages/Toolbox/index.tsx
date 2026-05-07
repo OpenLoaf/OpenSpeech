@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   Clipboard,
@@ -271,19 +272,34 @@ function InputCard({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col bg-te-bg">
-      <div className="flex h-9 shrink-0 items-center justify-between border-b border-te-gray/30 px-2">
-        <button
-          type="button"
-          onClick={handlePaste}
-          className={cn(ICON_BTN, pasted && "text-te-accent")}
-        >
-          {pasted ? (
-            <ClipboardCheck className="size-3.5" />
-          ) : (
-            <Clipboard className="size-3.5" />
-          )}
-          <span>{t("pages:toolbox.input.paste")}</span>
-        </button>
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-te-gray/30 bg-te-bg/40 px-3">
+        <div className="relative" ref={historyRef}>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((v) => !v)}
+            className={ICON_BTN}
+          >
+            <HistoryIcon className="size-3.5" />
+            <span>{t("pages:toolbox.input.history")}</span>
+            <ChevronDown className="size-2.5 opacity-70" />
+          </button>
+          <AnimatePresence>
+            {historyOpen ? (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.12 }}
+              >
+                <HistoryPopover
+                  onPick={(value) => onTextFill(value, { autoRun: true })}
+                  onClose={() => setHistoryOpen(false)}
+                  align="left"
+                />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </div>
         <div className="flex items-center gap-0.5">
           <button
             type="button"
@@ -294,33 +310,18 @@ function InputCard({
             <Trash2 className="size-3.5" />
             <span>{t("pages:toolbox.input.clear")}</span>
           </button>
-          <div className="relative" ref={historyRef}>
-            <button
-              type="button"
-              onClick={() => setHistoryOpen((v) => !v)}
-              className={ICON_BTN}
-            >
-              <HistoryIcon className="size-3.5" />
-              <span>{t("pages:toolbox.input.history")}</span>
-              <ChevronDown className="size-2.5 opacity-70" />
-            </button>
-            <AnimatePresence>
-              {historyOpen ? (
-                <motion.div
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.12 }}
-                >
-                  <HistoryPopover
-                    onPick={(value) => onTextFill(value, { autoRun: true })}
-                    onClose={() => setHistoryOpen(false)}
-                    align="right"
-                  />
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
-          </div>
+          <button
+            type="button"
+            onClick={handlePaste}
+            className={cn(ICON_BTN, pasted && "text-te-accent")}
+          >
+            {pasted ? (
+              <ClipboardCheck className="size-3.5" />
+            ) : (
+              <Clipboard className="size-3.5" />
+            )}
+            <span>{t("pages:toolbox.input.paste")}</span>
+          </button>
         </div>
       </div>
 
@@ -413,7 +414,7 @@ function ToolTabs({ tool, onChange }: ToolTabsProps) {
     { key: "tts", icon: Volume2 },
   ];
   return (
-    <div className="flex h-9 shrink-0 items-stretch border-b border-te-gray/30">
+    <div className="flex shrink-0 items-stretch self-end">
       {items.map(({ key, icon: Icon }) => {
         const active = tool === key;
         return (
@@ -422,7 +423,7 @@ function ToolTabs({ tool, onChange }: ToolTabsProps) {
             type="button"
             onClick={() => onChange(key)}
             className={cn(
-              "relative flex flex-1 items-center justify-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.22em] transition-colors",
+              "relative flex h-9 items-center justify-center gap-1.5 px-4 font-mono text-[11px] uppercase tracking-[0.22em] transition-colors",
               active
                 ? "text-te-accent"
                 : "text-te-light-gray hover:bg-te-surface-hover hover:text-te-fg",
@@ -443,7 +444,6 @@ function ToolTabs({ tool, onChange }: ToolTabsProps) {
 type OutputCardProps = {
   status: ToolStatus;
   activeTool: ToolKey;
-  onToolChange: (tool: ToolKey) => void;
   hasText: boolean;
   targetLang: TranslateTargetLang;
   setTargetLang: (l: TranslateTargetLang) => void;
@@ -462,7 +462,6 @@ type OutputCardProps = {
 function OutputCard({
   status,
   activeTool,
-  onToolChange,
   hasText,
   targetLang,
   setTargetLang,
@@ -557,8 +556,6 @@ function OutputCard({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col bg-te-surface">
-      <ToolTabs tool={activeTool} onChange={onToolChange} />
-
       <div className="flex h-8 shrink-0 items-center justify-between border-b border-te-gray/30 bg-te-bg/40 px-3">
         <div className="flex items-center gap-2">{paramRow}</div>
         <div className="flex items-center gap-0.5">
@@ -583,15 +580,6 @@ function OutputCard({
           >
             <RotateCcw className="size-3.5" />
             <span>{t("pages:toolbox.tools.rerun")}</span>
-          </button>
-          <button
-            type="button"
-            onClick={onUseAsInput}
-            disabled={status.kind !== "done" || !outputText}
-            className={ICON_BTN}
-          >
-            <CornerUpLeft className="size-3.5 rotate-180" />
-            <span>{t("pages:toolbox.tools.use_as_input")}</span>
           </button>
         </div>
       </div>
@@ -645,6 +633,20 @@ function OutputCard({
             ) : null}
           </p>
         )}
+
+        {activeTool === "polish" &&
+        status.kind === "done" &&
+        outputText ? (
+          <button
+            type="button"
+            onClick={onUseAsInput}
+            aria-label={t("pages:toolbox.tools.use_as_input")}
+            title={t("pages:toolbox.tools.use_as_input")}
+            className="absolute left-0 bottom-12 z-10 inline-flex size-9 -translate-x-1/2 items-center justify-center border border-te-gray/50 bg-te-bg text-te-light-gray shadow-md transition-colors hover:border-te-accent hover:bg-te-accent hover:text-te-bg"
+          >
+            <ArrowLeft className="size-4" />
+          </button>
+        ) : null}
 
         {runMeta && status.kind === "done" ? (
           <div className="flex h-7 shrink-0 items-center justify-between border-t border-te-gray/30 px-3 font-mono text-[10px] uppercase tracking-[0.18em] text-te-light-gray tabular-nums">
@@ -736,7 +738,13 @@ export default function ToolboxPage() {
     promptLang,
   };
 
-  const runChat = async (systemPrompt: string, userText: string) => {
+  const runIdRef = useRef(0);
+
+  const runChat = async (
+    systemPrompt: string,
+    userText: string,
+    runId: number,
+  ) => {
     const aiSettings = useSettingsStore.getState().aiRefine;
     const provider =
       aiSettings.mode === "custom"
@@ -758,6 +766,7 @@ export default function ToolboxPage() {
         customKeyringId: provider ? `ai_provider_${provider.id}` : undefined,
       },
       (chunk) => {
+        if (runIdRef.current !== runId) return;
         acc += chunk;
         setStatus({ kind: "running", partial: acc });
       },
@@ -765,64 +774,71 @@ export default function ToolboxPage() {
     return r.refinedText || acc;
   };
 
-  const runTool = useCallback(async (tool: ToolKey) => {
-    const snap = stateRef.current;
-    const value = snap.text;
-    if (!value.trim()) {
-      setStatus({ kind: "idle" });
+  const runTool = useCallback(
+    async (tool: ToolKey, textOverride?: string) => {
+      const myRunId = ++runIdRef.current;
+      const snap = stateRef.current;
+      const value = textOverride ?? snap.text;
+      if (!value.trim()) {
+        setStatus({ kind: "idle" });
+        setRunMeta(null);
+        return;
+      }
+      setActiveTool(tool);
+      setStatus({ kind: "running", partial: "" });
       setRunMeta(null);
-      return;
-    }
-    setActiveTool(tool);
-    setStatus({ kind: "running", partial: "" });
-    setRunMeta(null);
-    const start = performance.now();
-    try {
-      if (tool === "tts") {
-        await new Promise((r) => setTimeout(r, 500));
-        setStatus({ kind: "done", result: "" });
+      const start = performance.now();
+      try {
+        if (tool === "tts") {
+          await new Promise((r) => setTimeout(r, 500));
+          if (runIdRef.current !== myRunId) return;
+          setStatus({ kind: "done", result: "" });
+          setRunMeta({
+            tool,
+            durationMs: performance.now() - start,
+            chars: value.length,
+          });
+          return;
+        }
+        let sysPrompt: string;
+        if (tool === "translate") {
+          const base = getEffectiveAiTranslationSystemPrompt(
+            snap.aiRefine.customTranslationSystemPrompt,
+            snap.promptLang,
+          );
+          sysPrompt = `${base}\n\nTarget language: ${TRANSLATE_LANG_NAMES[snap.targetLang]}`;
+        } else {
+          const base = getEffectiveAiPolishSystemPrompt(
+            snap.aiRefine.customPolishSystemPrompt,
+            snap.promptLang,
+          );
+          const scenario = snap.polishScenarios.find(
+            (s) => s.id === snap.polishScenarioId,
+          );
+          sysPrompt = scenario ? `${base}\n\n${scenario.instruction}` : base;
+        }
+        const result = await runChat(sysPrompt, value, myRunId);
+        if (runIdRef.current !== myRunId) return;
+        setStatus({ kind: "done", result });
         setRunMeta({
           tool,
           durationMs: performance.now() - start,
-          chars: value.length,
+          chars: result.length,
         });
-        return;
+      } catch (e) {
+        if (runIdRef.current !== myRunId) return;
+        await handleAiRefineCustomFailure(e);
+        const msg = e instanceof Error ? e.message : String(e);
+        setStatus({ kind: "error", message: msg });
       }
-      let sysPrompt: string;
-      if (tool === "translate") {
-        const base = getEffectiveAiTranslationSystemPrompt(
-          snap.aiRefine.customTranslationSystemPrompt,
-          snap.promptLang,
-        );
-        sysPrompt = `${base}\n\nTarget language: ${TRANSLATE_LANG_NAMES[snap.targetLang]}`;
-      } else {
-        const base = getEffectiveAiPolishSystemPrompt(
-          snap.aiRefine.customPolishSystemPrompt,
-          snap.promptLang,
-        );
-        const scenario = snap.polishScenarios.find(
-          (s) => s.id === snap.polishScenarioId,
-        );
-        sysPrompt = scenario ? `${base}\n\n${scenario.instruction}` : base;
-      }
-      const result = await runChat(sysPrompt, value);
-      setStatus({ kind: "done", result });
-      setRunMeta({
-        tool,
-        durationMs: performance.now() - start,
-        chars: result.length,
-      });
-    } catch (e) {
-      await handleAiRefineCustomFailure(e);
-      const msg = e instanceof Error ? e.message : String(e);
-      setStatus({ kind: "error", message: msg });
-    }
-  }, []);
+    },
+    [],
+  );
 
   const runImmediate = useCallback(
-    (tool?: ToolKey) => {
+    (tool?: ToolKey, textOverride?: string) => {
       cancelDebounce();
-      void runTool(tool ?? stateRef.current.activeTool);
+      void runTool(tool ?? stateRef.current.activeTool, textOverride);
     },
     [cancelDebounce, runTool],
   );
@@ -930,11 +946,14 @@ export default function ToolboxPage() {
   };
 
   const useResultAsInput = () => {
+    if (activeTool !== "polish") return;
     if (status.kind !== "done" || !status.result) return;
+    if (status.result === text) return;
+    const next = status.result;
     setRevertSnapshot(text);
-    setTextRaw(status.result);
-    setStatus({ kind: "idle" });
+    setTextRaw(next);
     setRunMeta(null);
+    runImmediate("polish", next);
   };
 
   const revertText = () => {
@@ -996,11 +1015,11 @@ export default function ToolboxPage() {
     <section className="flex h-full flex-col overflow-hidden bg-te-bg">
       <div
         data-tauri-drag-region
-        className="shrink-0 border-b border-te-gray/30 bg-te-bg"
+        className="shrink-0 bg-te-bg"
       >
         <div
           data-tauri-drag-region
-          className="mx-auto flex max-w-6xl items-center gap-3 px-[4vw] py-3"
+          className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-[4vw] py-3"
         >
           <motion.div
             data-tauri-drag-region
@@ -1019,6 +1038,7 @@ export default function ToolboxPage() {
               </p>
             </div>
           </motion.div>
+          <ToolTabs tool={activeTool} onChange={handleToolChange} />
         </div>
       </div>
 
@@ -1045,7 +1065,6 @@ export default function ToolboxPage() {
           <OutputCard
             status={status}
             activeTool={activeTool}
-            onToolChange={handleToolChange}
             hasText={hasText}
             targetLang={targetLang}
             setTargetLang={handleSetTargetLang}

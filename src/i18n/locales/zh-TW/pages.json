@@ -232,7 +232,8 @@
       "view_refined": "AI 優化",
       "view_translation": "譯文",
       "view_raw": "原始文字",
-      "view_details": "查看詳情"
+      "view_details": "查看詳情",
+      "copy_debug": "複製除錯提示詞"
     },
     "detail": {
       "title": "記錄詳情",
@@ -273,6 +274,8 @@
     "toast": {
       "copy_success": "已複製到剪貼簿",
       "copy_failed": "複製失敗",
+      "copy_debug_success": "除錯提示詞已複製",
+      "copy_debug_failed": "複製除錯提示詞失敗",
       "retry_success": "重試成功",
       "retry_failed": "重試失敗",
       "delete_failed": "刪除失敗",

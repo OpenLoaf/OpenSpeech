@@ -232,7 +232,8 @@
       "view_refined": "AI enhanced",
       "view_translation": "Translation",
       "view_raw": "Raw text",
-      "view_details": "View details"
+      "view_details": "View details",
+      "copy_debug": "Copy debug prompt"
     },
     "detail": {
       "title": "Record details",
@@ -273,6 +274,8 @@
     "toast": {
       "copy_success": "Copied to clipboard",
       "copy_failed": "Copy failed",
+      "copy_debug_success": "Debug prompt copied",
+      "copy_debug_failed": "Failed to copy debug prompt",
       "retry_success": "Retry succeeded",
       "retry_failed": "Retry failed",
       "delete_failed": "Delete failed",

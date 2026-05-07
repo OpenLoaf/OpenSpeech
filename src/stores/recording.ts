@@ -213,7 +213,8 @@ type OverlayToastKind = "error" | "warning" | "info";
 type OverlayToastActionKey =
   | "open_login"
   | "open_no_internet"
-  | "open_settings_byo";
+  | "open_settings_byo"
+  | "switch_to_saas";
 interface OverlayToastOptions {
   description?: string;
   action?: { label: string; key: OverlayToastActionKey };
@@ -535,7 +536,11 @@ const discardAndOpenLogin = () => {
 // 录音 / 转写完全没起来就失败：discard 录音 + 写一条 failed history，
 // 让用户事后能在历史里看到"几点几分发生了一次启动失败 + 真实原因"。
 // audio_path / duration_ms 都是 0/null（音频根本没落盘）。
-const abortToIdle = (errorTitle: string, errorDesc: string) => {
+const abortToIdle = (
+  errorTitle: string,
+  errorDesc: string,
+  toastExtras?: Pick<OverlayToastOptions, "action" | "durationMs">,
+) => {
   if (!IS_MAIN_WINDOW) return;
   recordAbortFailureHistory(errorDesc || errorTitle);
   discardRecording();
@@ -547,8 +552,29 @@ const abortToIdle = (errorTitle: string, errorDesc: string) => {
     recordingId: null,
     liveTranscript: "",
   });
-  notifyOverlay("error", errorTitle, { description: errorDesc });
+  notifyOverlay("error", errorTitle, {
+    description: errorDesc,
+    ...(toastExtras ?? {}),
+  });
 };
+
+// 自定义供应商配置不全 / keyring 读取失败——这两类错误都是用户自己设的 BYOK 不可
+// 用，给一个一键切回云端的快捷出口。byok_provider_not_configured 由 Rust dispatch
+// 上层吞掉走了 SaaS（dictation_fallback 路径），这里不会再漏出。
+const isByokSwitchableError = (raw: unknown): boolean => {
+  const msg = String(raw ?? "");
+  return (
+    msg.includes("byok_missing_credentials") || msg.includes("byok_keyring_error")
+  );
+};
+
+const byokSwitchToSaasAction = (): {
+  label: string;
+  key: OverlayToastActionKey;
+} => ({
+  label: i18n.t("overlay:toast.byok_switch_to_saas.action"),
+  key: "switch_to_saas",
+});
 
 const startRecordingSession = (id: string) => {
   if (!IS_MAIN_WINDOW) return;
@@ -579,11 +605,15 @@ const startRecordingSession = (id: string) => {
           return;
         }
         console.warn("[stt] start failed → aborting recording:", e);
+        const isByok = isByokSwitchableError(e);
         abortToIdle(
           i18n.t("overlay:toast.stt_start_failed.title"),
           i18n.t("overlay:toast.stt_start_failed.description", {
             reason: humanizeSttError(e),
           }),
+          isByok
+            ? { action: byokSwitchToSaasAction(), durationMs: 0 }
+            : undefined,
         );
       });
     })
@@ -744,8 +774,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
           } else {
             console.warn("[stt] file transcribe failed:", e);
             const desc = humanizeSttError(e);
+            const isByok = isByokSwitchableError(e);
             notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
               description: desc,
+              ...(isByok
+                ? { action: byokSwitchToSaasAction(), durationMs: 0 }
+                : {}),
             });
             asrErrorMsg = desc;
             text = "";
@@ -762,8 +796,12 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
     const reason = String(sttSettled.reason ?? "");
     if (!reason.includes("no active stt session")) {
       const desc = humanizeSttError(sttSettled.reason);
+      const isByok = isByokSwitchableError(sttSettled.reason);
       notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
         description: desc,
+        ...(isByok
+          ? { action: byokSwitchToSaasAction(), durationMs: 0 }
+          : {}),
       });
       asrErrorMsg = desc;
     } else {
@@ -2415,8 +2453,12 @@ export const useRecordingStore = create<RecordingStore>((set, get) => {
           text = r.text ?? "";
         } catch (e) {
           console.warn("[debug] transcribe failed:", e);
+          const isByok = isByokSwitchableError(e);
           notifyOverlay("error", i18n.t("overlay:toast.transcribe_failed.title"), {
             description: humanizeSttError(e),
+            ...(isByok
+              ? { action: byokSwitchToSaasAction(), durationMs: 0 }
+              : {}),
           });
           set({ state: "idle", liveTranscript: "" });
           return;

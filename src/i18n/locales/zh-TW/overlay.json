@@ -98,6 +98,11 @@
       "title": "轉寫失敗",
       "no_transcript": "未辨識到內容，可在歷史裡點重試"
     },
+    "byok_switch_to_saas": {
+      "action": "切到雲端",
+      "switched_title": "已切換為 OpenLoaf 雲端",
+      "switched_description": "請按快捷鍵重新錄音"
+    },
     "recording_save_failed": {
       "title": "錄音儲存失敗"
     },

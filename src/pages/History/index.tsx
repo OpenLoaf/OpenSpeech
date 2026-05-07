@@ -12,6 +12,7 @@ import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
   BarChart3,
+  Bug,
   Check,
   ChevronDown,
   Copy,
@@ -33,6 +34,11 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { exportRecordingTo } from "@/lib/audio";
+import {
+  getEffectiveAiSystemPrompt,
+  getEffectiveAiTranslationSystemPrompt,
+} from "@/lib/defaultAiPrompts";
+import { resolveLang } from "@/i18n";
 import { AudioWavePlayer } from "@/components/AudioWavePlayer";
 import {
   Dialog,
@@ -1035,6 +1041,60 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
     }
   };
 
+  const handleCopyDebugPrompt = async () => {
+    try {
+      let absAudioPath: string | null = null;
+      if (item.audio_path) {
+        try {
+          absAudioPath = await invoke<string>("audio_recording_resolve", {
+            audioPath: item.audio_path,
+          });
+        } catch (e) {
+          console.warn("[history] resolve audio path failed:", e);
+        }
+      }
+      const aiSettings = useSettingsStore.getState().aiRefine;
+      const lang = resolveLang(
+        useSettingsStore.getState().general.interfaceLang,
+      );
+      const systemPrompt =
+        item.type === "translate"
+          ? getEffectiveAiTranslationSystemPrompt(
+              aiSettings.customTranslationSystemPrompt,
+              lang,
+            )
+          : getEffectiveAiSystemPrompt(aiSettings.customSystemPrompt, lang);
+      const rawText = (item.text ?? "").trim() || "(无)";
+      const refinedText = (item.refined_text ?? "").trim() || "(无)";
+      const audioLine = absAudioPath ?? "(无录音文件)";
+      const durationSec = (item.duration_ms / 1000).toFixed(2);
+      const payload = [
+        "# OpenSpeech 调试信息",
+        "",
+        "## 1. 音频文件路径",
+        audioLine,
+        "",
+        "## 2. 音频长度",
+        `${durationSec}s (${item.duration_ms} ms)`,
+        "",
+        "## 3. 音频解析后的文字（ASR 原始文本）",
+        rawText,
+        "",
+        "## 4. AI 优化后的文字",
+        refinedText,
+        "",
+        "## 5. AI 系统提示词",
+        systemPrompt,
+        "",
+      ].join("\n");
+      await writeText(payload);
+      toast.success(t("pages:history.toast.copy_debug_success"));
+    } catch (e) {
+      console.error("[history] copy debug prompt failed:", e);
+      toast.error(t("pages:history.toast.copy_debug_failed"));
+    }
+  };
+
   const handleExport = async () => {
     if (!item.audio_path) return;
     const audioPath = item.audio_path;
@@ -1126,6 +1186,14 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
         onSelect: () => void handleExport(),
       });
     }
+    if (import.meta.env.DEV) {
+      items.push({
+        key: "copy_debug",
+        label: t("pages:history.row.copy_debug"),
+        icon: <Bug />,
+        onSelect: () => void handleCopyDebugPrompt(),
+      });
+    }
     items.push({
       key: "delete",
       label: t("pages:history.row.delete"),
@@ -1201,7 +1269,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
           {displayText}
         </p>
         {hasRefined && (
-          <div className="mt-1.5 flex items-center gap-2">
+          <div className="mt-1.5 flex items-center gap-3">
             <RefinedToggle
               showRaw={showRaw}
               onToggle={setShowRaw}
@@ -1213,20 +1281,31 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
                 {formatDuration(item.duration_ms)}
               </span>
             )}
+            {!isFailed && item.target_app && (
+              <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+                <span className="text-te-light-gray/60">→</span>{" "}
+                {item.target_app}
+              </span>
+            )}
           </div>
         )}
-        {!hasRefined && !isFailed && !isCancelled && item.duration_ms > 0 && (
-          <div className="mt-1.5 font-mono text-[10px] tracking-widest text-te-light-gray/50">
-            {formatDuration(item.duration_ms)}
-          </div>
-        )}
-        {!isFailed && item.target_app && (
-          <div className="mt-1.5 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
-            <span>
-              <span className="text-te-light-gray/60">→</span> {item.target_app}
-            </span>
-          </div>
-        )}
+        {!hasRefined &&
+          !isFailed &&
+          (item.duration_ms > 0 || item.target_app) && (
+            <div className="mt-1.5 flex items-center gap-3">
+              {!isCancelled && item.duration_ms > 0 && (
+                <span className="font-mono text-[10px] tracking-widest text-te-light-gray/50">
+                  {formatDuration(item.duration_ms)}
+                </span>
+              )}
+              {item.target_app && (
+                <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
+                  <span className="text-te-light-gray/60">→</span>{" "}
+                  {item.target_app}
+                </span>
+              )}
+            </div>
+          )}
         {isFailed && item.error && (
           <div className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-[#ff4d4d]/70">
             ERR: {item.error}

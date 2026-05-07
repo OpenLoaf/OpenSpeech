@@ -1,19 +1,23 @@
 import { Fragment, useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Command, Diamond } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHotkeysStore } from "@/stores/hotkeys";
 import { useRecordingStore } from "@/stores/recording";
 import {
   codeToMod,
+  codeToSide,
   formatCode,
+  formatMod as modLabel,
+  getModSide,
   normalizeMods,
   type BindingId,
   type HotkeyBinding,
   type HotkeyMod,
+  type Side,
 } from "@/lib/hotkey";
 import { detectPlatform, type Platform } from "@/lib/platform";
+import { keyEventLabel, mainIcon, modIcon } from "@/lib/hotkeyVisual";
 
 // 听写快捷键的视觉预览：渲染当前 binding 的 token 序列；按键时高亮匹配的 token，
 // 不匹配时显示用户实际按下的键。Home 页与 Onboarding Step 1 共用。
@@ -21,57 +25,16 @@ import { detectPlatform, type Platform } from "@/lib/platform";
 type KeyToken = { id: string; label: string };
 
 type HotkeyToken =
-  | { kind: "mod"; mod: HotkeyMod; label: string; icon: ReactNode | null }
+  | {
+      kind: "mod";
+      mod: HotkeyMod;
+      side: Side | null;
+      label: string;
+      icon: ReactNode | null;
+    }
   | { kind: "main"; code: string; label: string; icon: ReactNode | null }
   | { kind: "prefix"; label: string };
 
-function modLabel(mod: HotkeyMod, platform: Platform): string {
-  if (mod === "fn") return "Fn";
-  if (mod === "shift") return "Shift";
-  if (mod === "alt") return platform === "macos" ? "Option" : "Alt";
-  if (mod === "ctrl") return "Ctrl";
-  if (platform === "macos") return "Cmd";
-  if (platform === "windows") return "Win";
-  return "Super";
-}
-
-function WinIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-      <path d="M1 3.5l5.5-.75v5.5H1V3.5z" />
-      <path d="M7.5 2.5L15 1v7H7.5V2.5z" />
-      <path d="M1 9h5.5v5.5L1 13.5V9z" />
-      <path d="M7.5 9H15v7l-7.5-1.5V9z" />
-    </svg>
-  );
-}
-
-function modIcon(mod: HotkeyMod, platform: Platform): ReactNode | null {
-  if (mod === "fn") return null;
-  if (mod === "ctrl") return "⌃";
-  if (mod === "shift") return "⇧";
-  if (mod === "alt") return "⌥";
-  if (platform === "macos") return <Command size={14} strokeWidth={2.5} />;
-  if (platform === "windows") return <WinIcon />;
-  return <Diamond size={12} strokeWidth={2.5} />;
-}
-
-const MAIN_ICON: Record<string, ReactNode> = {
-  Enter: "↵",
-  Escape: "⎋",
-  Tab: "⇥",
-  Backspace: "⌫",
-  Delete: "⌦",
-  Space: "␣",
-  ArrowUp: "↑",
-  ArrowDown: "↓",
-  ArrowLeft: "←",
-  ArrowRight: "→",
-};
-
-function mainIcon(code: string): ReactNode | null {
-  return MAIN_ICON[code] ?? null;
-}
 
 export function tokensFromBinding(
   binding: HotkeyBinding | null,
@@ -86,6 +49,7 @@ export function tokensFromBinding(
     tokens.push({
       kind: "mod",
       mod,
+      side: getModSide(binding, mod),
       label: modLabel(mod, platform),
       icon: modIcon(mod, platform),
     });
@@ -103,37 +67,24 @@ export function tokensFromBinding(
 
 function tokenMatches(token: HotkeyToken, pressed: KeyToken | null): boolean {
   if (!pressed) return false;
-  if (token.kind === "mod") return codeToMod(pressed.id) === token.mod;
+  if (token.kind === "mod") {
+    if (codeToMod(pressed.id) !== token.mod) return false;
+    // fn 无左右概念；其他 mod 必须左右一致才算命中
+    if (token.side === null) return true;
+    return codeToSide(pressed.id) === token.side;
+  }
   if (token.kind === "main") return token.code === pressed.id;
   return false;
 }
 
-const CODE_LABEL: Record<string, string> = {
-  ControlLeft: "Left Ctrl",
-  ControlRight: "Right Ctrl",
-  ShiftLeft: "Left Shift",
-  ShiftRight: "Right Shift",
-  AltLeft: "Left Alt",
-  AltRight: "Right Alt",
-  MetaLeft: "Left Cmd",
-  MetaRight: "Right Cmd",
-  Space: "Space",
-  Enter: "Enter",
-  Escape: "Esc",
-  Tab: "Tab",
-  Backspace: "Backspace",
-  Delete: "Del",
-  CapsLock: "Caps",
-  ArrowUp: "↑",
-  ArrowDown: "↓",
-  ArrowLeft: "←",
-  ArrowRight: "→",
-};
-
-function keyFromEvent(e: KeyboardEvent): KeyToken {
+function keyFromEvent(e: KeyboardEvent, platform: Platform): KeyToken {
   if (e.key === "Fn") return { id: "Fn", label: "Fn" };
   const code = e.code;
-  if (CODE_LABEL[code]) return { id: code, label: CODE_LABEL[code] };
+  // 修饰键 / 已知特殊键走 platform-aware 标签——确保 Mac 上 Alt 物理键显示为 Option
+  if (code) {
+    const labeled = keyEventLabel(code, platform);
+    if (labeled && labeled !== code) return { id: code, label: labeled };
+  }
   if (/^Key[A-Z]$/.test(code)) return { id: code, label: code.slice(3) };
   if (/^Digit\d$/.test(code)) return { id: code, label: code.slice(5) };
   if (/^F\d+$/.test(code)) return { id: code, label: code };
@@ -187,6 +138,7 @@ export function Kbd({
 // 每个键的释放有独立 180ms debounce，所以快速连按 / 同时释放也能平滑过渡，
 // 而不会因某一个 keyup 把整组高亮一起清掉（旧版本 bug：onkeyup 一发就 clear all）。
 export function useKeyPreview(): KeyToken[] {
+  const platform = detectPlatform();
   const [held, setHeld] = useState<Map<string, KeyToken>>(() => new Map());
   const releaseTimersRef = useRef<Map<string, number>>(new Map());
 
@@ -237,12 +189,12 @@ export function useKeyPreview(): KeyToken[] {
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      const tok = keyFromEvent(e);
+      const tok = keyFromEvent(e, platform);
       if (!isDisplayableKey(tok)) return;
       press(tok);
     };
     const onUp = (e: KeyboardEvent) => {
-      const tok = keyFromEvent(e);
+      const tok = keyFromEvent(e, platform);
       release(tok.id);
     };
     window.addEventListener("keydown", onDown);
@@ -254,7 +206,7 @@ export function useKeyPreview(): KeyToken[] {
       window.removeEventListener("keyup", onUp);
       window.removeEventListener("blur", clearAll);
     };
-  }, [press, release, clearAll]);
+  }, [press, release, clearAll, platform]);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,7 +218,7 @@ export function useKeyPreview(): KeyToken[] {
         if (phase === "pressed") {
           const tok: KeyToken = {
             id: code,
-            label: CODE_LABEL[code] ?? formatCode(code),
+            label: keyEventLabel(code, platform),
           };
           if (!isDisplayableKey(tok)) return;
           press(tok);
@@ -282,7 +234,7 @@ export function useKeyPreview(): KeyToken[] {
       cancelled = true;
       unsub?.();
     };
-  }, [press, release]);
+  }, [press, release, platform]);
 
   return Array.from(held.values());
 }
@@ -368,6 +320,11 @@ export function HotkeyPreview({
                 {tok.icon}
               </span>
             ) : null}
+            {tok.kind === "mod" && tok.side ? (
+              <span aria-hidden className="mr-1 text-[0.7em] font-bold opacity-70">
+                {tok.side === "left" ? "L" : "R"}
+              </span>
+            ) : null}
             {tok.label}
           </Kbd>
         </Fragment>
@@ -437,23 +394,28 @@ export function HotkeyPreview({
           ) : (
             // 同时按住超过 4 个键时只显示最近按下的 4 个，避免快速打字时
             // debounce 窗口内 pressed 数组膨胀导致 UI 出现 5+ 个 Kbd。
-            pressed.slice(-4).map((p, i) => (
-              <Fragment key={p.id}>
-                {i > 0 && (
-                  <span
-                    className={cn(
-                      "font-mono text-te-light-gray",
-                      fillHeight
-                        ? "text-[clamp(1rem,3cqw,2rem)]"
-                        : "text-xl",
-                    )}
-                  >
-                    +
-                  </span>
-                )}
-                <Kbd size={fillHeight ? "lg" : "md"}>{p.label}</Kbd>
-              </Fragment>
-            ))
+            // 统一走 renderTokens，让 fallback 的图标 + L/R 角标 + 文字与 binding
+            // 行完全一致——避免按错键时只显示纯文字、跟绑定预览视觉割裂。
+            renderTokens(
+              pressed.slice(-4).map<HotkeyToken>((p) => {
+                const mod = codeToMod(p.id);
+                if (mod) {
+                  return {
+                    kind: "mod",
+                    mod,
+                    side: mod === "fn" ? null : codeToSide(p.id),
+                    label: modLabel(mod, platform),
+                    icon: modIcon(mod, platform),
+                  };
+                }
+                return {
+                  kind: "main",
+                  code: p.id,
+                  label: p.label || formatCode(p.id),
+                  icon: mainIcon(p.id),
+                };
+              }),
+            )
           )}
         </div>
 

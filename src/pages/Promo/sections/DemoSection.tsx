@@ -2,6 +2,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Diamond, X } from "lucide-react";
 import { detectPlatform, type Platform } from "@/lib/platform";
+import { WinIcon } from "@/lib/hotkeyVisual";
 
 type SegKind = "keep" | "filler" | "correction";
 type Segment = { text: string; kind: SegKind };
@@ -446,30 +447,12 @@ function defaultKeys(platform: Platform): { glyph?: ReactNode; label: string }[]
     return [{ label: "Fn" }, { glyph: "⌃", label: "Ctrl" }];
   }
   if (platform === "windows") {
-    return [{ glyph: "⌃", label: "Ctrl" }, { glyph: <WinIcon />, label: "Win" }];
+    return [{ glyph: "⌃", label: "Ctrl" }, { glyph: <WinIcon size={13} />, label: "Win" }];
   }
   return [
     { glyph: "⌃", label: "Ctrl" },
     { glyph: <Diamond size={11} strokeWidth={2.5} />, label: "Super" },
   ];
-}
-
-// 复刻 HotkeyPreview.WinIcon
-function WinIcon() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      aria-hidden
-    >
-      <path d="M1 3.5l5.5-.75v5.5H1V3.5z" />
-      <path d="M7.5 2.5L15 1v7H7.5V2.5z" />
-      <path d="M1 9h5.5v5.5L1 13.5V9z" />
-      <path d="M7.5 9H15v7l-7.5-1.5V9z" />
-    </svg>
-  );
 }
 
 export function ShortcutKeys({ stage }: { stage: Stage }) {

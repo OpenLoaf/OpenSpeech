@@ -98,6 +98,11 @@
       "title": "Transcription failed",
       "no_transcript": "Nothing was recognized — retry from History"
     },
+    "byok_switch_to_saas": {
+      "action": "Use cloud",
+      "switched_title": "Switched to OpenLoaf cloud",
+      "switched_description": "Press the hotkey to record again"
+    },
     "recording_save_failed": {
       "title": "Failed to save recording"
     },

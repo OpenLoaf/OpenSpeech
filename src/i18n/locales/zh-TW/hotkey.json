@@ -13,16 +13,26 @@
   },
   "format": {
     "unbound": "未綁定",
-    "double_tap": "2× {{mod}}"
+    "double_tap": "2× {{mod}}",
+    "left": "左",
+    "right": "右"
   },
   "validation": {
     "needs_main_key": "需要搭配主鍵使用",
-    "special_keys_locked": "Esc / Tab / Enter 等特殊鍵需在進階設定開啟後使用",
+    "special_keys_locked": "Esc / Enter / 方向鍵等特殊鍵需在進階設定開啟後使用",
     "needs_modifier": "需要搭配修飾鍵使用",
     "fn_macos_only": "Fn 鍵僅在 macOS 可靠可用；請改用 Ctrl + Win 或 Right Alt",
     "modifier_only_no_main": "modifier-only 綁定不能包含主鍵",
     "modifier_only_min": "至少需要一個修飾鍵",
+    "modifier_only_min_two": "至少需要兩個修飾鍵——單修飾鍵會吞掉該鍵的所有原生組合",
+    "combo_disallowed_main": "Tab / Backspace / Delete / CapsLock 不可作為主鍵，誤觸代價過高",
+    "combo_no_fn": "Fn 鍵不能與主鍵組合，系統層無法註冊",
     "double_tap_no_main": "雙擊綁定不能包含主鍵",
-    "double_tap_single_mod": "雙擊只支援單一修飾鍵"
+    "double_tap_single_mod": "雙擊只支援單一修飾鍵",
+    "double_tap_fn_macos": "macOS 雙擊 Fn 是系統聽寫預設快捷鍵，會被系統先吞"
+  },
+  "warning": {
+    "system_shortcut": "該組合可能與系統常用快捷鍵衝突",
+    "f_key_bare": "F1-F12 在多數 Mac 預設是亮度 / 音量等系統功能鍵"
   }
 }

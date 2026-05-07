@@ -15,8 +15,17 @@ import { Waveform, resetWaveform } from "./Waveform";
 // 200×36 logical px 胶囊；toast / debug strip 通过 motion 在 pill 上方展开，
 // pill 永远贴 webview 底。webview 窗口尺寸由 Rust 端固定（src-tauri/src/overlay/mod.rs），
 // 内部不再调 set_height ——避免 NSWindow setContentSize 引起整窗一帧重绘的"刷新闪一下"。
+//
+// PILL_WIDTH < 窗口 WIDTH：pill / debug-strip / translate-indicator 用 PILL_WIDTH
+// 居中显示，把窗口左右富余的透明区让出来；只有 toast 走 w-full 撑满整窗——这样
+// 录音条本身视觉宽度永远是老样子的 200px，仅在出错提示时 toast 真的看起来更大。
+const PILL_WIDTH = 200;
 const PILL_HEIGHT = 36;
-const TOAST_HEIGHT = 42;
+// 64：title 11px + description 11px×2 行（line-clamp-2）+ 上下 padding/边距，
+// 让"自定义供应商凭证缺失，请到设置 → 听写 → 自定义供应商配置"这种带行动按钮的
+// 失败 toast 能完整读出来；轻量 toast（仅 title 一行，无 description）也撑得住，
+// align-items 居中后视觉居中。
+const TOAST_HEIGHT = 64;
 const TOAST_GAP = 4;
 const DEBUG_STRIP_HEIGHT = 28;
 const TRANSLATE_INDICATOR_HEIGHT = 24;
@@ -224,7 +233,8 @@ export default function OverlayPage() {
             }}
             exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            className="pointer-events-auto flex items-center justify-between gap-2 overflow-hidden border border-dashed border-te-accent bg-te-bg px-2 leading-none"
+            className="pointer-events-auto mx-auto flex items-center justify-between gap-2 overflow-hidden border border-dashed border-te-accent bg-te-bg px-2 leading-none"
+            style={{ width: PILL_WIDTH }}
           >
             <span className="shrink-0 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.15em] text-te-accent">
               DEBUG · {Math.ceil(debugRemainingMs / 1000)}s
@@ -253,17 +263,17 @@ export default function OverlayPage() {
             exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
-              "pointer-events-auto flex items-center gap-1.5 overflow-hidden border bg-te-bg px-2 py-1",
+              "pointer-events-auto flex items-center gap-2 overflow-hidden border bg-te-bg px-2.5 py-1.5",
               toastAccent,
             )}
           >
-            <AlertTriangle className="size-3 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-mono text-[10px] uppercase tracking-[0.15em]">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+              <div className="truncate font-mono text-[11px] uppercase tracking-[0.12em]">
                 {state.toast.title}
               </div>
               {state.toast.description && (
-                <div className="truncate font-mono text-[9px] leading-[1.25] text-te-light-gray">
+                <div className="line-clamp-2 font-mono text-[11px] leading-tight text-te-light-gray">
                   {state.toast.description}
                 </div>
               )}
@@ -273,7 +283,7 @@ export default function OverlayPage() {
                 type="button"
                 onClick={() => runToastAction(state.toast!.action!.key)}
                 className={cn(
-                  "shrink-0 border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em]",
+                  "shrink-0 self-center whitespace-nowrap border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.1em]",
                   "hover:bg-te-accent hover:text-te-accent-fg",
                   toastAccent,
                 )}
@@ -303,7 +313,8 @@ export default function OverlayPage() {
             }}
             exit={{ opacity: 0, y: 4, height: 0, marginBottom: 0 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            className="pointer-events-auto flex items-center justify-center gap-1.5 overflow-hidden border border-te-accent bg-te-bg px-2 leading-none"
+            className="pointer-events-auto mx-auto flex items-center justify-center gap-1.5 overflow-hidden border border-te-accent bg-te-bg px-2 leading-none"
+            style={{ width: PILL_WIDTH }}
           >
             <AnimatePresence mode="wait" initial={false}>
               {state.modeSwitchHint !== null ? (
@@ -381,10 +392,10 @@ export default function OverlayPage() {
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.14 }}
                   className={cn(
-                    "flex w-full items-center gap-2 overflow-hidden border px-1.5 transition-colors",
+                    "mx-auto flex items-center gap-2 overflow-hidden border px-1.5 transition-colors",
                     isError ? "border-te-accent bg-te-bg" : "border-te-gray bg-te-bg",
                   )}
-                  style={{ height: PILL_HEIGHT }}
+                  style={{ width: PILL_WIDTH, height: PILL_HEIGHT }}
                 >
                   <button
                     type="button"
@@ -471,17 +482,17 @@ export default function OverlayPage() {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.14 }}
                     className={cn(
-                      "flex items-center gap-1.5 overflow-hidden border bg-te-bg px-2 py-1",
+                      "flex items-center gap-2 overflow-hidden border bg-te-bg px-2.5 py-1.5",
                       toastAccent,
                     )}
                   >
-                    <AlertTriangle className="size-3 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-[10px] uppercase tracking-[0.15em]">
+                    <AlertTriangle className="size-3.5 shrink-0" />
+                    <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+                      <div className="truncate font-mono text-[11px] uppercase tracking-[0.12em]">
                         {state.toast.title}
                       </div>
                       {state.toast.description && (
-                        <div className="truncate font-mono text-[9px] leading-[1.25] text-te-light-gray">
+                        <div className="line-clamp-2 font-mono text-[11px] leading-tight text-te-light-gray">
                           {state.toast.description}
                         </div>
                       )}
@@ -491,7 +502,7 @@ export default function OverlayPage() {
                         type="button"
                         onClick={() => runToastAction(state.toast!.action!.key)}
                         className={cn(
-                          "shrink-0 border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em]",
+                          "shrink-0 self-center whitespace-nowrap border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.1em]",
                           "hover:bg-te-accent hover:text-te-accent-fg",
                           toastAccent,
                         )}
