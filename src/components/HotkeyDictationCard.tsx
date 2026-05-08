@@ -6,7 +6,10 @@ import { Menu } from "@base-ui/react/menu";
 import { Check, ChevronDown, Languages, Plus, Settings2, Sparkles } from "lucide-react";
 import { HotkeyPreview } from "@/components/HotkeyPreview";
 import { HotkeyBinder } from "@/components/HotkeyBinder";
-import { LiveDictationPanel } from "@/components/LiveDictationPanel";
+import {
+  LiveDictationPanel,
+  type ResultParts,
+} from "@/components/LiveDictationPanel";
 import { QuickDictDialog } from "@/components/QuickDictDialog";
 import { HistoryEditDialog } from "@/components/HistoryEditDialog";
 import { useHistoryStore } from "@/stores/history";
@@ -74,7 +77,9 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
   const aiRefineEnabled = useSettingsStore((s) => s.aiRefine.enabled);
   const setGeneral = useSettingsStore((s) => s.setGeneral);
   const segmentMode = segmentModeOverride ?? settingsSegmentMode;
-  const isLive = recState !== "idle";
+  const isRecording = recState === "preparing" || recState === "recording";
+  const asrPending = !isRecording && recState !== "idle";
+  const isLive = isRecording;
 
   const [editOpen, setEditOpen] = useState(false);
   const [dictOpen, setDictOpen] = useState(false);
@@ -91,8 +96,8 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
     if (recState !== "idle") clearStickyResult();
   }, [recState, clearStickyResult]);
 
-  const showResult = !isLive && stickyResult !== null;
-  const showPanel = isLive || showResult;
+  const showResult = !isLive && !asrPending && stickyResult !== null;
+  const showPanel = isLive || showResult || asrPending;
   const refineBusy = stickyBusy === "refine";
   const translateBusy = stickyBusy === "translate";
   const mainText =
@@ -103,8 +108,8 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
     "";
   const panelTranscript = isLive
     ? liveTranscript
-    : refineBusy && stickyStreamPartial
-      ? stickyStreamPartial
+    : asrPending
+      ? t("overlay:panel.primary.transcribing")
       : mainText;
   const resultStats = showResult
     ? {
@@ -113,22 +118,50 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
         refineMs: stickyResult.refineMs,
       }
     : null;
-  const showTranslation =
-    showResult &&
-    stickyResult !== null &&
-    (translateBusy ||
-      stickyResult.translatedText != null ||
-      stickyResult.type === "translate");
-  const resultParts =
-    showTranslation && stickyResult
-      ? {
-          raw: stickyResult.type === "translate" ? stickyResult.rawText : mainText,
-          translated: translateBusy
-            ? stickyStreamPartial
-            : stickyResult.translatedText ?? stickyResult.refinedText ?? "",
-          targetLang: stickyResult.targetLang,
-        }
-      : null;
+  const resultParts: ResultParts | null = (() => {
+    if (!showResult || !stickyResult) return null;
+    if (translateBusy) {
+      return {
+        raw: mainText,
+        translated:
+          stickyStreamPartial || t("overlay:panel.action.translating"),
+        targetLang: stickyResult.targetLang,
+        mode: "translate",
+      };
+    }
+    if (refineBusy) {
+      return {
+        raw: stickyResult.rawText,
+        translated:
+          stickyStreamPartial || t("overlay:panel.action.refining"),
+        mode: "polish",
+      };
+    }
+    if (stickyResult.translatedText != null) {
+      return {
+        raw: mainText,
+        translated: stickyResult.translatedText,
+        targetLang: stickyResult.targetLang,
+        mode: "translate",
+      };
+    }
+    if (stickyResult.polishedText != null) {
+      return {
+        raw: stickyResult.rawText,
+        translated: stickyResult.polishedText,
+        mode: "polish",
+      };
+    }
+    if (stickyResult.type === "translate") {
+      return {
+        raw: stickyResult.rawText,
+        translated: stickyResult.refinedText ?? "",
+        targetLang: stickyResult.targetLang,
+        mode: "translate",
+      };
+    }
+    return null;
+  })();
   const copyText = stickyResult?.translatedText ?? mainText;
   const handleCopy = useCallback(async () => {
     if (!copyText) return;
@@ -137,6 +170,12 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
   const customPolishScenarios = useSettingsStore(
     (s) => s.aiRefine.customPolishScenarios,
   );
+  const lastPolishScenarioId = useSettingsStore(
+    (s) => s.aiRefine.lastPolishScenarioId,
+  );
+  const setLastPolishScenarioId = useSettingsStore(
+    (s) => s.setLastPolishScenarioId,
+  );
   const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
   const polishScenarios = useMemo<PolishScenario[]>(
     () =>
@@ -144,17 +183,21 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
       DEFAULT_POLISH_SCENARIOS[resolveLang(interfaceLang)],
     [customPolishScenarios, interfaceLang],
   );
-  const [polishScenarioId, setPolishScenarioId] = useState<string | null>(
-    polishScenarios[0]?.id ?? null,
-  );
-  useEffect(() => {
+  const polishScenarioId = useMemo<string | null>(() => {
     if (
-      polishScenarioId === null ||
-      !polishScenarios.some((s) => s.id === polishScenarioId)
+      lastPolishScenarioId &&
+      polishScenarios.some((s) => s.id === lastPolishScenarioId)
     ) {
-      setPolishScenarioId(polishScenarios[0]?.id ?? null);
+      return lastPolishScenarioId;
     }
-  }, [polishScenarios, polishScenarioId]);
+    return polishScenarios[0]?.id ?? null;
+  }, [lastPolishScenarioId, polishScenarios]);
+  const setPolishScenarioId = useCallback(
+    (id: string | null) => {
+      void setLastPolishScenarioId(id);
+    },
+    [setLastPolishScenarioId],
+  );
 
   const activeScenario = useMemo(
     () => polishScenarios.find((s) => s.id === polishScenarioId) ?? null,
@@ -168,18 +211,21 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
     void runRefine(polishScenarioId);
   }, [runRefine, polishScenarioId]);
 
+  const slotDisabled = refineBusy || translateBusy || asrPending;
   const refineSlot = (
     <div className="inline-flex">
       <button
         type="button"
         onClick={handleRefine}
-        disabled={refineBusy}
+        disabled={slotDisabled}
         aria-label={t("overlay:panel.action.refine")}
         className={cn(
-          "inline-flex items-center gap-2 border border-r-0 px-3 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+          "inline-flex items-center gap-2 border border-r-0 px-3 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent disabled:cursor-not-allowed",
           refineBusy
             ? "border-te-accent/60 bg-te-surface text-te-accent animate-pulse"
-            : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+            : asrPending
+              ? "border-te-accent/40 bg-te-surface text-te-accent/50"
+              : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
         )}
       >
         <Sparkles className="size-3.5" aria-hidden />
@@ -187,13 +233,15 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
       </button>
       <Menu.Root>
         <Menu.Trigger
-          disabled={refineBusy || polishScenarios.length === 0}
+          disabled={slotDisabled || polishScenarios.length === 0}
           aria-label={t("overlay:panel.refine_scenario.menu_aria")}
           className={cn(
-            "inline-flex items-center justify-center border px-2 py-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+            "inline-flex items-center justify-center border px-2 py-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent disabled:cursor-not-allowed",
             refineBusy
               ? "border-te-accent/60 bg-te-surface text-te-accent"
-              : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+              : asrPending
+                ? "border-te-accent/40 bg-te-surface text-te-accent/50"
+                : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
           )}
         >
           <ChevronDown className="size-3.5" aria-hidden />
@@ -243,13 +291,15 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
       <button
         type="button"
         onClick={handleTranslate}
-        disabled={translateBusy}
+        disabled={slotDisabled}
         aria-label={t("overlay:panel.action.translate")}
         className={cn(
-          "inline-flex items-center gap-2 border border-r-0 px-3 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+          "inline-flex items-center gap-2 border border-r-0 px-3 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent disabled:cursor-not-allowed",
           translateBusy
             ? "border-te-accent/60 bg-te-surface text-te-accent animate-pulse"
-            : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+            : asrPending
+              ? "border-te-accent/40 bg-te-surface text-te-accent/50"
+              : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
         )}
       >
         <Languages className="size-3.5" aria-hidden />
@@ -259,13 +309,15 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
       </button>
       <Menu.Root>
         <Menu.Trigger
-          disabled={translateBusy}
+          disabled={slotDisabled}
           aria-label={t("overlay:panel.translate_lang.menu_aria")}
           className={cn(
-            "inline-flex items-center justify-center border px-2 py-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+            "inline-flex items-center justify-center border px-2 py-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent disabled:cursor-not-allowed",
             translateBusy
               ? "border-te-accent/60 bg-te-surface text-te-accent"
-              : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+              : asrPending
+                ? "border-te-accent/40 bg-te-surface text-te-accent/50"
+                : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
           )}
         >
           <ChevronDown className="size-3.5" aria-hidden />
@@ -452,8 +504,10 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
                 onEdit={showResult && liveHistoryItem ? handleHistoryEdit : undefined}
                 onRefine={showResult ? handleRefine : undefined}
                 refineBusy={refineBusy}
-                refineSlot={showResult ? refineSlot : undefined}
-                translateSlot={showResult ? translateSlot : undefined}
+                refineSlot={showResult || asrPending ? refineSlot : undefined}
+                translateSlot={showResult || asrPending ? translateSlot : undefined}
+                pendingResult={asrPending}
+                actionsDisabled={asrPending}
               />
             </motion.div>
           ) : (
@@ -468,7 +522,6 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
               <HotkeyPreview
                 fillHeight
                 hideHeader
-                swapToActivatorWhenUnfocused
                 bindingIds={[editBindingId]}
                 trailing={
                   <div className="flex items-center gap-1.5">

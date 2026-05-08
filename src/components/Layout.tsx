@@ -544,7 +544,7 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-te-bg text-te-fg">
-      <aside className="flex h-screen w-60 shrink-0 flex-col overflow-hidden border-r border-te-gray bg-te-surface">
+      <aside className="flex h-screen w-56 shrink-0 flex-col overflow-hidden border-r border-te-gray bg-te-surface">
         {/* Logo slot — 顶部 drag 区，整个 logo 行可拖窗 */}
         <div
           data-tauri-drag-region

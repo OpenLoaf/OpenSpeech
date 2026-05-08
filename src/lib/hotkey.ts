@@ -38,14 +38,16 @@ export const MOD_ORDER: readonly HotkeyMod[] = [
   "meta",
 ];
 
-// 听写 PTT + 翻译听写 + 唤起主窗口 + 跳到 AI 工具页。`dictate_ptt` 名称沿用 v1 数据兼容；
-// `translate` 与 dictate_ptt 同走 modifierOnly，按下后启动一次听写并把转写结果走翻译 prompt
-// 替换文本注入；show_main_window / open_toolbox 走 combo，只在 pressed 边沿触发一次。
+// 听写 PTT + 翻译听写 + 唤起主窗口 + 跳到 AI 工具页 + 打开 quick panel。`dictate_ptt` 名称沿用
+// v1 数据兼容；`translate` 与 dictate_ptt 同走 modifierOnly；show_main_window / open_toolbox /
+// edit_last_record 走 combo，只在 pressed 边沿触发一次。edit_last_record 拉起 quick panel 的
+// edit-last-record 模式（Spotlight 风格独立小窗，主窗口完全不动）。
 export const BINDING_IDS = [
   "dictate_ptt",
   "translate",
   "show_main_window",
   "open_toolbox",
+  "edit_last_record",
 ] as const;
 export type BindingId = (typeof BINDING_IDS)[number];
 
@@ -121,11 +123,29 @@ export function getDefaultBindings(
     modSides: { ctrl: "left", alt: "left" },
   };
 
+  // macOS 用 Cmd+Shift+E（meta+shift），其它平台用 Ctrl+Shift+E：与各自系统的快速操作
+  // 类快捷键习惯一致，且 E 对应 "Edit" 助记。
+  const editLastRecord: HotkeyBinding =
+    platform === "macos"
+      ? {
+          kind: "combo",
+          mods: ["shift", "meta"],
+          code: "KeyE",
+          modSides: { shift: "left", meta: "left" },
+        }
+      : {
+          kind: "combo",
+          mods: ["ctrl", "shift"],
+          code: "KeyE",
+          modSides: { ctrl: "left", shift: "left" },
+        };
+
   return {
     dictate_ptt: ptt,
     translate,
     show_main_window: showMainWindow,
     open_toolbox: openToolbox,
+    edit_last_record: editLastRecord,
   };
 }
 

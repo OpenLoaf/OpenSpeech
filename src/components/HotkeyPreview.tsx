@@ -213,12 +213,43 @@ export function useKeyPreview(): KeyToken[] {
     };
   }, [press, release, clearAll, platform]);
 
+  // 主窗失焦时丢弃 Tauri key-preview（rdev 全局回调），否则用户在别的 app 按 Cmd
+  // 也会让首页 Kbd 高亮，看上去像被"远程操控"。DOM 监听器只在 webview 聚焦才发
+  // 事件，本身不受影响。
+  const focusedRef = useRef(true);
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    const w = getCurrentWebviewWindow();
+    void w
+      .isFocused()
+      .then((f) => {
+        if (!cancelled) focusedRef.current = f;
+      })
+      .catch(() => {});
+    void w
+      .onFocusChanged(({ payload }) => {
+        focusedRef.current = payload;
+        if (!payload) clearAll();
+      })
+      .then((un) => {
+        if (cancelled) un();
+        else unlisten = un;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [clearAll]);
+
   useEffect(() => {
     let cancelled = false;
     let unsub: UnlistenFn | null = null;
     listen<{ code: string; phase: "pressed" | "released" }>(
       "openspeech://key-preview",
       (ev) => {
+        if (!focusedRef.current) return;
         const { code, phase } = ev.payload;
         if (phase === "pressed") {
           const tok: KeyToken = {

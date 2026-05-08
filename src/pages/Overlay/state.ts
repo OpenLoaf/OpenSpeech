@@ -76,6 +76,10 @@ export interface OverlayState {
   modeSwitchHint: ModeSwitchKind | null;
   /** 注入失败兜底：展示最终转录文本 + 复制 / 关闭按钮。null = 不显示。 */
   transcriptResult: TranscriptResultState | null;
+  /** 主窗当前是否处于前台激活态——用户直接看主窗时不需要悬浮条遮挡视线；
+   *  录音流程例外（在 visible 计算时显式短路）。默认 false：boot 期还没收到
+   *  主窗 focus 广播之前保守按"未激活"处理，避免遗漏关键提示。 */
+  mainFocused: boolean;
 }
 
 const INITIAL: OverlayState = {
@@ -90,6 +94,7 @@ const INITIAL: OverlayState = {
   translate: { active: false, lang: "" },
   modeSwitchHint: null,
   transcriptResult: null,
+  mainFocused: false,
 };
 
 type Action =
@@ -110,7 +115,8 @@ type Action =
   | { type: "mode-switch-show"; kind: ModeSwitchKind }
   | { type: "mode-switch-clear" }
   | { type: "result-show"; text: string }
-  | { type: "result-dismiss" };
+  | { type: "result-dismiss" }
+  | { type: "main-focus"; focused: boolean };
 
 function reduce(s: OverlayState, a: Action): OverlayState {
   switch (a.type) {
@@ -157,6 +163,8 @@ function reduce(s: OverlayState, a: Action): OverlayState {
       return { ...s, transcriptResult: { text: a.text } };
     case "result-dismiss":
       return { ...s, transcriptResult: null };
+    case "main-focus":
+      return { ...s, mainFocused: a.focused };
   }
 }
 
@@ -177,6 +185,7 @@ export interface OverlayMachine {
   showModeSwitchHint: (kind: ModeSwitchKind) => void;
   showTranscriptResult: (text: string) => void;
   dismissTranscriptResult: () => void;
+  setMainFocused: (focused: boolean) => void;
 }
 
 const DEFAULT_TOAST_AUTO_DISMISS_MS = 2000;
@@ -278,6 +287,10 @@ export function useOverlayMachine(): OverlayMachine {
     dispatch({ type: "result-dismiss" });
   };
 
+  const setMainFocused = (focused: boolean) => {
+    dispatch({ type: "main-focus", focused });
+  };
+
   return {
     state,
     showToast,
@@ -289,5 +302,6 @@ export function useOverlayMachine(): OverlayMachine {
     showModeSwitchHint,
     showTranscriptResult,
     dismissTranscriptResult,
+    setMainFocused,
   };
 }

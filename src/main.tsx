@@ -10,6 +10,7 @@ import { router } from "./router";
 import { Toaster } from "@/components/ui/sonner";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import OverlayPage from "@/pages/Overlay";
+import QuickPanelPage from "@/pages/QuickPanel";
 import { useAuthStore } from "@/stores/auth";
 import { useDictionaryStore } from "@/stores/dictionary";
 import { useHistoryStore } from "@/stores/history";
@@ -41,14 +42,26 @@ window.addEventListener("contextmenu", (e) => e.preventDefault());
 // 未来真要做应用内 DnD（如文件投递）再在该元素 stopPropagation 或换 pointer 事件。
 window.addEventListener("dragstart", (e) => e.preventDefault());
 
-// 每个 WebviewWindow 独立 JS 运行时；用 label 分流主窗口 vs 悬浮条。
+// 每个 WebviewWindow 独立 JS 运行时；用 label 分流主窗口 / 悬浮条 / quick panel。
 const WINDOW_LABEL = getCurrentWebviewWindow().label;
 const IS_OVERLAY = WINDOW_LABEL === "overlay";
-console.log("[boot] window label =", WINDOW_LABEL, "isOverlay =", IS_OVERLAY);
+const IS_QUICK_PANEL = WINDOW_LABEL === "quick-panel";
+console.log(
+  "[boot] window label =",
+  WINDOW_LABEL,
+  "isOverlay =",
+  IS_OVERLAY,
+  "isQuickPanel =",
+  IS_QUICK_PANEL,
+);
 
 // overlay 窗口本体 transparent，需要让 html/body 也是透明背景；否则 wry/webkit 默认
 // 白底会盖住 NSWindow 的透明属性。胶囊本体的 bg-te-bg 在 OverlayPage 内部容器上。
 if (IS_OVERLAY) {
+  document.documentElement.classList.add("overlay-window");
+}
+// quick panel 窗口本体也是 transparent + 自绘圆角面板，html/body 透明同 overlay。
+if (IS_QUICK_PANEL) {
   document.documentElement.classList.add("overlay-window");
 }
 
@@ -65,6 +78,24 @@ attachConsole().catch((e) => {
 
 // top-level IIFE：仅执行一次（StrictMode 下 useEffect 会跑两次，因此启动逻辑必须放在模块作用域）。
 const bootPromise = (async () => {
+  if (IS_QUICK_PANEL) {
+    // quick panel 与 overlay 一样是独立 JS runtime。需要：i18n 同步 + settings + history（编辑
+    // 上一条要从 history.items[0] 读基线）。不挂录音 / 监听器 / hotkey listener，主窗各自负责。
+    console.log("[boot quick-panel] init settings + history + i18n");
+    try {
+      await useSettingsStore.getState().init();
+      await applyLang(
+        resolveLang(useSettingsStore.getState().general.interfaceLang),
+      );
+      await useHistoryStore.getState().init();
+    } catch (e) {
+      console.warn("[boot quick-panel] init failed:", e);
+    }
+    void listenLangChanged();
+    console.log("[boot quick-panel] ready");
+    return;
+  }
+
   if (IS_OVERLAY) {
     // overlay 是独立 JS runtime —— i18n 初始语言走 navigator.language，常常跟用户
     // 在主窗设置里选的 interfaceLang 不一致（导致悬浮窗显示英文 / 主窗显示中文）。
@@ -145,6 +176,36 @@ const bootPromise = (async () => {
 
     await useRecordingStore.getState().initListeners();
     console.log("[boot] recording listeners attached");
+
+    // 主窗 focus 状态广播给 overlay：主窗在前台时悬浮条让位（用户既然在看主窗，
+    // 底部小条就是冗余）；切走时按 overlay 自己的 baseVisible 规则恢复显示。
+    // boot 期主窗已 focused，但 onFocusChanged 不派发初始值——靠两条路兜底：
+    //   1. 立即 broadcast 一次（覆盖主窗→overlay 启动顺序的常态）
+    //   2. await listen overlay-ready 握手，每次 overlay 重启 / HMR 重发当前
+    //      focus（覆盖 overlay 慢启动场景，否则主窗的 broadcast 会被 overlay
+    //      尚未注册的 listener 丢掉）
+    {
+      const mainWindow = getCurrentWebviewWindow();
+      const broadcastFocus = async () => {
+        try {
+          const focused = await mainWindow.isFocused();
+          await emitTo("overlay", "openspeech://main-focused", { focused });
+          console.log("[boot] main-focused broadcast →", focused);
+        } catch (e) {
+          console.warn("[boot] broadcast main-focus failed:", e);
+        }
+      };
+      void broadcastFocus();
+      void mainWindow.onFocusChanged(({ payload: focused }) => {
+        console.log("[boot] main onFocusChanged →", focused);
+        void emitTo("overlay", "openspeech://main-focused", { focused }).catch(
+          (e) => console.warn("[boot] emit main-focused failed:", e),
+        );
+      });
+      await listen("openspeech://overlay-ready", () => {
+        void broadcastFocus();
+      });
+    }
 
     // 悬浮条上的 action 按钮（"登录" / "网络设置"）反向通知主窗执行——
     // 这是录音 gate 失败后唯一会拉主程序的入口，需要用户主动点击。
@@ -271,10 +332,10 @@ const bootPromise = (async () => {
 const MIN_SPLASH_MS = 1200;
 
 function Root() {
-  const [booted, setBooted] = useState(IS_OVERLAY);
+  const [booted, setBooted] = useState(IS_OVERLAY || IS_QUICK_PANEL);
 
   useEffect(() => {
-    if (IS_OVERLAY) return;
+    if (IS_OVERLAY || IS_QUICK_PANEL) return;
     let cancelled = false;
     const minDelay = new Promise<void>((r) => setTimeout(r, MIN_SPLASH_MS));
     Promise.all([bootPromise, minDelay]).then(() => {
@@ -287,7 +348,7 @@ function Root() {
 
   // boot 完读 settings：未完成引导 ⇒ 跳 /onboarding；已完成则什么都不做（Layout/Home 正常加载）
   useEffect(() => {
-    if (!booted || IS_OVERLAY) return;
+    if (!booted || IS_OVERLAY || IS_QUICK_PANEL) return;
     const completed = useSettingsStore.getState().general.onboardingCompleted;
     if (completed) return;
     if (router.state.location.pathname !== "/onboarding") {
@@ -303,13 +364,21 @@ function Root() {
   // 幂等：Rust 端 LISTEN_STARTED AtomicBool 保证多次调用只启一次（StrictMode dev
   // 下会跑两次也无影响）。失败仅打印日志，不阻塞 UI。
   useEffect(() => {
-    if (!booted || IS_OVERLAY) return;
+    if (!booted || IS_OVERLAY || IS_QUICK_PANEL) return;
     void invoke("hotkey_init_listener").catch((e) =>
       console.warn("[boot] hotkey_init_listener failed:", e),
     );
   }, [booted]);
 
   if (IS_OVERLAY) return <OverlayPage />;
+  if (IS_QUICK_PANEL) {
+    return (
+      <>
+        <QuickPanelPage />
+        <Toaster />
+      </>
+    );
+  }
 
   if (!booted) return <LoadingScreen />;
 

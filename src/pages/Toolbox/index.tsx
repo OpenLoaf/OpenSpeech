@@ -872,17 +872,27 @@ export default function ToolboxPage() {
   const [revertSnapshot, setRevertSnapshot] = useState<string | null>(null);
   const [clipboardPreview, setClipboardPreview] = useState<string | null>(null);
 
-  const [polishScenarioId, setPolishScenarioId] = useState<string | null>(
-    polishScenarios[0]?.id ?? null,
+  const lastPolishScenarioId = useSettingsStore(
+    (s) => s.aiRefine.lastPolishScenarioId,
   );
-  useEffect(() => {
+  const setLastPolishScenarioId = useSettingsStore(
+    (s) => s.setLastPolishScenarioId,
+  );
+  const polishScenarioId = useMemo<string | null>(() => {
     if (
-      polishScenarioId === null ||
-      !polishScenarios.some((s) => s.id === polishScenarioId)
+      lastPolishScenarioId &&
+      polishScenarios.some((s) => s.id === lastPolishScenarioId)
     ) {
-      setPolishScenarioId(polishScenarios[0]?.id ?? null);
+      return lastPolishScenarioId;
     }
-  }, [polishScenarios, polishScenarioId]);
+    return polishScenarios[0]?.id ?? null;
+  }, [lastPolishScenarioId, polishScenarios]);
+  const setPolishScenarioId = useCallback(
+    (id: string | null) => {
+      void setLastPolishScenarioId(id);
+    },
+    [setLastPolishScenarioId],
+  );
 
   const [targetLang, setTargetLang] =
     useState<TranslateTargetLang>(storedTargetLang);

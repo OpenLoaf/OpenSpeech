@@ -1,0 +1,15 @@
+{
+  "edit_last_record": {
+    "title": "編輯上一條",
+    "empty": "暫無可編輯的紀錄",
+    "hint": "Esc 關閉 · ⌘/Ctrl + Enter 儲存",
+    "cancel": "取消",
+    "save": "儲存並複製",
+    "saving": "儲存中…"
+  },
+  "toast": {
+    "saved_title": "已儲存到歷史紀錄",
+    "saved_description": "新文字已複製到剪貼簿，回到原輸入框貼上即可",
+    "save_failed_title": "儲存失敗"
+  }
+}

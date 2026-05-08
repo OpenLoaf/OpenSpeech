@@ -15,8 +15,8 @@
     "windows": [
       {
         "title": "OpenSpeech",
-        "width": 1060,
-        "height": 740,
+        "width": 1140,
+        "height": 800,
         "minWidth": 800,
         "minHeight": 600,
         "maxWidth": 1600,

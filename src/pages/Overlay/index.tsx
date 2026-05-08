@@ -54,6 +54,7 @@ export default function OverlayPage() {
     showModeSwitchHint,
     showTranscriptResult,
     dismissTranscriptResult,
+    setMainFocused,
   } = useOverlayMachine();
 
   // boot IIFE 跑 applyLang 是 race 路径——overlay 第一次拿到 settings 之前可能就
@@ -97,6 +98,7 @@ export default function OverlayPage() {
       setTranslate({ active: p.active, lang: p.active ? p.lang ?? "" : "" }),
     onModeSwitchHint: (p) => showModeSwitchHint(p.kind),
     onTranscriptResult: (p) => showTranscriptResult(p.text),
+    onMainFocus: (p) => setMainFocused(p.focused),
   });
 
   // DEBUG 倒计时 ticker：每 200ms 重新算 remaining，驱动 strip 文案刷新。
@@ -132,12 +134,17 @@ export default function OverlayPage() {
   const translateIndicatorVisible =
     state.translate.active || state.modeSwitchHint !== null;
   const transcriptResult = state.transcriptResult;
-  const visible =
+  const baseVisible =
     (state.main !== "idle" && !pillEarlyHide) ||
     state.toast !== null ||
     debugActive ||
     translateIndicatorVisible ||
     transcriptResult !== null;
+  // 主窗在前台时悬浮条整体让位——主窗自己的 HotkeyDictationCard 已经承担录音
+  // 可视化与状态显示，底部小条是冗余信息。"录音状态则显示悬浮条"指的是用户
+  // 切到别的 app 录音时；切回主窗本身就意味着用户在主窗里看录音，悬浮条就该
+  // 退场，主窗失焦后再回来。
+  const visible = baseVisible && !state.mainFocused;
   // 底部 shell 共享一个 motion.div，pill / toast 形态在容器内 crossfade，
   // 容器自身的 height 由 framer-motion layout 自动平滑过渡——避免 pill 退场 +
   // toast 入场两个独立动画并发引起的"内容跳一下"。
@@ -164,12 +171,18 @@ export default function OverlayPage() {
   // 录音波形又能看到提示）。其他时机 toast 进入底部 shell。
   const showToastAbove = recordingActive && hasToast;
 
-  // 不可见时调用 hide。Rust 端 hide 是单 command 串行：先移屏外 → hide，
-  // 不会再有 IPC 顺序竞争留下黑条。延迟一帧让 motion exit 跑完再 hide。
+  // 不可见时调用 hide；可见且窗口处于隐藏态时调用 show。
+  // 历史背景：show 原本只由 Rust 端按快捷键时 invoke，前端这个 effect 只管 hide。
+  // 加入"主窗激活时让位"规则后，录音期间 visible 会在 false→true 之间反复切换
+  // （主窗失焦后要重新挂回来），如果只 hide 不 show，第一次让位之后 overlay 永远
+  // 起不来。show 走 Rust 端是幂等的（重复 show 等价于 reposition + show）。
   useEffect(() => {
     if (visible) {
       void logInfo(
         `[overlay-render] visible=true main=${state.main} bottomMode=${bottomMode} transcriptResult=${transcriptResult ? `len=${transcriptResult.text.length}` : "null"}`,
+      );
+      invoke("overlay_show").catch((e) =>
+        console.warn("[overlay] show failed", e),
       );
       return;
     }

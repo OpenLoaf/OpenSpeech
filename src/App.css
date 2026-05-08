@@ -398,6 +398,27 @@
   will-change: transform;
 }
 
+/* 文字流光：浅灰底 + 高亮色横向扫过；用于 // PROCESSING 等待态。 */
+@keyframes te-text-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.te-text-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-te-light-gray) 0%,
+    var(--color-te-light-gray) 35%,
+    var(--color-te-fg) 50%,
+    var(--color-te-light-gray) 65%,
+    var(--color-te-light-gray) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: te-text-shimmer 2.4s linear infinite;
+}
+
 /* 会议纪要 markdown：手写极简 prose（不引 @tailwindcss/typography），跟 TE 配色对齐。 */
 .prose-meeting h1,
 .prose-meeting h2,

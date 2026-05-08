@@ -3,13 +3,15 @@
     "dictate_ptt": "聽寫",
     "translate": "翻譯聽寫",
     "show_main_window": "開啟主視窗",
-    "open_toolbox": "開啟 AI 工具"
+    "open_toolbox": "開啟 AI 工具",
+    "edit_last_record": "編輯上一條"
   },
   "binding_hint": {
     "dictate_ptt": "按下開始錄音，放開後轉寫並寫入游標處",
     "translate": "按下開始錄音，放開後翻譯並寫入游標處",
     "show_main_window": "在任意應用中喚起 OpenSpeech 主視窗",
-    "open_toolbox": "在任意應用中跳到 AI 工具頁"
+    "open_toolbox": "在任意應用中跳到 AI 工具頁",
+    "edit_last_record": "彈出快捷面板修改最近一條聽寫紀錄，不打擾主視窗"
   },
   "format": {
     "unbound": "未綁定",

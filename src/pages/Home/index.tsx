@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { PulsarGrid } from "@/components/PulsarGrid";
 import { HotkeyDictationCard } from "@/components/HotkeyDictationCard";
@@ -7,6 +7,7 @@ import { useHistoryStore } from "@/stores/history";
 import { countWords, TYPING_BASELINE_WPM } from "@/lib/wordCount";
 import { useStatsStore } from "@/stores/stats";
 import { useUIStore, type StatsMetric } from "@/stores/ui";
+import { useDictationResultStore } from "@/stores/dictationResult";
 import { notifyHomeActivated } from "@/lib/updateScheduler";
 
 type StatsView = "today" | "all";
@@ -83,6 +84,12 @@ export default function HomePage() {
   const cachedDuration = useStatsStore((s) => s.totalDurationMs);
   const cachedWords = useStatsStore((s) => s.totalWords);
   const openStats = useUIStore((s) => s.openStats);
+  const stickyResult = useDictationResultStore((s) => s.current);
+  const stickyBusy = useDictationResultStore((s) => s.busy);
+  const inWorkbench =
+    stickyBusy !== null ||
+    stickyResult?.polishedText != null ||
+    stickyResult?.translatedText != null;
   const [view, setView] = useState<StatsView>("all");
 
   // Home 页激活即触发一次更新检查并启动 5 分钟轮询；scheduler 内部幂等。
@@ -150,8 +157,13 @@ export default function HomePage() {
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.5 }}
-            className="flex min-h-0 flex-[3_1_0%] flex-col gap-4 pb-[clamp(1rem,3vh,2rem)]"
+            animate={{
+              flexGrow: inWorkbench ? 2 : 3,
+              paddingBottom: inWorkbench ? 0 : undefined,
+            }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            style={{ flexBasis: 0, flexShrink: 1 }}
+            className="flex min-h-0 flex-col gap-4 pb-[clamp(1rem,3vh,2rem)]"
           >
             <h1 className="font-mono text-[clamp(1.75rem,5.5vw,4.5rem)] font-bold leading-[0.95] tracking-tighter text-te-fg">
               {t("pages:home.hero.title_line1")}
@@ -161,49 +173,81 @@ export default function HomePage() {
               </span>
             </h1>
 
-            <p className="max-w-xl font-sans text-sm leading-relaxed text-te-light-gray md:text-base">
-              {t("pages:home.hero.description")}
-            </p>
+            <AnimatePresence initial={false}>
+              {!inWorkbench && (
+                <motion.p
+                  key="hero-desc"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
+                  className="max-w-xl overflow-hidden font-sans text-sm leading-relaxed text-te-light-gray md:text-base"
+                >
+                  {t("pages:home.hero.description")}
+                </motion.p>
+              )}
+            </AnimatePresence>
           </motion.div>
 
           {/* HOTKEY CARD */}
-          <div className="flex min-h-0 flex-[4_1_0%] items-stretch overflow-hidden">
+          <motion.div
+            animate={{ flexGrow: inWorkbench ? 6 : 4 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            style={{ flexBasis: 0, flexShrink: 1 }}
+            className="flex min-h-0 items-stretch overflow-hidden"
+          >
             <HotkeyDictationCard />
-          </div>
+          </motion.div>
 
           {/* STATS */}
-          <div className="flex min-h-0 flex-[3_1_0%] flex-col">
-            <div className="mb-2 flex shrink-0 items-end justify-between md:mb-3">
-              <h2 className="font-mono text-base font-bold uppercase tracking-tighter text-te-fg md:text-lg">
-                {view === "today"
-                  ? t("pages:home.stats.section_title_today")
-                  : t("pages:home.stats.section_title_all")}
-              </h2>
-              <div
-                className="flex shrink-0 border border-te-gray/60 bg-te-surface font-mono text-[10px] uppercase tracking-widest"
-                role="tablist"
-              >
-                {(["today", "all"] as const).map((mode) => {
-                  const active = view === mode;
-                  return (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      onClick={() => setView(mode)}
-                      className={
-                        active
-                          ? "px-2.5 py-1 bg-te-accent text-te-bg"
-                          : "px-2.5 py-1 text-te-light-gray hover:text-te-fg"
-                      }
-                    >
-                      {t(`pages:home.stats.tab_${mode}`)}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+          <motion.div
+            animate={{ flexGrow: inWorkbench ? 2 : 3 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            style={{ flexBasis: 0, flexShrink: 1 }}
+            className="flex min-h-0 flex-col"
+          >
+            <AnimatePresence initial={false}>
+              {!inWorkbench && (
+                <motion.div
+                  key="stats-header"
+                  initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  animate={{ opacity: 1, height: "auto", marginBottom: 8 }}
+                  exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
+                  className="flex shrink-0 items-end justify-between overflow-hidden md:[--ms:0.75rem]"
+                >
+                  <h2 className="font-mono text-base font-bold uppercase tracking-tighter text-te-fg md:text-lg">
+                    {view === "today"
+                      ? t("pages:home.stats.section_title_today")
+                      : t("pages:home.stats.section_title_all")}
+                  </h2>
+                  <div
+                    className="flex shrink-0 border border-te-gray/60 bg-te-surface font-mono text-[10px] uppercase tracking-widest"
+                    role="tablist"
+                  >
+                    {(["today", "all"] as const).map((mode) => {
+                      const active = view === mode;
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() => setView(mode)}
+                          className={
+                            active
+                              ? "px-2.5 py-1 bg-te-accent text-te-bg"
+                              : "px-2.5 py-1 text-te-light-gray hover:text-te-fg"
+                          }
+                        >
+                          {t(`pages:home.stats.tab_${mode}`)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div className="grid min-h-0 flex-1 grid-cols-4 gap-px bg-te-gray/40">
               <StatCard
@@ -239,7 +283,7 @@ export default function HomePage() {
                 ariaLabel={aria("saved")}
               />
             </div>
-          </div>
+          </motion.div>
         </div>
       </div>
     </section>

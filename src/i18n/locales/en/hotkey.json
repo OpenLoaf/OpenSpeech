@@ -3,13 +3,15 @@
     "dictate_ptt": "Dictation",
     "translate": "Translate dictation",
     "show_main_window": "Open main window",
-    "open_toolbox": "Open AI Tools"
+    "open_toolbox": "Open AI Tools",
+    "edit_last_record": "Edit last record"
   },
   "binding_hint": {
     "dictate_ptt": "Press to record, release to transcribe and inject at the cursor",
     "translate": "Press to record, release to translate and inject at the cursor",
     "show_main_window": "Bring the OpenSpeech main window forward from any app",
-    "open_toolbox": "Jump straight to the AI Tools page from any app"
+    "open_toolbox": "Jump straight to the AI Tools page from any app",
+    "edit_last_record": "Open the quick panel to fix the most recent dictation without disturbing the main window"
   },
   "format": {
     "unbound": "Unbound",

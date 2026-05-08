@@ -73,6 +73,9 @@ pub enum BindingId {
     Translate,
     ShowMainWindow,
     OpenToolbox,
+    /// 拉起 quick panel 的「编辑上一条」模式（默认 Cmd/Ctrl+Shift+E）。
+    /// 后续翻译 / 问答等 mode 会复用 quick panel 但用各自的 BindingId。
+    EditLastRecord,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -183,6 +186,7 @@ fn parse_binding_id(s: &str) -> Option<BindingId> {
         "translate" => Some(BindingId::Translate),
         "show_main_window" => Some(BindingId::ShowMainWindow),
         "open_toolbox" => Some(BindingId::OpenToolbox),
+        "edit_last_record" => Some(BindingId::EditLastRecord),
         _ => None,
     }
 }
@@ -430,6 +434,18 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
     if matches!(id, BindingId::OpenToolbox) {
         if phase == "pressed" {
             let _ = app.emit("openspeech://hotkey-open-toolbox", ());
+        }
+        return;
+    }
+
+    // EditLastRecord：直接拉起 quick panel 的 edit-last-record 模式。
+    // 不进 overlay show / cue / HOTKEY_EVENT —— 这是非录音类操作，与主窗口完全解耦，
+    // 主窗口隐藏在托盘也照样工作。
+    if matches!(id, BindingId::EditLastRecord) {
+        if phase == "pressed" {
+            if let Err(e) = crate::quick_panel::show(app, "edit-last-record") {
+                log::warn!("[quick-panel] show failed: {e:?}");
+            }
         }
         return;
     }

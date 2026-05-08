@@ -119,6 +119,8 @@ export interface AiRefineSettings {
   // 润色场景（chip）。null = 跟随当前界面语言用 DEFAULT_POLISH_SCENARIOS；
   // 非 null = 用户自定义条目（可空数组表示"用户主动清空"）。
   customPolishScenarios: PolishScenario[] | null;
+  // 上次选中的润色场景 id（首页 / Toolbox 共用）。null = 自动取 scenarios[0]。
+  lastPolishScenarioId: string | null;
   includeHistory: boolean;
   // 历史块允许携带的最近条数；clamp 在 [1, 50]。
   recentHistoryCount: number;
@@ -219,6 +221,7 @@ const DEFAULT_AI_REFINE: AiRefineSettings = {
   customPolishSystemPrompt: null,
   customMeetingSummaryPrompt: null,
   customPolishScenarios: null,
+  lastPolishScenarioId: null,
   includeHistory: true,
   recentHistoryCount: 10,
   selectedDomains: [],
@@ -267,6 +270,7 @@ interface SettingsState {
   setAiPolishSystemPrompt: (value: string | null) => Promise<void>;
   setAiMeetingSummaryPrompt: (value: string | null) => Promise<void>;
   setPolishScenarios: (value: PolishScenario[] | null) => Promise<void>;
+  setLastPolishScenarioId: (id: string | null) => Promise<void>;
   setAiIncludeHistory: (v: boolean) => Promise<void>;
   setAiRecentHistoryCount: (n: number) => Promise<void>;
   setSelectedDomains: (ids: string[]) => Promise<void>;
@@ -484,6 +488,10 @@ function mergeAiRefine(raw: unknown, forceEnabled?: boolean): AiRefineSettings {
     customPolishSystemPrompt,
     customMeetingSummaryPrompt,
     customPolishScenarios,
+    lastPolishScenarioId:
+      typeof r.lastPolishScenarioId === "string" && r.lastPolishScenarioId
+        ? r.lastPolishScenarioId
+        : null,
     includeHistory: typeof r.includeHistory === "boolean" ? r.includeHistory : true,
     recentHistoryCount: clampHistoryCount(r.recentHistoryCount),
     selectedDomains,
@@ -832,6 +840,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     setPolishScenarios: async (value) => {
       const cur = get().aiRefine;
       const next = { ...cur, customPolishScenarios: value };
+      set({ aiRefine: next });
+      await persist({ aiRefine: next });
+    },
+
+    setLastPolishScenarioId: async (id) => {
+      const cur = get().aiRefine;
+      if (cur.lastPolishScenarioId === id) return;
+      const next = { ...cur, lastPolishScenarioId: id };
       set({ aiRefine: next });
       await persist({ aiRefine: next });
     },

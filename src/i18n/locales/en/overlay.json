@@ -35,7 +35,8 @@
       "transcribing": "// TRANSCRIBING",
       "injecting": "// INJECTING",
       "error": "// ERROR",
-      "idle": "// IDLE"
+      "idle": "// IDLE",
+      "processing": "// PROCESSING"
     },
     "primary": {
       "ready": "Start speaking…",
@@ -55,7 +56,8 @@
     "utterance_timer_label": "UTTERANCE",
     "result_label": {
       "original": "Original",
-      "translation": "Translation"
+      "translation": "Translation",
+      "polished": "Polished"
     },
     "result_stats": {
       "recording": "Recording",

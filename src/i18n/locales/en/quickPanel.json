@@ -1,0 +1,15 @@
+{
+  "edit_last_record": {
+    "title": "Edit last record",
+    "empty": "No record available to edit yet",
+    "hint": "Esc to close · ⌘/Ctrl + Enter to save",
+    "cancel": "Cancel",
+    "save": "Save & copy",
+    "saving": "Saving…"
+  },
+  "toast": {
+    "saved_title": "Saved to history",
+    "saved_description": "The new text is on your clipboard — paste it back into the original input",
+    "save_failed_title": "Save failed"
+  }
+}

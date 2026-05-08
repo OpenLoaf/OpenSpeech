@@ -42,6 +42,10 @@ interface TranscriptResultPayload {
   text: string;
 }
 
+interface MainFocusPayload {
+  focused: boolean;
+}
+
 export interface OverlayHandlers {
   onFsm: (p: FsmPayload) => void;
   onToast: (p: ToastPayload) => void;
@@ -56,6 +60,8 @@ export interface OverlayHandlers {
   onModeSwitchHint: (p: ModeSwitchHintPayload) => void;
   /** 注入兜底：目标 app 已切走 / 不可写时挂结果面板让用户手动复制。 */
   onTranscriptResult: (p: TranscriptResultPayload) => void;
+  /** 主窗 focus 变化：主窗在前台时悬浮条让位给主窗（录音流程除外）。 */
+  onMainFocus: (p: MainFocusPayload) => void;
 }
 
 /**
@@ -139,6 +145,12 @@ export function useOverlayListeners(handlers: OverlayHandlers) {
           if (alive) handlersRef.current.onTranscriptResult(e.payload);
         },
       ),
+    );
+
+    pending.push(
+      listen<MainFocusPayload>("openspeech://main-focused", (e) => {
+        if (alive) handlersRef.current.onMainFocus(e.payload);
+      }),
     );
 
     void logInfo("[overlay] listeners mounted, emitting overlay-ready");

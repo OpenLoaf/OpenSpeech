@@ -86,7 +86,7 @@ const SIZING: Record<
     row: "py-5",
     label: "text-sm",
     hint: "mt-1 text-[11px] text-te-light-gray/70",
-    button: "h-[44px] min-w-[15rem]",
+    button: "h-[44px] w-[20rem]",
     chip: "h-7 min-w-[1.75rem] px-2 text-xs",
     chipSep: "text-xs",
     placeholder: "text-xs tracking-[0.18em]",

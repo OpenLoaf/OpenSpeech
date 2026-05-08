@@ -35,7 +35,8 @@
       "transcribing": "// TRANSCRIBING",
       "injecting": "// INJECTING",
       "error": "// ERROR",
-      "idle": "// IDLE"
+      "idle": "// IDLE",
+      "processing": "// PROCESSING"
     },
     "primary": {
       "ready": "開始說話…",
@@ -55,7 +56,8 @@
     "utterance_timer_label": "整句模式",
     "result_label": {
       "original": "原文",
-      "translation": "譯文"
+      "translation": "譯文",
+      "polished": "潤稿版"
     },
     "result_stats": {
       "recording": "錄音",
