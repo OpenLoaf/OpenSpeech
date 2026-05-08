@@ -29,8 +29,8 @@
 
 1. 所有可自定义快捷键**必须支持全局捕获**：在任何前台应用下都能触发。
 2. 快捷键支持三种形态（`BindingKind`）：
-   - **`combo`** —— 1+ 修饰键 + 1 主键（如 `Ctrl + Shift + Space`）。所有平台通吃，最稳。
-   - **`modifierOnly`** —— **至少 2 个修饰键**按住即触发（如 `Ctrl + Win`、`Fn + Ctrl`）。听写的默认形态。
+   - **`combo`** —— 0+ 修饰键 + 1 主键（如 `Ctrl + Shift + Space`、单按 `F8`、单按 `Home`）。修饰键可省，但单按字母/数字/Space/标点等输入键会被硬拦（B7）；单按 F1-F12 会落软警告 W2。
+   - **`modifierOnly`** —— 1+ 修饰键按住即触发（如 `Ctrl + Win`、`Fn + Ctrl`、单 `Fn`、单 `Option`）。听写的默认形态；单修饰键会落软警告 W3。
    - **`doubleTap`** —— 双击单个修饰键（如 `2× Right Shift`）。
 3. **听写快捷键必须始终有绑定**：听写行的 Clear 按钮恒 disabled；用户只能改绑到别的键，不能清空到"未绑定"状态。
 4. **左右修饰键严格区分**（v3 起）：
@@ -48,13 +48,13 @@
 
 | ID | 规则 | 理由 |
 |---|---|---|
-| **B1** | `modifierOnly` 至少 2 个修饰键 | 单 Option / 单 Fn 一按下立即 `pressed` 命中，会吞该键的全部原生组合（如 Option+空格、Option+H） |
-| **B2** | `combo` 永远禁主键 = `Tab` / `Backspace` / `Delete` / `CapsLock` | 误触代价过高（Tab=焦点切换、Backspace/Delete=误删文本、CapsLock=不可靠的 release） |
+| **B1** | `modifierOnly` 至少 1 个修饰键 | 0 修饰键的 modifierOnly 没有触发源；单修饰键允许，但走 W3 软警告告知"会吞掉该键所有原生组合" |
+| **B2** | `combo` 永远禁主键 = `Tab` / `Backspace` / `Delete` / `CapsLock` / `NumLock` / `ScrollLock` | 误触代价过高（Tab=焦点切换、Backspace/Delete=误删文本、Lock 系列 release 在多平台不可靠） |
 | **B3** | `combo` 不能含 `fn` 修饰键 | macOS Carbon `RegisterEventHotKey` / Win `RegisterHotKey` 都不接受 Fn 修饰位；Rust 端 `parse_mods` 之前是静默丢弃 fn，让用户误以为生效——必须前端拦死 |
 | **B4** | macOS 上 `doubleTap` 不能是 `Fn` | macOS 系统默认双击 Fn = 启动 Dictation，会先吞我们的事件 |
 | **B5** | 主键不能是修饰键本身 | 历史规则，沿用 |
 | **B6** | `Esc / Enter / Arrow*` 主键需 `allowSpecialKeys` 开关启用 | 默认拦截，避免普通用户误绑 |
-| **B7** | `combo` 主键非 F1-F24 时至少 1 个修饰键 | 历史规则，沿用 |
+| **B7** | 单按"输入键"必须配修饰键（A-Z / 0-9 / Space / 主键盘标点 / Numpad 数字） | 裸绑会让每次正常打字都触发——成本极高，软警告不够，硬拦 |
 | **B8** | `fn` 修饰键仅 macOS 合法 | Windows / Linux 硬件层就拦了 |
 
 ### 跨 binding 冲突（block）
@@ -74,6 +74,7 @@
 |---|---|---|
 | **W1** | combo 命中已知系统快捷键（macOS: `Cmd+Q/W/H/M/Tab/Space`、`Cmd+Shift+3/4/5`、`Ctrl+Cmd+Q`、`Cmd+Option+Esc`；Windows: `Win+L/D/E/R/Tab/H/I/S`、`Alt+F4/Tab`、`Ctrl+Alt+Del`） | 该组合可能与系统常用快捷键冲突 |
 | **W2** | 裸按 F1-F12（无修饰键） | F1-F12 在多数 Mac 默认是亮度 / 音量等系统功能键 |
+| **W3** | `modifierOnly` 仅含 1 个修饰键 | 单修饰键会吞掉它的所有原生组合（如 Alt+Tab、Option+空格） |
 
 ## 启动自检
 

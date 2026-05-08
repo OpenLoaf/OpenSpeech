@@ -1,5 +1,6 @@
-// 系统级 focused UI 元素是否可编辑文本——按下听写快捷键的瞬间 snapshot 一次，
-// 录音 finalize 时若 = false 直接跳过 inject 走"复制最后转录"面板。silent fail
+// 系统级 focused UI 元素是否可编辑文本——录音 finalize、即将 inject 的瞬间当场查，
+// 拿到 false 就跳过 inject 走结果面板。录音开始时焦点不可信（用户可能后点进输入框，
+// 或 web textarea 直到聚焦才被 AX 识别），等到要写字的瞬间再问最准。silent fail
 // （enigo 在 Finder/桌面/只读 web 区域 type 不抛错也写不进字）就此根治。
 //
 // 仅 macOS 真做检测：用 ApplicationServices 的 AXUIElementCreateSystemWide +
