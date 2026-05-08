@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick-panel",
+  "description": "Capabilities granted to the quick panel window (Spotlight-style global helper).",
+  "windows": ["quick-panel"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:webview:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging",
+    "log:default",
+    "store:default",
+    "clipboard-manager:allow-write-text",
+    {
+      "identifier": "sql:allow-load",
+      "allow": [{ "url": "sqlite:openspeech.db" }]
+    },
+    {
+      "identifier": "sql:allow-execute",
+      "allow": [{ "url": "sqlite:openspeech.db" }]
+    },
+    {
+      "identifier": "sql:allow-select",
+      "allow": [{ "url": "sqlite:openspeech.db" }]
+    }
+  ]
+}

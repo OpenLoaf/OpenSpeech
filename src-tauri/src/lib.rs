@@ -36,6 +36,7 @@ mod meetings;
 mod openloaf;
 mod overlay;
 mod permissions;
+mod quick_panel;
 pub mod secrets;
 mod stt;
 mod transcribe;
@@ -752,8 +753,8 @@ pub fn run() {
                     // 边距：上下左右各留一定空间，避免窗口贴边
                     let pad_x = 80.0;
                     let pad_y = 80.0;
-                    let ideal_w = 1060.0_f64.min(wa_w - pad_x);
-                    let ideal_h = 740.0_f64.min(wa_h - pad_y);
+                    let ideal_w = 1140.0_f64.min(wa_w - pad_x);
+                    let ideal_h = 800.0_f64.min(wa_h - pad_y);
                     let w = ideal_w.max(800.0);
                     let h = ideal_h.max(600.0);
                     let _ = window.set_size(LogicalSize::new(w, h));
@@ -778,6 +779,12 @@ pub fn run() {
             // ---- 预创建悬浮录音条窗口（hidden，快捷键触发时 show）-----------
             if let Err(e) = overlay::ensure_overlay(&app.handle()) {
                 log::warn!("[overlay] ensure failed: {e:?}");
+            }
+
+            // ---- 预创建 quick panel 窗口（hidden）---------------------------
+            // 通用快速操作面板：编辑上一条 / 后续翻译 / 问答 等都共用此窗，按 mode 切换内部视图。
+            if let Err(e) = quick_panel::ensure(&app.handle()) {
+                log::warn!("[quick-panel] ensure failed: {e:?}");
             }
 
             // ---- 预热听写提示音子系统 -----------------------------------------
@@ -987,6 +994,8 @@ pub fn run() {
             overlay::overlay_show,
             overlay::overlay_hide,
             overlay::overlay_set_height,
+            quick_panel::quick_panel_show,
+            quick_panel::quick_panel_hide,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,
