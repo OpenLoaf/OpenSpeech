@@ -215,13 +215,15 @@ export function getModSide(
   return binding.modSides?.[mod] ?? "left";
 }
 
-// 即使 allowSpecialKeys 也不放行：误触代价高且无替代（Tab=焦点切换、
-// Backspace/Delete=误删文本、CapsLock=不可靠的 release）
+// 即使 allowSpecialKeys 也不放行：锁定类键的 release 在多平台不可靠（按一下 LED 切换，
+// 释放事件可能不上报），Tab=焦点切换、Backspace/Delete=误删文本——误触代价过高且无替代
 const ALWAYS_DISALLOWED_MAIN: readonly string[] = [
   "Tab",
   "Backspace",
   "Delete",
   "CapsLock",
+  "NumLock",
+  "ScrollLock",
 ];
 
 // allowSpecialKeys=false 时拦截，开启后放行
@@ -233,8 +235,6 @@ const SPECIAL_KEYS_GATED: readonly string[] = [
   "ArrowLeft",
   "ArrowRight",
 ];
-
-const ALWAYS_ALLOWED_BARE_PREFIX: readonly string[] = ["F"];
 
 export function isLegalMainKey(
   code: string,
@@ -253,11 +253,12 @@ export function isLegalMainKey(
   if (!allowSpecialKeys && SPECIAL_KEYS_GATED.includes(code)) {
     return { ok: false, reason: i18n.t("hotkey:validation.special_keys_locked") };
   }
-  const isFnKey = ALWAYS_ALLOWED_BARE_PREFIX.some(
-    (p) => code.startsWith(p) && /^F\d+$/.test(code),
-  );
-  if (mods.length === 0 && !isFnKey) {
-    return { ok: false, reason: i18n.t("hotkey:validation.needs_modifier") };
+  // 单按"输入键"会让每次敲字都触发——必须配修饰键。F1-F24 / 导航键 / 媒体键不在此列。
+  if (mods.length === 0 && isTypingKey(code)) {
+    return {
+      ok: false,
+      reason: i18n.t("hotkey:validation.typing_key_needs_modifier"),
+    };
   }
   return { ok: true };
 }
@@ -282,11 +283,10 @@ export function isLegalBinding(
     if (binding.code !== "") {
       return { ok: false, reason: i18n.t("hotkey:validation.modifier_only_no_main") };
     }
-    // B1: 单修饰键 modifierOnly 会吞该键的所有原生组合，必须 ≥ 2 个修饰键
-    if (binding.mods.length < 2) {
+    if (binding.mods.length < 1) {
       return {
         ok: false,
-        reason: i18n.t("hotkey:validation.modifier_only_min_two"),
+        reason: i18n.t("hotkey:validation.modifier_only_min"),
       };
     }
     return { ok: true };
@@ -445,20 +445,27 @@ export function auditBindings(
   return out;
 }
 
-/** 软提示（不阻断录入）—— W1 系统占用、W2 F1-F12 单按。返回 i18n key 列表。 */
+/** 软提示（不阻断录入）—— W1 系统占用、W2 F1-F12 单按、W3 单修饰键 modifierOnly。 */
 export function getBindingWarnings(
   binding: HotkeyBinding,
   platform: Platform,
 ): string[] {
   const warnings: string[] = [];
 
-  // W2: F1-F12 单按容易与系统亮度/音量等冲突
+  // W2: 裸按 F1-F12 容易与系统亮度/音量冲突——只在 macOS 警告
+  // （Windows / Linux 上 F-key 通常直接作为 F-key 触发，不冲突）
   if (
+    platform === "macos" &&
     binding.kind === "combo" &&
     binding.mods.length === 0 &&
     /^F([1-9]|1[0-2])$/.test(binding.code)
   ) {
     warnings.push("hotkey:warning.f_key_bare");
+  }
+
+  // W3: 单修饰键 modifierOnly 会吞掉该键的全部原生组合，举例按平台不同
+  if (binding.kind === "modifierOnly" && binding.mods.length === 1) {
+    warnings.push(`hotkey:warning.modifier_only_single_${platform}`);
   }
 
   // W1: 命中常见系统快捷键
@@ -467,6 +474,36 @@ export function getBindingWarnings(
   }
 
   return warnings;
+}
+
+// 判定"敲字时会输入的常见键"：字母 / 数字 / 空格 / 主键盘标点 / Numpad 数字。
+// 单按这些键会让每次输入都触发快捷键——必须配修饰键，硬拦。
+function isTypingKey(code: string): boolean {
+  if (/^Key[A-Z]$/.test(code)) return true;
+  if (/^Digit\d$/.test(code)) return true;
+  if (/^Numpad\d$/.test(code)) return true;
+  if (code === "Space") return true;
+  return [
+    "Backquote",
+    "Minus",
+    "Equal",
+    "BracketLeft",
+    "BracketRight",
+    "Backslash",
+    "Semicolon",
+    "Quote",
+    "Comma",
+    "Period",
+    "Slash",
+    "IntlBackslash",
+    "IntlRo",
+    "IntlYen",
+    "NumpadAdd",
+    "NumpadSubtract",
+    "NumpadMultiply",
+    "NumpadDivide",
+    "NumpadDecimal",
+  ].includes(code);
 }
 
 // 系统占用快捷键表——常见、影响大、用户最容易踩。不求全。

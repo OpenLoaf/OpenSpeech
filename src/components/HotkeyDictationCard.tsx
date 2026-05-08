@@ -1,11 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { AnimatePresence, motion } from "framer-motion";
 import { Trans, useTranslation } from "react-i18next";
-import { ChevronDown, Plus, Settings2 } from "lucide-react";
+import { Menu } from "@base-ui/react/menu";
+import { Check, ChevronDown, Languages, Plus, Settings2, Sparkles } from "lucide-react";
 import { HotkeyPreview } from "@/components/HotkeyPreview";
 import { HotkeyBinder } from "@/components/HotkeyBinder";
 import { LiveDictationPanel } from "@/components/LiveDictationPanel";
 import { QuickDictDialog } from "@/components/QuickDictDialog";
+import { HistoryEditDialog } from "@/components/HistoryEditDialog";
+import { useHistoryStore } from "@/stores/history";
+import { resolveLang } from "@/i18n";
+import {
+  DEFAULT_POLISH_SCENARIOS,
+  type PolishScenario,
+} from "@/lib/defaultAiPrompts";
 import {
   Dialog,
   DialogContent,
@@ -14,12 +23,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { useRecordingStore, type RecordingState } from "@/stores/recording";
+import { useRecordingStore } from "@/stores/recording";
 import {
   useSettingsStore,
   type TranslateTargetLang,
 } from "@/stores/settings";
-import { useHistoryStore } from "@/stores/history";
+import { useDictationResultStore } from "@/stores/dictationResult";
 import type { BindingId } from "@/lib/hotkey";
 
 type HotkeyTab = "dictate" | "translate";
@@ -44,7 +53,16 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
   const escArmed = useRecordingStore((s) => s.escArmed);
   const errorMessage = useRecordingStore((s) => s.errorMessage);
   const activeBindingId = useRecordingStore((s) => s.activeId);
-  const latestHistoryItem = useHistoryStore((s) => s.items[0]);
+  const stickyResult = useDictationResultStore((s) => s.current);
+  const stickyBusy = useDictationResultStore((s) => s.busy);
+  const stickyStreamPartial = useDictationResultStore((s) => s.streamPartial);
+  const clearStickyResult = useDictationResultStore((s) => s.clear);
+  const runRefine = useDictationResultStore((s) => s.runRefine);
+  const runTranslate = useDictationResultStore((s) => s.runTranslate);
+  const liveHistoryItem = useHistoryStore((s) =>
+    stickyResult ? s.items.find((it) => it.id === stickyResult.id) ?? null : null,
+  );
+  const editedOverride = liveHistoryItem?.text_edited ?? null;
   const segmentModeOverride = useRecordingStore((s) => s.segmentModeOverride);
   const settingsSegmentMode = useSettingsStore((s) => s.general.asrSegmentMode);
   const translateTargetLang = useSettingsStore(
@@ -58,63 +76,233 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
   const segmentMode = segmentModeOverride ?? settingsSegmentMode;
   const isLive = recState !== "idle";
 
-  const [resultText, setResultText] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [dictOpen, setDictOpen] = useState(false);
-  const lastTranscriptRef = useRef("");
-  const prevStateRef = useRef<RecordingState>("idle");
+  const [historyEditOpen, setHistoryEditOpen] = useState(false);
+  const handleHistoryEdit = useCallback(() => {
+    if (liveHistoryItem) setHistoryEditOpen(true);
+  }, [liveHistoryItem]);
 
   const editBindingId: BindingId =
     hotkeyTab === "translate" ? "translate" : "dictate_ptt";
 
+  // 开始新录音时清掉旧结果；finalize 末尾由 recording store 推送新结果。
   useEffect(() => {
-    if (liveTranscript) lastTranscriptRef.current = liveTranscript;
-  }, [liveTranscript]);
+    if (recState !== "idle") clearStickyResult();
+  }, [recState, clearStickyResult]);
 
-  useEffect(() => {
-    const prev = prevStateRef.current;
-    prevStateRef.current = recState;
-    if (prev === "idle" && recState !== "idle") {
-      setResultText(null);
-      lastTranscriptRef.current = "";
-      return;
-    }
-    if (prev !== "idle" && recState === "idle") {
-      const captured = lastTranscriptRef.current.trim();
-      setResultText(captured ? lastTranscriptRef.current : null);
-    }
-  }, [recState]);
-
-  // Result 模式 10s 自动关闭。下一轮录音通过上面 useEffect setResultText(null)
-  // 触发 cleanup 提前清 timer，用户点 ✕ 同理。
-  useEffect(() => {
-    if (resultText === null) return;
-    const id = window.setTimeout(() => setResultText(null), 10_000);
-    return () => window.clearTimeout(id);
-  }, [resultText]);
-
-  const showResult = !isLive && resultText !== null;
+  const showResult = !isLive && stickyResult !== null;
   const showPanel = isLive || showResult;
-  const panelTranscript = isLive ? liveTranscript : (resultText ?? "");
-  // Result 模式下取最新一条 history（finalize 写入后 items[0] 即为本次结果）作为
-  // 耗时统计来源——录音时长 + ASR 耗时 + AI refine 耗时。
+  const refineBusy = stickyBusy === "refine";
+  const translateBusy = stickyBusy === "translate";
+  const mainText =
+    editedOverride ??
+    stickyResult?.polishedText ??
+    stickyResult?.refinedText ??
+    stickyResult?.rawText ??
+    "";
+  const panelTranscript = isLive
+    ? liveTranscript
+    : refineBusy && stickyStreamPartial
+      ? stickyStreamPartial
+      : mainText;
   const resultStats = showResult
     ? {
-        audioMs: latestHistoryItem?.duration_ms ?? null,
-        asrMs: latestHistoryItem?.asr_ms ?? null,
-        refineMs: latestHistoryItem?.refine_ms ?? null,
+        audioMs: stickyResult.audioMs,
+        asrMs: stickyResult.asrMs,
+        refineMs: stickyResult.refineMs,
       }
     : null;
-  // 翻译条目：把原文 / 译文分两组传给 panel 分组渲染。
-  // refined_text 在翻译模式下只存译文（store 层已保证），text 是 ASR 原文。
+  const showTranslation =
+    showResult &&
+    stickyResult !== null &&
+    (translateBusy ||
+      stickyResult.translatedText != null ||
+      stickyResult.type === "translate");
   const resultParts =
-    showResult && latestHistoryItem?.type === "translate"
+    showTranslation && stickyResult
       ? {
-          raw: latestHistoryItem.text ?? "",
-          translated: latestHistoryItem.refined_text ?? "",
-          targetLang: latestHistoryItem.target_lang ?? null,
+          raw: stickyResult.type === "translate" ? stickyResult.rawText : mainText,
+          translated: translateBusy
+            ? stickyStreamPartial
+            : stickyResult.translatedText ?? stickyResult.refinedText ?? "",
+          targetLang: stickyResult.targetLang,
         }
       : null;
+  const copyText = stickyResult?.translatedText ?? mainText;
+  const handleCopy = useCallback(async () => {
+    if (!copyText) return;
+    await writeClipboard(copyText);
+  }, [copyText]);
+  const customPolishScenarios = useSettingsStore(
+    (s) => s.aiRefine.customPolishScenarios,
+  );
+  const interfaceLang = useSettingsStore((s) => s.general.interfaceLang);
+  const polishScenarios = useMemo<PolishScenario[]>(
+    () =>
+      customPolishScenarios ??
+      DEFAULT_POLISH_SCENARIOS[resolveLang(interfaceLang)],
+    [customPolishScenarios, interfaceLang],
+  );
+  const [polishScenarioId, setPolishScenarioId] = useState<string | null>(
+    polishScenarios[0]?.id ?? null,
+  );
+  useEffect(() => {
+    if (
+      polishScenarioId === null ||
+      !polishScenarios.some((s) => s.id === polishScenarioId)
+    ) {
+      setPolishScenarioId(polishScenarios[0]?.id ?? null);
+    }
+  }, [polishScenarios, polishScenarioId]);
+
+  const activeScenario = useMemo(
+    () => polishScenarios.find((s) => s.id === polishScenarioId) ?? null,
+    [polishScenarios, polishScenarioId],
+  );
+  const refineLabel = useMemo(() => {
+    const base = t("overlay:panel.action.refine");
+    return activeScenario ? `${base} · ${activeScenario.name}` : base;
+  }, [activeScenario, t]);
+  const handleRefine = useCallback(() => {
+    void runRefine(polishScenarioId);
+  }, [runRefine, polishScenarioId]);
+
+  const refineSlot = (
+    <div className="inline-flex">
+      <button
+        type="button"
+        onClick={handleRefine}
+        disabled={refineBusy}
+        aria-label={t("overlay:panel.action.refine")}
+        className={cn(
+          "inline-flex items-center gap-2 border border-r-0 px-3 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+          refineBusy
+            ? "border-te-accent/60 bg-te-surface text-te-accent animate-pulse"
+            : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+        )}
+      >
+        <Sparkles className="size-3.5" aria-hidden />
+        {refineBusy ? t("overlay:panel.action.refining") : refineLabel}
+      </button>
+      <Menu.Root>
+        <Menu.Trigger
+          disabled={refineBusy || polishScenarios.length === 0}
+          aria-label={t("overlay:panel.refine_scenario.menu_aria")}
+          className={cn(
+            "inline-flex items-center justify-center border px-2 py-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+            refineBusy
+              ? "border-te-accent/60 bg-te-surface text-te-accent"
+              : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+          )}
+        >
+          <ChevronDown className="size-3.5" aria-hidden />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={4} align="end" className="z-50">
+            <Menu.Popup className="min-w-[160px] border border-te-gray/60 bg-te-bg shadow-lg outline-none">
+              {polishScenarios.map((s) => {
+                const active = s.id === polishScenarioId;
+                return (
+                  <Menu.Item
+                    key={s.id}
+                    onClick={() => setPolishScenarioId(s.id)}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center justify-between gap-3 px-2.5 py-1.5 text-left font-mono text-[11px] uppercase tracking-[0.16em] transition-colors outline-none",
+                      active
+                        ? "bg-te-surface text-te-accent"
+                        : "text-te-fg data-[highlighted]:bg-te-surface-hover",
+                    )}
+                  >
+                    <span>{s.name}</span>
+                    {active ? <Check className="size-3" aria-hidden /> : null}
+                  </Menu.Item>
+                );
+              })}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    </div>
+  );
+
+  const targetLang = useSettingsStore((s) => s.general.translateTargetLang);
+  const handleTranslate = useCallback(() => {
+    void runTranslate();
+  }, [runTranslate]);
+  const translateLabel = useMemo(() => {
+    const base = t("overlay:panel.action.translate");
+    const langName = t(`overlay:translate.lang.${targetLang}`, {
+      defaultValue: targetLang,
+    });
+    return `${base} · ${langName}`;
+  }, [t, targetLang]);
+
+  const translateSlot = (
+    <div className="inline-flex">
+      <button
+        type="button"
+        onClick={handleTranslate}
+        disabled={translateBusy}
+        aria-label={t("overlay:panel.action.translate")}
+        className={cn(
+          "inline-flex items-center gap-2 border border-r-0 px-3 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+          translateBusy
+            ? "border-te-accent/60 bg-te-surface text-te-accent animate-pulse"
+            : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+        )}
+      >
+        <Languages className="size-3.5" aria-hidden />
+        {translateBusy
+          ? t("overlay:panel.action.translating")
+          : translateLabel}
+      </button>
+      <Menu.Root>
+        <Menu.Trigger
+          disabled={translateBusy}
+          aria-label={t("overlay:panel.translate_lang.menu_aria")}
+          className={cn(
+            "inline-flex items-center justify-center border px-2 py-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+            translateBusy
+              ? "border-te-accent/60 bg-te-surface text-te-accent"
+              : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+          )}
+        >
+          <ChevronDown className="size-3.5" aria-hidden />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={4} align="end" className="z-50">
+            <Menu.Popup className="min-w-[160px] border border-te-gray/60 bg-te-bg shadow-lg outline-none">
+              {TRANSLATE_LANGS.map((lang) => {
+                const active = lang === targetLang;
+                return (
+                  <Menu.Item
+                    key={lang}
+                    onClick={() =>
+                      void setGeneral("translateTargetLang", lang)
+                    }
+                    className={cn(
+                      "flex w-full cursor-pointer items-center justify-between gap-3 px-2.5 py-1.5 text-left font-mono text-[11px] uppercase tracking-[0.16em] transition-colors outline-none",
+                      active
+                        ? "bg-te-surface text-te-accent"
+                        : "text-te-fg data-[highlighted]:bg-te-surface-hover",
+                    )}
+                  >
+                    <span>
+                      {t(`overlay:translate.lang.${lang}`, {
+                        defaultValue: lang,
+                      })}
+                    </span>
+                    {active ? <Check className="size-3" aria-hidden /> : null}
+                  </Menu.Item>
+                );
+              })}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    </div>
+  );
 
   return (
     <motion.div
@@ -259,7 +447,13 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
                 resultStats={resultStats}
                 resultParts={resultParts}
                 errorMessage={errorMessage}
-                onClose={showResult ? () => setResultText(null) : undefined}
+                onClose={showResult ? clearStickyResult : undefined}
+                onCopy={showResult && copyText ? handleCopy : undefined}
+                onEdit={showResult && liveHistoryItem ? handleHistoryEdit : undefined}
+                onRefine={showResult ? handleRefine : undefined}
+                refineBusy={refineBusy}
+                refineSlot={showResult ? refineSlot : undefined}
+                translateSlot={showResult ? translateSlot : undefined}
               />
             </motion.div>
           ) : (
@@ -351,6 +545,14 @@ export function HotkeyDictationCard({ bare = false }: { bare?: boolean } = {}) {
       </Dialog>
 
       <QuickDictDialog open={dictOpen} onOpenChange={setDictOpen} />
+
+      {liveHistoryItem ? (
+        <HistoryEditDialog
+          open={historyEditOpen}
+          onOpenChange={setHistoryEditOpen}
+          item={liveHistoryItem}
+        />
+      ) : null}
     </motion.div>
   );
 }

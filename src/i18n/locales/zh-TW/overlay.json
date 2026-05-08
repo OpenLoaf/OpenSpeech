@@ -78,7 +78,25 @@
       "stop_translate": "結束並翻譯",
       "cancel": "取消本次錄音",
       "retry_hint": "按快捷鍵重試",
-      "kbd_esc": "Esc"
+      "kbd_esc": "Esc",
+      "copy": "複製",
+      "copied": "已複製",
+      "edit": "修改",
+      "refine": "潤稿",
+      "refining": "潤稿中…",
+      "translate": "翻譯",
+      "translating": "翻譯中…"
+    },
+    "coming_soon": "即將上線",
+    "coming_soon_tag": "// SOON",
+    "refine_scenario": {
+      "menu_aria": "選擇潤稿情境",
+      "helper": "選情境，提升潤稿精度",
+      "count": "{{count}} 個情境",
+      "limit_hint": "最多選 3 個"
+    },
+    "translate_lang": {
+      "menu_aria": "選擇翻譯目標語言"
     },
     "meter": {
       "live": "LIVE",

@@ -62,7 +62,7 @@ const AUDIO_LEVEL_EVENT: &str = "openspeech://audio-level";
 // cpal 运行时发出致命错误（设备拔出 / 被独占 / OS 抢占）时广播到前端：
 // 录音 store 监听后会 cancel 当前会话 + stopMic，避免 ref_count 残留。
 const AUDIO_STREAM_ERROR_EVENT: &str = "openspeech://audio-stream-error";
-const TICK_MS: u64 = 50; // 20Hz emit
+const TICK_MS: u64 = 50; // 20Hz emit — 配合前端 28 根柱子，整个波形窗口 ≈ 1.4s
 const PEAK_GAIN: f32 = 2.8; // 普通对话音量（-25 dBFS 左右）就推到波形 60%+
 // 噪声门：低于该幅值的窗口直接送 0，避免空调 / 键盘底噪把波形顶起来。
 // 0.015 ≈ -36 dBFS，安静室内底噪刚好被压住，正常说话（哪怕轻声）能干净越过。

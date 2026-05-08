@@ -1,15 +1,15 @@
 import { memo, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-const BAR_COUNT = 20;
+const BAR_COUNT = 28;
 const BAR_MIN_H = 4;
 const BAR_MAX_H = 26;
-const BAR_WIDTH_PX = 4;
+const BAR_WIDTH_PX = 2;
 // Math.pow(x, CURVE_GAMMA) 替代 sqrt 拉低音量段的可见度。0.35 比 0.5 更陡，
 // 普通说话音量（gated 后约 0.1~0.3）能直接吃到 50~70% 的高度。
 const CURVE_GAMMA = 0.35;
 
-// 50Hz 的 audio-level 高频更新如果走 zustand/useState 会触发整树 re-render。
+// 20Hz 的 audio-level 高频更新如果走 zustand/useState 会触发整树 re-render。
 // 用 useSyncExternalStore + 模块级 ring buffer：peak 只更新本地 Float32Array，
 // 然后通知所有订阅者；React 只会重渲染 Waveform 子组件本身。
 // snapshotCache：useSyncExternalStore 要求 getSnapshot 在数据未变时返回稳定引用——

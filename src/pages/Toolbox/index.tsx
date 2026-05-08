@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cn } from "@/lib/utils";
 import { useHistoryStore } from "@/stores/history";
 import { useRecordingStore, type RecordingState } from "@/stores/recording";
@@ -1114,6 +1115,8 @@ export default function ToolboxPage() {
   const prevStateRef = useRef<RecordingState>("idle");
   const textForRecRef = useRef(text);
   textForRecRef.current = text;
+  // 录音启动那一刻主窗口是否激活——决定"录音目标"是 Toolbox 还是外部 app
+  const startedFocusedRef = useRef(false);
 
   useEffect(() => {
     if (liveTranscript) lastTranscriptRef.current = liveTranscript;
@@ -1124,14 +1127,30 @@ export default function ToolboxPage() {
     prevStateRef.current = recState;
     if (prev === "idle" && recState !== "idle") {
       lastTranscriptRef.current = "";
+      startedFocusedRef.current = false;
+      void (async () => {
+        try {
+          const w = getCurrentWebviewWindow();
+          const [focused, visible] = await Promise.all([
+            w.isFocused().catch(() => false),
+            w.isVisible().catch(() => false),
+          ]);
+          startedFocusedRef.current = focused && visible;
+        } catch {
+          startedFocusedRef.current = false;
+        }
+      })();
       return;
     }
     if (prev !== "idle" && recState === "idle") {
       const captured = lastTranscriptRef.current.trim();
-      if (captured && textForRecRef.current.trim().length === 0) {
-        setTextValue(lastTranscriptRef.current, { autoRun: true });
-      }
+      const startedFocused = startedFocusedRef.current;
       lastTranscriptRef.current = "";
+      startedFocusedRef.current = false;
+      if (!startedFocused) return;
+      if (captured && textForRecRef.current.trim().length === 0) {
+        setTextValue(captured, { autoRun: true });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recState]);

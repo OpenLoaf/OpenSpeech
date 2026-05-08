@@ -566,7 +566,7 @@ export default function OverlayPage() {
                           </span>
                         )}
                         {centerKey === "wave" && (
-                          <Waveform barCount={20} />
+                          <Waveform barCount={28} />
                         )}
                       </motion.div>
                     </AnimatePresence>

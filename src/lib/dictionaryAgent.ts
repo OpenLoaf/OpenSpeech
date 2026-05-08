@@ -218,6 +218,8 @@ function emitToast(outcome: ApplyOutcome): void {
   const description = i18n.t("pages:history.edit.toast.dict_hint");
   // 用主色调 te-accent，不走 sonner.success 的绿色——这是"AI 自动学习"提示，
   // 视觉上当成 brand event 而非 generic success。
+  // description 必须走 !text-current：sonner 在 dark theme 下把 [data-description]
+  // 颜色硬编码为亮灰 hsl(0,0%,91%)，在 te-accent 黄底上看不清，强制继承 te-accent-fg。
   toast(i18n.t(baseKey, { term: outcome.term }), {
     description,
     duration: 4000,
@@ -225,6 +227,9 @@ function emitToast(outcome: ApplyOutcome): void {
       background: "var(--te-accent)",
       color: "var(--te-accent-fg)",
       borderColor: "var(--te-accent)",
+    },
+    classNames: {
+      description: "!text-current opacity-80",
     },
   });
 }

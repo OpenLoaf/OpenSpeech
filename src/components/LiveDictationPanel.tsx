@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ClipboardCopy, Check, Pencil, Sparkles, Languages } from "lucide-react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Kbd, tokensFromBinding } from "@/components/HotkeyPreview";
@@ -101,6 +102,12 @@ export function LiveDictationPanel({
   resultParts,
   errorMessage,
   onClose,
+  onCopy,
+  onEdit,
+  onRefine,
+  refineBusy = false,
+  refineSlot,
+  translateSlot,
   stack = false,
   hideActions = false,
 }: {
@@ -114,6 +121,18 @@ export function LiveDictationPanel({
   resultParts?: ResultParts | null;
   errorMessage?: string | null;
   onClose?: () => void;
+  /** Result 模式下 stats 行右侧的复制按钮回调；不传则不展示按钮。 */
+  onCopy?: () => void | Promise<void>;
+  /** Result 模式下"修改"按钮回调；点击后调用方负责弹历史编辑对话框。 */
+  onEdit?: () => void;
+  /** Result 模式下点"润色"触发；不传按钮显示为 disabled // SOON 占位。 */
+  onRefine?: () => void;
+  /** 润色流式期间禁用按钮 + 显示"润色中…"。 */
+  refineBusy?: boolean;
+  /** 替换默认润色按钮的整块 slot（HotkeyDictationCard 用它装"按钮 + 场景下拉"组）。 */
+  refineSlot?: ReactNode;
+  /** 替换默认翻译按钮的整块 slot（语言下拉）。 */
+  translateSlot?: ReactNode;
   /** 窄容器（toolbox 输入区）走纵向布局：波形在上、计时器在下、底部按钮分两行。 */
   stack?: boolean;
   /** 隐藏底部按钮区（toolbox 把停止 / 取消快捷键挪到 OutputCard 时用）。 */
@@ -163,6 +182,25 @@ export function LiveDictationPanel({
     return () => window.clearInterval(id);
   }, [waveActive]);
 
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+  const handleCopy = useCallback(async () => {
+    if (!onCopy) return;
+    try {
+      await onCopy();
+      setCopied(true);
+    } catch {}
+  }, [onCopy]);
+
+  const responseMs =
+    resultStats?.asrMs != null
+      ? (resultStats.asrMs ?? 0) + (resultStats.refineMs ?? 0)
+      : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 items-start justify-between gap-3">
@@ -196,6 +234,25 @@ export function LiveDictationPanel({
                   {formatMmSs(elapsedMs)}
                 </span>
               ) : null}
+            </>
+          ) : isResultMode && resultStats ? (
+            <>
+              <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
+                <span className="text-te-fg/60">
+                  {t("overlay:panel.result_stats.recording")}{" "}
+                </span>
+                <span className="text-te-accent tabular-nums">
+                  {formatLatency(resultStats.audioMs)}
+                </span>
+              </span>
+              <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
+                <span className="text-te-fg/60">
+                  {t("overlay:panel.result_stats.response")}{" "}
+                </span>
+                <span className="text-te-accent tabular-nums">
+                  {formatLatency(responseMs)}
+                </span>
+              </span>
             </>
           ) : (
             <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
@@ -311,41 +368,97 @@ export function LiveDictationPanel({
           stack
             ? "flex-col items-start"
             : "flex-wrap items-center gap-y-1.5",
+          isResultMode && "border-t border-te-gray/40 pt-3",
           hideActions && "hidden",
         )}
       >
         {isResultMode && resultStats ? (
-          (() => {
-            // 端到端响应时间 = ASR + AI refine（如果有）。把两段合并成单一指标，
-            // 用户更关心"从松手到完整输出花了多久"，单独看 ASR / AI 拆分没意义。
-            const responseMs =
-              resultStats.asrMs != null
-                ? (resultStats.asrMs ?? 0) + (resultStats.refineMs ?? 0)
-                : null;
-            return (
-              <div className="flex w-full flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
-                <span>
-                  <span className="text-te-fg/60">
-                    {t("overlay:panel.result_stats.recording")}{" "}
-                  </span>
-                  <span className="text-te-accent tabular-nums">
-                    {formatLatency(resultStats.audioMs)}
-                  </span>
+          <div className="flex w-full flex-wrap items-center gap-2">
+            {refineSlot ? (
+              refineSlot
+            ) : onRefine ? (
+              <button
+                type="button"
+                onClick={onRefine}
+                disabled={refineBusy}
+                aria-label={t("overlay:panel.action.refine")}
+                className={cn(
+                  "inline-flex items-center gap-2 border px-3 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+                  refineBusy
+                    ? "border-te-accent/60 bg-te-surface text-te-accent animate-pulse"
+                    : "border-te-accent/70 bg-te-surface text-te-accent hover:bg-te-accent hover:text-te-bg",
+                )}
+              >
+                <Sparkles className="size-3.5" aria-hidden />
+                {refineBusy
+                  ? t("overlay:panel.action.refining")
+                  : t("overlay:panel.action.refine")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled
+                aria-label={t("overlay:panel.action.refine")}
+                title={t("overlay:panel.coming_soon")}
+                className="inline-flex items-center gap-2 border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-xs uppercase tracking-widest text-te-light-gray/70 opacity-60"
+              >
+                <Sparkles className="size-3.5" aria-hidden />
+                {t("overlay:panel.action.refine")}
+                <span className="ml-1 text-[9px] tracking-widest text-te-light-gray/60">
+                  {t("overlay:panel.coming_soon_tag")}
                 </span>
-                <span>
-                  <span className="text-te-fg/60">
-                    {t("overlay:panel.result_stats.response")}{" "}
-                  </span>
-                  <span className="text-te-accent tabular-nums">
-                    {formatLatency(responseMs)}
-                  </span>
+              </button>
+            )}
+            {translateSlot ?? (
+              <button
+                type="button"
+                disabled
+                aria-label={t("overlay:panel.action.translate")}
+                title={t("overlay:panel.coming_soon")}
+                className="inline-flex items-center gap-2 border border-te-gray/40 bg-te-surface px-3 py-2 font-mono text-xs uppercase tracking-widest text-te-light-gray/70 opacity-60"
+              >
+                <Languages className="size-3.5" aria-hidden />
+                {t("overlay:panel.action.translate")}
+                <span className="ml-1 text-[9px] tracking-widest text-te-light-gray/60">
+                  {t("overlay:panel.coming_soon_tag")}
                 </span>
-                <span className="ml-auto text-te-fg/60">
-                  {t("overlay:panel.secondary.result")}
-                </span>
-              </div>
-            );
-          })()
+              </button>
+            )}
+            {onEdit ? (
+              <button
+                type="button"
+                onClick={onEdit}
+                aria-label={t("overlay:panel.action.edit")}
+                className="ml-auto inline-flex items-center gap-2 border border-te-gray/60 bg-te-surface px-3 py-2 font-mono text-xs uppercase tracking-widest text-te-light-gray transition-colors hover:border-te-fg hover:text-te-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent"
+              >
+                <Pencil className="size-3.5" aria-hidden />
+                {t("overlay:panel.action.edit")}
+              </button>
+            ) : null}
+            {onCopy ? (
+              <button
+                type="button"
+                onClick={handleCopy}
+                aria-label={t("overlay:panel.action.copy")}
+                className={cn(
+                  "inline-flex items-center gap-2 border px-4 py-2 font-mono text-xs uppercase tracking-widest transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-te-accent",
+                  !onEdit && "ml-auto",
+                  copied
+                    ? "border-te-accent bg-te-accent text-te-bg"
+                    : "border-te-accent text-te-accent hover:bg-te-accent hover:text-te-bg",
+                )}
+              >
+                {copied ? (
+                  <Check className="size-3.5" aria-hidden />
+                ) : (
+                  <ClipboardCopy className="size-3.5" aria-hidden />
+                )}
+                {copied
+                  ? t("overlay:panel.action.copied")
+                  : t("overlay:panel.action.copy")}
+              </button>
+            ) : null}
+          </div>
         ) : state === "error" ? (
           <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray md:text-xs">
             {t("overlay:panel.action.retry_hint")}

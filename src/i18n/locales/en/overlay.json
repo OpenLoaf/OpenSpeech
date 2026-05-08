@@ -78,7 +78,25 @@
       "stop_translate": "Stop & translate",
       "cancel": "Cancel recording",
       "retry_hint": "Press the hotkey to retry",
-      "kbd_esc": "Esc"
+      "kbd_esc": "Esc",
+      "copy": "Copy",
+      "copied": "Copied",
+      "edit": "Edit",
+      "refine": "Polish",
+      "refining": "Polishing…",
+      "translate": "Translate",
+      "translating": "Translating…"
+    },
+    "coming_soon": "Coming soon",
+    "coming_soon_tag": "// SOON",
+    "refine_scenario": {
+      "menu_aria": "Pick refine scenarios",
+      "helper": "Pick scenarios for sharper polish",
+      "count": "{{count}} scenarios",
+      "limit_hint": "Up to 3"
+    },
+    "translate_lang": {
+      "menu_aria": "Pick translation target language"
     },
     "meter": {
       "live": "LIVE",

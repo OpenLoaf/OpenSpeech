@@ -20,12 +20,11 @@
   "validation": {
     "needs_main_key": "需要配合主键使用",
     "special_keys_locked": "Esc / Enter / 方向键等特殊键需在高级设置开启后使用",
-    "needs_modifier": "需要配合修饰键使用",
+    "typing_key_needs_modifier": "字母 / 数字 / 空格 / 标点等输入键单按会拦截正常打字，必须配修饰键",
     "fn_macos_only": "Fn 键仅在 macOS 可靠可用；请用 Alt + Win 或 Right Alt",
     "modifier_only_no_main": "modifier-only 绑定不能包含主键",
     "modifier_only_min": "至少需要一个修饰键",
-    "modifier_only_min_two": "至少需要两个修饰键——单修饰键会吞掉该键的所有原生组合",
-    "combo_disallowed_main": "Tab / Backspace / Delete / CapsLock 不可作为主键，误触代价过高",
+    "combo_disallowed_main": "Tab / Backspace / Delete / CapsLock / NumLock / ScrollLock 不可作为主键，误触代价过高",
     "combo_no_fn": "Fn 键不能与主键组合，系统层无法注册",
     "double_tap_no_main": "双击绑定不能包含主键",
     "double_tap_single_mod": "双击只支持单个修饰键",
@@ -33,6 +32,9 @@
   },
   "warning": {
     "system_shortcut": "该组合可能与系统常用快捷键冲突",
-    "f_key_bare": "F1-F12 在多数 Mac 默认是亮度 / 音量等系统功能键"
+    "f_key_bare": "F1-F12 在多数 Mac 默认是亮度 / 音量等系统功能键",
+    "modifier_only_single_macos": "单修饰键会吞掉它的所有原生组合（如 ⌘+空格、⌥+方向键、⌃+空格）",
+    "modifier_only_single_windows": "单修饰键会吞掉它的所有原生组合（如 Alt+Tab、Win+E、Ctrl+C）",
+    "modifier_only_single_linux": "单修饰键会吞掉它的所有原生组合（如 Alt+Tab、Super+空格、Ctrl+C）"
   }
 }

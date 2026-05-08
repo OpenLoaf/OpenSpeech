@@ -78,7 +78,25 @@
       "stop_translate": "结束并翻译",
       "cancel": "取消本次录音",
       "retry_hint": "按快捷键重试",
-      "kbd_esc": "Esc"
+      "kbd_esc": "Esc",
+      "copy": "复制",
+      "copied": "已复制",
+      "edit": "修改",
+      "refine": "润色",
+      "refining": "润色中…",
+      "translate": "翻译",
+      "translating": "翻译中…"
+    },
+    "coming_soon": "即将上线",
+    "coming_soon_tag": "// SOON",
+    "refine_scenario": {
+      "menu_aria": "选择润色场景",
+      "helper": "选场景，提升润色精度",
+      "count": "{{count}} 个场景",
+      "limit_hint": "最多选 3 个"
+    },
+    "translate_lang": {
+      "menu_aria": "选择翻译目标语言"
     },
     "meter": {
       "live": "LIVE",

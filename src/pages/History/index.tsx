@@ -58,6 +58,14 @@ import { useRecordingStore } from "@/stores/recording";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import type { HistoryRetention } from "@/stores/settings";
+import { localizeAppName } from "@/lib/appNameI18n";
+import type { SupportedLang } from "@/i18n";
+
+function getAppLang(rawLang: string | undefined): SupportedLang {
+  if (rawLang?.toLowerCase().startsWith("zh-tw")) return "zh-TW";
+  if (rawLang?.toLowerCase().startsWith("zh")) return "zh-CN";
+  return "en";
+}
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -746,7 +754,8 @@ function HistoryDetailDialog({
   onDelete: () => void;
   onEdit: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const appLang = getAppLang(i18n.language);
   const isFailed = item.status === "failed";
   const isCancelled = item.status === "cancelled";
 
@@ -830,7 +839,8 @@ function HistoryDetailDialog({
           )}
           {item.target_app && (
             <span>
-              <span className="text-te-light-gray/60">→</span> {item.target_app}
+              <span className="text-te-light-gray/60">→</span>{" "}
+              {localizeAppName(item.target_app, appLang)}
             </span>
           )}
           {item.segment_mode && (
@@ -1024,7 +1034,8 @@ function ModelMeta({ item }: { item: HistoryItem }) {
 }
 
 function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const appLang = getAppLang(i18n.language);
   const isFailed = item.status === "failed";
   const isCancelled = item.status === "cancelled";
   const retry = useHistoryStore((s) => s.retry);
@@ -1332,7 +1343,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
             {!isFailed && item.target_app && (
               <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
                 <span className="text-te-light-gray/60">→</span>{" "}
-                {item.target_app}
+                {localizeAppName(item.target_app, appLang)}
               </span>
             )}
           </div>
@@ -1350,7 +1361,7 @@ function HistoryRow({ item, index }: { item: HistoryItem; index: number }) {
               {item.target_app && (
                 <span className="font-mono text-[10px] uppercase tracking-widest text-te-light-gray">
                   <span className="text-te-light-gray/60">→</span>{" "}
-                  {item.target_app}
+                  {localizeAppName(item.target_app, appLang)}
                 </span>
               )}
             </div>

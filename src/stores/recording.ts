@@ -18,6 +18,7 @@ import {
   type TranslateTargetLang,
 } from "@/stores/settings";
 import { useHistoryStore, type AsrSource } from "@/stores/history";
+import { useDictationResultStore } from "@/stores/dictationResult";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
 import {
@@ -410,13 +411,6 @@ let currentSessionTargetApp: string | null = null;
 // 同一次 invoke 顺手拿到的窗口标题，喂给 buildSpeechSystemPrompt 的 focusTitle 段。
 // 不进 history（schema 里没列），仅用于本会话的 prompt 上下文。
 let currentSessionFocusTitle: string | null = null;
-// 录音开始瞬间 macOS AX 查到的"focused 元素是否文本输入区域"。
-// - true：可编辑（正常 inject）
-// - false：明确不可编辑（finalize 时跳过 inject，直接走结果面板让用户复制）
-// - null：拿不到结论（AX 权限缺失 / Win / Linux），保守按可注入处理
-// silent fail（enigo 在 Finder/桌面 type 不抛错也不写字）的根因是按下时焦点本来
-// 就不在文本框；这里在源头判好，避免到 finalize 才发现"已经发空"。
-let currentSessionFocusEditable: boolean | null = null;
 
 // 本次 finalize 是否撞过 SaaS 401。文件转写或 refine 抛出 isSaasAuthError 时置 true，
 // 等 finalize 末尾 history.add 落库拿到 id 再把 id 推给 ui store，让 main.tsx 在
@@ -651,18 +645,10 @@ const startRecordingSession = (id: string) => {
   // < 100ms 完成，录音持续 1s+，结束时大概率已回填；超短录音兜底为 null。
   currentSessionTargetApp = null;
   currentSessionFocusTitle = null;
-  currentSessionFocusEditable = null;
   void getActiveWindowInfo().then((info) => {
     if (!info) return;
     currentSessionTargetApp = info.name;
     currentSessionFocusTitle = info.title || null;
-  });
-  // focus role snapshot 与 active window 一起 best-effort 异步抓。常规录音 1s+
-  // 比 invoke 慢，足够回填；finalize 看到 false 就跳过 inject 走结果面板。
-  void logInfo("[focus] session start: scheduling isFocusEditable snapshot");
-  void isFocusEditable().then((v) => {
-    currentSessionFocusEditable = v;
-    void logInfo(`[focus] session snapshot stored: ${v}`);
   });
   void startRecordingToFile(id)
     .then(() => {
@@ -1288,6 +1274,8 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       focus_title: currentSessionFocusTitle,
     });
 
+    useDictationResultStore.getState().setFromHistory(addedItem);
+
     // 401 路径只对"raw STT 都没跑通"的情形挂 pending —— text 是空、status=failed、
     // audio 还在盘上时才有重转价值。如果 raw text 已经拿到（仅 refine 401），
     // 用户已经能在末尾兜底 paste 拿到原文，再弹一个续转 dialog 反而打扰。
@@ -1325,21 +1313,24 @@ const finalizeAndWriteHistory = async (): Promise<FinalizeOutcome> => {
       return { rec, text: finalText };
     }
     // 跳过 inject 直接走结果面板的两个触发：
-    //  a) 录音起点 AX 已确认 focused 元素不是文本输入（macOS only；Win/Linux 看不到，
-    //     null 不触发）。silent fail（enigo 在 Finder/桌面 type 不抛错也不写字）的
-    //     根因，源头拦下避免发空。
+    //  a) 注入前 AX 当场查：focused 元素不是文本输入（macOS only；Win/Linux 看不到，
+    //     null 不触发）。录音开始时焦点不可信——用户可能再按了 hotkey 后才点进输入框，
+    //     或 web 表单的 textarea 直到聚焦才被 AX 识别为 editable，所以等到要写字
+    //     的瞬间再问最准。silent fail（enigo 在 Finder/桌面 type 不抛错也不写字）
+    //     的根因在这一步拦下避免发空。
     //  b) 录音期间用户切走 / 最小化原 app，前台已不是按下快捷键时的目标。继续 paste
     //     会把文字塞到无关 app（Finder / 桌面 / 其他工具）。
     // 满足任一条件：写剪贴板（L1103 不一定走过，比如 refine 失败回退到 raw 的路径）+
     // 推面板让用户手动决定。
-    const focusNotEditable = currentSessionFocusEditable === false;
+    const focusEditable = await isFocusEditable();
+    const focusNotEditable = focusEditable === false;
     const appChanged = await targetAppChangedAtFinalize();
     void logInfo(
-      `[inject] tail gate check focusEditable=${currentSessionFocusEditable} focusNotEditable=${focusNotEditable} appChanged=${appChanged} recordedApp=${currentSessionTargetApp ?? "null"}`,
+      `[inject] tail gate check focusEditable=${focusEditable} focusNotEditable=${focusNotEditable} appChanged=${appChanged} recordedApp=${currentSessionTargetApp ?? "null"}`,
     );
     if (focusNotEditable || appChanged) {
       void logWarn(
-        `[inject] tail skipped → result panel focusEditable=${currentSessionFocusEditable} appChanged=${appChanged}`,
+        `[inject] tail skipped → result panel focusEditable=${focusEditable} appChanged=${appChanged}`,
       );
       try {
         await writeClipboard(finalText);
@@ -1463,9 +1454,6 @@ const injectIncremental = (fullText: string) => {
   // 用户关闭了"逐字流式输出"——本轮全部跳过，让末尾兜底走整段 paste。
   // 不更新 lastInjectedText，保证 finalize 时 remaining = 完整 finalText。
   if (!useSettingsStore.getState().dictation.streamingInject) return;
-  // AX 明确告诉我们焦点不在文本输入区——流式 type 只会 silent fail，跳过即可，
-  // finalize 会走结果面板让用户复制。null（拿不到结论 / Win / Linux）仍尝试。
-  if (currentSessionFocusEditable === false) return;
   // 服务端纠错把已注入的前缀改写时（极少），无法回退已敲下去的字符；
   // 跳过本轮增量，等末尾兜底 diff 把"剩余的"再敲一次（用户视觉上会出现重复，
   // 但比反复抖动更可控）。
