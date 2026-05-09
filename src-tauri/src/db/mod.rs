@@ -248,5 +248,22 @@ ALTER TABLE dictionary ADD COLUMN created_by TEXT;
 "#,
             kind: MigrationKind::Up,
         },
+        // v14：dictionary 增加 note —— agent 决策时返回的"含义/为什么入库"说明。
+        // 字典页副标题展示，refine prompt 里也跟着 term 一起喂给 LLM，让模型按上下文偏置。
+        Migration {
+            version: 14,
+            description: "dictionary_add_note",
+            sql: "ALTER TABLE dictionary ADD COLUMN note TEXT;",
+            kind: MigrationKind::Up,
+        },
+        // v15：跨平台稳定的应用标识（macOS bundle id / Windows exe basename / Linux process）。
+        // target_app 是显示名，会被 i18n / 用户改名等扰动；AppOverride 必须按稳定 key 匹配，
+        // 否则 retry 路径无从精确命中"按应用覆盖"。老行为 NULL，由前端 fallback 到全局规则。
+        Migration {
+            version: 15,
+            description: "history_add_target_app_id",
+            sql: "ALTER TABLE history ADD COLUMN target_app_id TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
