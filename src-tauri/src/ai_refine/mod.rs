@@ -52,6 +52,10 @@ pub struct RefineChatInput {
     pub request_time: Option<String>,
     #[serde(default)]
     pub target_app: Option<String>,
+    /// 前端按 TargetApp 类型预拼好的 AppTypeAddon 段内容（不含外层 system-tag），
+    /// 多语言文案 + classify 逻辑都在前端，Rust 只负责拼装。None / 空串 = 不注入。
+    #[serde(default)]
+    pub target_app_addon: Option<String>,
     #[serde(default)]
     pub domains: Option<Vec<String>>,
     #[serde(default)]
@@ -322,15 +326,16 @@ fn sanitize_domains(raw: Option<&[String]>) -> Vec<String> {
     seen
 }
 
-/// 拼第一条 context user message。五段全空时返回 None；任一段非空就拼整条。
+/// 拼第一条 context user message。六段全空时返回 None；任一段非空就拼整条。
 /// 顺序：Domains（最前，给后续段提供领域偏向）→ HotWords → ConversationHistory →
-/// MessageContext → TargetApp。
+/// MessageContext → TargetApp → AppTypeAddon。
 pub fn build_context_message(
     domains: Option<&[String]>,
     hotwords: Option<&[String]>,
     history_entries: Option<&[String]>,
     request_time: Option<&str>,
     target_app: Option<&str>,
+    target_app_addon: Option<&str>,
 ) -> Option<String> {
     let dom = sanitize_domains(domains);
     let hot = hotwords
@@ -351,7 +356,17 @@ pub fn build_context_message(
         .unwrap_or_default();
     let req_time = request_time.map(str::trim).filter(|s| !s.is_empty());
     let app = sanitize_target_app(target_app);
-    if dom.is_empty() && hot.is_empty() && hist.is_empty() && req_time.is_none() && app.is_none() {
+    // AppTypeAddon 必须依附 TargetApp——没识别到目标应用时，addon 也无意义；同时空串视作 None。
+    let addon = target_app_addon
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|_| app.is_some());
+    if dom.is_empty()
+        && hot.is_empty()
+        && hist.is_empty()
+        && req_time.is_none()
+        && app.is_none()
+    {
         return None;
     }
     let mut parts: Vec<String> = Vec::new();
@@ -383,6 +398,11 @@ pub fn build_context_message(
             "<system-tag type=\"TargetApp\">\n\tname: {name}\n</system-tag>"
         ));
     }
+    if let Some(content) = addon {
+        parts.push(format!(
+            "<system-tag type=\"AppTypeAddon\">\n\t{content}\n</system-tag>"
+        ));
+    }
     Some(parts.join("\n\n"))
 }
 
@@ -393,15 +413,21 @@ fn build_messages(
     history_entries: Option<&[String]>,
     request_time: Option<&str>,
     target_app: Option<&str>,
+    target_app_addon: Option<&str>,
     user_text: &str,
 ) -> Vec<Value> {
     let mut messages: Vec<Value> = Vec::new();
     if !system_prompt.trim().is_empty() {
         messages.push(json!({ "role": "system", "content": system_prompt }));
     }
-    if let Some(ctx) =
-        build_context_message(domains, hotwords, history_entries, request_time, target_app)
-    {
+    if let Some(ctx) = build_context_message(
+        domains,
+        hotwords,
+        history_entries,
+        request_time,
+        target_app,
+        target_app_addon,
+    ) {
         messages.push(json!({ "role": "user", "content": ctx }));
     }
     messages.push(json!({ "role": "user", "content": user_text }));
@@ -451,6 +477,7 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         input.history_entries.as_deref(),
         input.request_time.as_deref(),
         input.target_app.as_deref(),
+        input.target_app_addon.as_deref(),
         &input.user_text,
     );
 
@@ -486,9 +513,9 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         "body": body,
     });
     let request_envelope = serde_json::to_string_pretty(&envelope).ok();
-    if log::log_enabled!(log::Level::Trace) {
+    if log::log_enabled!(log::Level::Debug) {
         if let Some(ref s) = request_envelope {
-            log::trace!("[ai_refine] request body:\n{}", s);
+            log::debug!("[ai_refine] request body:\n{}", s);
         }
     }
 
@@ -712,9 +739,19 @@ mod tests {
 
     #[test]
     fn context_none_when_all_empty() {
-        assert_eq!(build_context_message(None, None, None, None, None), None);
         assert_eq!(
-            build_context_message(Some(&[]), Some(&[]), Some(&[]), Some(""), Some("")),
+            build_context_message(None, None, None, None, None, None),
+            None
+        );
+        assert_eq!(
+            build_context_message(
+                Some(&[]),
+                Some(&[]),
+                Some(&[]),
+                Some(""),
+                Some(""),
+                Some("")
+            ),
             None
         );
     }
@@ -722,14 +759,14 @@ mod tests {
     #[test]
     fn context_hotwords_only() {
         let hw = vec!["OpenSpeech".to_string(), "OpenLoaf".to_string()];
-        let got = build_context_message(None, Some(&hw), None, None, None).unwrap();
+        let got = build_context_message(None, Some(&hw), None, None, None, None).unwrap();
         let want = "<system-tag type=\"HotWords\">\n\tOpenSpeech、OpenLoaf\n</system-tag>";
         assert_eq!(got, want);
     }
 
     #[test]
     fn context_target_app_only() {
-        let got = build_context_message(None, None, None, None, Some("微信")).unwrap();
+        let got = build_context_message(None, None, None, None, Some("微信"), None).unwrap();
         let want = "<system-tag type=\"TargetApp\">\n\tname: 微信\n</system-tag>";
         assert_eq!(got, want);
     }
@@ -737,19 +774,19 @@ mod tests {
     #[test]
     fn context_target_app_filters_self_and_blank() {
         assert_eq!(
-            build_context_message(None, None, None, None, Some("OpenSpeech")),
+            build_context_message(None, None, None, None, Some("OpenSpeech"), None),
             None
         );
         assert_eq!(
-            build_context_message(None, None, None, None, Some("openspeech")),
+            build_context_message(None, None, None, None, Some("openspeech"), None),
             None
         );
         assert_eq!(
-            build_context_message(None, None, None, None, Some("Open Speech")),
+            build_context_message(None, None, None, None, Some("Open Speech"), None),
             None
         );
         assert_eq!(
-            build_context_message(None, None, None, None, Some("   ")),
+            build_context_message(None, None, None, None, Some("   "), None),
             None
         );
     }
@@ -757,7 +794,7 @@ mod tests {
     #[test]
     fn context_domains_only() {
         let dom = vec!["软件开发".to_string(), "AI / 机器学习".to_string()];
-        let got = build_context_message(Some(&dom), None, None, None, None).unwrap();
+        let got = build_context_message(Some(&dom), None, None, None, None, None).unwrap();
         let want = "<system-tag type=\"Domains\">\n\t软件开发、AI / 机器学习\n</system-tag>";
         assert_eq!(got, want);
     }
@@ -773,13 +810,56 @@ mod tests {
             "金融投资".to_string(),
             "心理学".to_string(), // 第 4 个，应被丢
         ];
-        let got = build_context_message(Some(&dom), None, None, None, None).unwrap();
+        let got = build_context_message(Some(&dom), None, None, None, None, None).unwrap();
         let want = "<system-tag type=\"Domains\">\n\t软件开发、医学健康、金融投资\n</system-tag>";
         assert_eq!(got, want);
     }
 
     #[test]
-    fn context_full_five_sections_domains_first() {
+    fn context_addon_attaches_after_target_app() {
+        let got = build_context_message(
+            None,
+            None,
+            None,
+            None,
+            Some("微信"),
+            Some("聊天类应用：短句紧凑、保留语气标点"),
+        )
+        .unwrap();
+        let want = "<system-tag type=\"TargetApp\">\n\tname: 微信\n</system-tag>\n\n<system-tag type=\"AppTypeAddon\">\n\t聊天类应用：短句紧凑、保留语气标点\n</system-tag>";
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn context_addon_dropped_without_target_app() {
+        // 没识别到目标应用时 addon 也不注入——避免无主语的"该应用…"指令落空。
+        let got = build_context_message(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("聊天类应用：短句紧凑"),
+        );
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn context_addon_dropped_when_target_app_filtered() {
+        // OpenSpeech 自身被过滤后 addon 也跟着丢。
+        let got = build_context_message(
+            None,
+            None,
+            None,
+            None,
+            Some("OpenSpeech"),
+            Some("addon content"),
+        );
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn context_full_six_sections_addon_last() {
         let dom = vec!["软件开发".to_string()];
         let hw = vec!["OpenSpeech".to_string(), "OpenLoaf".to_string()];
         let hist = vec![
@@ -788,9 +868,16 @@ mod tests {
             "[2 分钟前] 这个 dialog 打开的时候应该是 diff 的那种形式，每一行有什么不一样。".to_string(),
         ];
         let req = "2026-05-01T08:08:28.551Z (UTC)";
-        let got = build_context_message(Some(&dom), Some(&hw), Some(&hist), Some(req), Some("微信"))
-            .unwrap();
-        let want = "<system-tag type=\"Domains\">\n\t软件开发\n</system-tag>\n\n<system-tag type=\"HotWords\">\n\tOpenSpeech、OpenLoaf\n</system-tag>\n\n<system-tag type=\"ConversationHistory\">\n\t[8 分钟前] 首页有个布局的 bug 修复一下。\n\n\t[7 分钟前] 我需要 Markdown 格式，我在哪里可以直接复制？或者你给我一个文件的路径，我直接从文件里面复制。\n\n\t[2 分钟前] 这个 dialog 打开的时候应该是 diff 的那种形式，每一行有什么不一样。\n</system-tag>\n\n<system-tag type=\"MessageContext\">\n\trequestTime: 2026-05-01T08:08:28.551Z (UTC)\n</system-tag>\n\n<system-tag type=\"TargetApp\">\n\tname: 微信\n</system-tag>";
+        let got = build_context_message(
+            Some(&dom),
+            Some(&hw),
+            Some(&hist),
+            Some(req),
+            Some("微信"),
+            Some("聊天类应用：短句紧凑、保留语气标点"),
+        )
+        .unwrap();
+        let want = "<system-tag type=\"Domains\">\n\t软件开发\n</system-tag>\n\n<system-tag type=\"HotWords\">\n\tOpenSpeech、OpenLoaf\n</system-tag>\n\n<system-tag type=\"ConversationHistory\">\n\t[8 分钟前] 首页有个布局的 bug 修复一下。\n\n\t[7 分钟前] 我需要 Markdown 格式，我在哪里可以直接复制？或者你给我一个文件的路径，我直接从文件里面复制。\n\n\t[2 分钟前] 这个 dialog 打开的时候应该是 diff 的那种形式，每一行有什么不一样。\n</system-tag>\n\n<system-tag type=\"MessageContext\">\n\trequestTime: 2026-05-01T08:08:28.551Z (UTC)\n</system-tag>\n\n<system-tag type=\"TargetApp\">\n\tname: 微信\n</system-tag>\n\n<system-tag type=\"AppTypeAddon\">\n\t聊天类应用：短句紧凑、保留语气标点\n</system-tag>";
         assert_eq!(got, want);
     }
 
@@ -801,6 +888,7 @@ mod tests {
             "you are a polish bot",
             None,
             Some(&hw),
+            None,
             None,
             None,
             None,
@@ -826,6 +914,7 @@ mod tests {
             None,
             None,
             Some("iTerm2"),
+            None,
             "删 src 斜杠 utils 目录",
         );
         assert_eq!(msgs.len(), 3);
@@ -835,11 +924,30 @@ mod tests {
     }
 
     #[test]
+    fn build_messages_with_addon() {
+        let msgs = build_messages(
+            "polish",
+            None,
+            None,
+            None,
+            None,
+            Some("iTerm2"),
+            Some("代码编辑器 / 终端：保留命令与文件名"),
+            "rm -rf node_modules",
+        );
+        assert_eq!(msgs.len(), 3);
+        let ctx = msgs[1]["content"].as_str().unwrap();
+        assert!(ctx.contains("AppTypeAddon"));
+        assert!(ctx.contains("代码编辑器 / 终端"));
+    }
+
+    #[test]
     fn build_messages_with_domains() {
         let dom = vec!["软件开发".to_string(), "AI / 机器学习".to_string()];
         let msgs = build_messages(
             "polish",
             Some(&dom),
+            None,
             None,
             None,
             None,
@@ -854,7 +962,7 @@ mod tests {
 
     #[test]
     fn build_messages_skips_system_when_empty() {
-        let msgs = build_messages("", None, None, None, None, None, "hi");
+        let msgs = build_messages("", None, None, None, None, None, None, "hi");
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["role"], "user");
     }
