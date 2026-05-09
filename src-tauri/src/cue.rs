@@ -16,6 +16,8 @@ use rodio::mixer::Mixer;
 static START_WAV: &[u8] = include_bytes!("../resources/cues/start.wav");
 static STOP_WAV: &[u8] = include_bytes!("../resources/cues/stop.wav");
 static CANCEL_WAV: &[u8] = include_bytes!("../resources/cues/cancel.wav");
+// "再按一下取消"提示进入 armed 阶段时的双声短 beep。
+static ARMED_WAV: &[u8] = include_bytes!("../resources/cues/armed.wav");
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 // 录音活跃中。hotkey 按下时若 active=true，说明这是 toggle off 路径，
@@ -103,6 +105,13 @@ pub fn play_cancel() {
     play_bytes(CANCEL_WAV);
 }
 
+pub fn play_armed() {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    play_bytes(ARMED_WAV);
+}
+
 #[tauri::command]
 pub fn cue_set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
@@ -121,6 +130,7 @@ pub fn cue_play(kind: String) {
         "start" => play_start_internal(false),
         "stop" => play_stop(),
         "cancel" => play_cancel(),
+        "armed" => play_armed(),
         other => log::warn!("[cue] unknown kind: {other}"),
     }
 }
