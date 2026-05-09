@@ -70,16 +70,23 @@ fn play_bytes(bytes: &'static [u8]) {
     }
 }
 
-/// hotkey 按下瞬间从 Rust 侧直接调；ACTIVE/ENABLED 守卫由本函数承担，
-/// 调用方不必判断。
-pub fn play_start() {
+/// 内部统一播 start：`respect_active=true` 时遵守 ACTIVE 守卫（hotkey 自动
+/// 派发用，避免 toggle off 路径重播 start）；`false` 时无视 ACTIVE，给前端
+/// "录音中跨模式切换"这类显式声学反馈用。
+fn play_start_internal(respect_active: bool) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    if ACTIVE.load(Ordering::Relaxed) {
+    if respect_active && ACTIVE.load(Ordering::Relaxed) {
         return;
     }
     play_bytes(START_WAV);
+}
+
+/// hotkey 按下瞬间从 Rust 侧直接调；ACTIVE/ENABLED 守卫由本函数承担，
+/// 调用方不必判断。
+pub fn play_start() {
+    play_start_internal(true);
 }
 
 pub fn play_stop() {
@@ -109,7 +116,9 @@ pub fn cue_set_active(active: bool) {
 #[tauri::command]
 pub fn cue_play(kind: String) {
     match kind.as_str() {
-        "start" => play_start(),
+        // 显式 invoke 来源（subscribe 状态边沿 + 跨模式切换）意图明确，绕开
+        // ACTIVE 守卫直接播——否则录音中"听写↔翻译"切换会因 ACTIVE=true 静音。
+        "start" => play_start_internal(false),
         "stop" => play_stop(),
         "cancel" => play_cancel(),
         other => log::warn!("[cue] unknown kind: {other}"),
