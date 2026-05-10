@@ -242,9 +242,6 @@ pub fn apply_bindings<R: Runtime>(
         .ok_or_else(|| "HotkeyState not initialized".to_string())?;
     let plugin = app.global_shortcut();
 
-    // 整个 unregister→register 流程独占锁，避免并发 apply 交错造成系统层重复注册。
-    let mut s = state.lock().map_err(|e| e.to_string())?;
-
     // 先把 modifier-only 路径分流出去（走 rdev 订阅，不占用系统快捷键注册名额）。
     let modifier_only_bindings: Vec<(String, HotkeyBinding)> = payload
         .bindings
@@ -269,7 +266,7 @@ pub fn apply_bindings<R: Runtime>(
         );
     }
 
-    // 1. 先计算 combo 目标集合，便于幂等判断。
+    // 1. 先计算 combo 目标集合（不持任何锁）。
     let mut desired: HashMap<Shortcut, ActiveCombo> = HashMap::new();
     for (id_str, maybe) in &payload.bindings {
         let Some(id) = parse_binding_id(id_str) else {
@@ -312,29 +309,38 @@ pub fn apply_bindings<R: Runtime>(
         );
     }
 
-    // 幂等：如果目标与当前激活完全一致，跳过所有 OS 调用。
-    let same = desired.len() == s.active.len()
+    // 2. 抓一份当前 active 的快照后立即释放锁。后续 plugin.unregister/register
+    //    走 run_on_main_thread + rx.recv，是阻塞调用，且会回到主线程的 hotkey
+    //    handler 路径（handler 同样要拿这把 state 锁）。**全程持锁会导致工作
+    //    线程 ↔ 主线程互相等死**——典型症状是 unregister 第一条日志后再无任何
+    //    输出、UI 完全冻结，必须强退。
+    let snapshot: HashMap<Shortcut, ActiveCombo> = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.active.clone()
+    };
+
+    // 幂等：目标与当前激活完全一致就跳过所有 OS 调用。
+    let same = desired.len() == snapshot.len()
         && desired.iter().all(|(sc, want)| {
-            s.active
+            snapshot
                 .get(sc)
                 .is_some_and(|cur| cur.id == want.id && cur.expected == want.expected)
         });
     if same {
         log::warn!(
             "[hotkey] apply_bindings: no-op, already at target ({} active)",
-            s.active.len()
+            snapshot.len()
         );
         return Ok(());
     }
 
-    // 2. unregister 当前激活的全部 shortcut
-    for sc in s.active.keys() {
+    // 3. unregister 当前激活的全部 shortcut（**不持锁**）。
+    for sc in snapshot.keys() {
         log::warn!("[hotkey]   unregister previous: {sc:?}");
         let _ = plugin.unregister(*sc);
     }
-    s.active.clear();
 
-    // 3. register 新的
+    // 4. register 新的（**不持锁**）。
     let mut next: HashMap<Shortcut, ActiveCombo> = HashMap::new();
     for (sc, combo) in desired {
         let result = plugin.register(sc).or_else(|first_err| {
@@ -369,8 +375,13 @@ pub fn apply_bindings<R: Runtime>(
         }
     }
 
+    // 5. 重新取锁写回 active。两次取锁之间若有并发 apply 进来也无妨——
+    //    最后写入者赢，state.active 与最近一次 register 结果一致即可。
     let total = next.len();
-    s.active = next;
+    {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        s.active = next;
+    }
     log::warn!("[hotkey] apply_bindings done: {total} active shortcuts");
 
     Ok(())
@@ -510,9 +521,14 @@ fn pause_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .try_state::<SharedHotkeyState>()
         .ok_or_else(|| "HotkeyState missing".to_string())?;
     let plugin = app.global_shortcut();
-    let s = state.lock().map_err(|e| e.to_string())?;
+    // 抓快照即放锁——plugin.unregister 阻塞主线程，handler 又要拿同一把锁，
+    // 持锁跨过去会死锁（详见 apply_bindings 注释）。
+    let snapshot: Vec<Shortcut> = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.active.keys().copied().collect()
+    };
     let mut count = 0;
-    for sc in s.active.keys() {
+    for sc in &snapshot {
         if plugin.unregister(*sc).is_ok() {
             count += 1;
         }
@@ -526,9 +542,12 @@ fn resume_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .try_state::<SharedHotkeyState>()
         .ok_or_else(|| "HotkeyState missing".to_string())?;
     let plugin = app.global_shortcut();
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let snapshot: Vec<Shortcut> = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.active.keys().copied().collect()
+    };
     let mut count = 0;
-    for sc in s.active.keys() {
+    for sc in &snapshot {
         match plugin.register(*sc) {
             Ok(()) => count += 1,
             Err(e) => log::warn!("[hotkey] resume_combos: register {sc:?} failed: {e:?}"),
