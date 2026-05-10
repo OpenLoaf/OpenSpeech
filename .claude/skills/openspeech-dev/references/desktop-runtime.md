@@ -105,15 +105,7 @@
 - `.shadow(true)`（NSWindow 系统 shadow）+ transparent + 圆角内容 → 底部圆角外露出**矩形 shadow 角**，看起来像两个直角。
 - 解法：`.shadow(false)` + CSS `shadow-2xl` 自己画，shadow 跟着 `rounded-2xl` 边界。但 webview 必须**比 panel 视觉尺寸大一圈**（每边 +40px 透明边距），否则 CSS shadow 被 webview 边界裁掉。
 
-### `data-tauri-drag-region` 不走 closest
-
-- wry 检查的是 **`event.target` 自身** 的 attribute，不爬祖先链。容器加了不够，里面的 plain `<div>`（标题、提示文字）也得各自加，否则 mousedown 命中子元素就不触发拖动。
-- 交互元素（textarea / button）**不**加 —— 自然拦截 mousedown 不拖动。
-
-### 多 webview 数据契约
-
-- quick panel 是独立 JS runtime（同 overlay 模式），按 `WINDOW_LABEL === "quick-panel"` 在 `main.tsx` 分流；boot 跑精简版（settings + history + i18n），不挂 hotkey listener / recording listener。
-- 每次 mount 主动 `useHistoryStore.reload()` —— 主窗里 `add()` 后，quick panel 的内存 store 看不到，必须从 SQLite 重读。
+> 前端侧契约（drag region 子元素逐个标注、quick panel 多 webview 数据契约）见私仓 `openspeech-frontend` skill。
 
 ---
 

@@ -29,7 +29,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 
 | 任务类别 | 触发词 | 先读 |
 |---|---|---|
-| 改 UI / 加文案 / 改样式 / 新建组件 / 新建 Dialog | i18n、文案、TE 风、样式、Logo、drag region、Dialog | `references/frontend.md` |
+| 改 UI / 加文案 / 改样式 / 新建组件 / 新建 Dialog | i18n、文案、TE 风、样式、Logo、drag region、Dialog | 私仓 OpenSpeech-Frontend 的 `openspeech-frontend` skill（src/.claude/skills/openspeech-frontend/） |
 | 改窗口 / 托盘 / 关闭行为 / 加 invoke / 加系统权限 / 改开机自启 / 加新 quick panel 模式 | 窗口、托盘、关闭、Cmd+Q、Dock、capability、autostart、overlay、quick panel、Spotlight、nonactivating panel、drag region | `references/desktop-runtime.md` |
 | 改录音 / STT / 调 SaaS realtime ASR / 改触发录音 gate / 新增直连 SaaS 链路 | 录音、STT、ASR、PCM、SaaS、未登录、saas-file、chat completions、token 过期、401、被踢登录 | `references/asr-recording.md` |
 | 发版 / 改签名 / 测 updater / 加 NSIS 语言 | 发版、签名、updater、NSIS、entitlement | `references/release.md`（执行流程走 `openspeech-release` skill） |
@@ -96,7 +96,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 
 - shadcn `base-nova` 风格、`neutral` 基色
 - 正文 `@fontsource-variable/inter`，mono `@fontsource/space-mono`
-- 视觉语言 = **TE 工业风**（详见同目录软链 `te-industrial-frontend` skill 与 `references/frontend.md`）
+- 视觉语言 = **TE 工业风**（详细规则在私仓 `openspeech-frontend` skill 与软链 `te-industrial-frontend` skill）
 
 ---
 
@@ -104,25 +104,8 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 
 ```
 docs/                           业务规则 SSoT（见"业务规则索引"）
-src/
-├── components/
-│   ├── ui/                     shadcn 生成产物（不要手写）
-│   ├── Layout.tsx              应用壳 + 关闭流程订阅
-│   ├── SettingsContent.tsx     设置内容（Dialog 与 /settings 共享）
-│   ├── *Dialog.tsx             各类弹窗
-│   ├── HotkeyPreview.tsx       快捷键视觉预览（Home / Onboarding 共用）
-│   ├── LiveDictationPanel.tsx  录音波形 + realtime 转写面板
-│   └── LoadingScreen.tsx       启动 splash
-├── pages/                      每页一个目录 + index.tsx
-│   └── Onboarding/             4 步引导（当前为 UI mock，未接业务）
-├── stores/                     Zustand：hotkeys / recording / settings / ui / history / dictionary / playback
-├── lib/                        invoke 封装：audio / stt / secrets / db / ids / autostart / permissions / i18n-sync / errors
-├── i18n/
-│   ├── index.ts                i18next 初始化（auto-glob locales/*/*.json）
-│   └── locales/{zh-CN,zh-TW,en}/{common,settings,pages,onboarding,overlay,dialogs,errors,hotkey,tray}.json
-├── router.tsx                  React Router v7 createBrowserRouter
-├── App.css                     Tailwind v4 + shadcn vars + TE 双主题 vars
-└── main.tsx                    bootPromise 解析后切到 RouterProvider
+src/                            前端源码（私仓 OpenSpeech-Frontend，公开仓 .gitignore；见私仓
+                                openspeech-frontend skill 取详细约定）
 src-tauri/
 ├── src/
 │   ├── lib.rs                  tauri::Builder + 插件注册 + setup
@@ -210,6 +193,7 @@ src-tauri/
 
 ## 协作技能
 
+- **`openspeech-frontend`**（私仓 OpenSpeech-Frontend `.claude/skills/`，仅本机 src/ 在时可见）—— 前端规约（i18n / TE 样式 / Drag region / Dialog / Logo），做 UI / 改文案 / 调样式时先加载。
 - **`te-industrial-frontend`**（软链）—— TE 工业风实现指南，做 UI 时优先激活。
 - **`openloaf-saas-sdk-rust`**（软链）—— 任何登录 / 用户档案 / AI 工具 / realtime ASR 实现先读它。
 - **`openspeech-release`** —— 发版执行流程入口（本技能 `references/release.md` 只讲"为什么这样"）。
