@@ -4,9 +4,9 @@
   "version": "../package.json",
   "identifier": "com.openspeech.app",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "bash scripts/frontend.sh dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "bash scripts/frontend.sh build",
     "frontendDist": "../dist"
   },
   "app": {
