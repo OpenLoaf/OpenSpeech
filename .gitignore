@@ -58,3 +58,9 @@ dist-ssr
 
 # MCP server 本地配置（每位开发者可能不同，不入库）
 .mcp.json
+
+# 前端源码已迁出到私有仓 OpenLoaf/OpenSpeech-Frontend。
+# 本地路径仍是 ./src，由独立 .git 管理（src/.git 指向私仓）。
+# 公开仓不再追踪 src/，外人 clone 后由 @openloaf/openspeech-frontend
+# npm 包提供已 build 的 dist 给 Tauri 消费。
+/src/
