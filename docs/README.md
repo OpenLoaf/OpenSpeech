@@ -16,6 +16,7 @@
 | [privacy.md](./privacy.md) | 数据与隐私规则 |
 | [permissions.md](./permissions.md) | 各平台系统权限规则 |
 | [onboarding.md](./onboarding.md) | 首次启动向导 + 持久横条 |
+| [hints.md](./hints.md) | 教学型交互提示（悬浮条 / 听写卡片附近的小气泡） |
 | [subscription.md](./subscription.md) | 订阅与计费规则 |
 | [speech-providers.md](./speech-providers.md) | 语音引擎 Provider 抽象规划（多服务商 / 开源适配器） |
 | [cloud-endpoints.md](./cloud-endpoints.md) | 云接口接入点 × 供应商能力矩阵（实现层快照）|

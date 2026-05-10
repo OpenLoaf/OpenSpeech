@@ -68,7 +68,7 @@ const TRAY_SELECT_MIC_EVENT: &str = "openspeech://tray-select-mic";
 pub struct TrayLabels {
     pub feedback: String,
     pub open_home: String,
-    /// `show_main_window` 当前 binding 的 muda accelerator 字符串（如 "Ctrl+Alt+O"）。
+    /// `show_main_window` 当前 binding 的 muda accelerator 字符串（如 "CmdOrCtrl+Shift+O"）。
     /// 空字符串 = 不显示快捷键。前端 i18n-sync 在 binding 变动 / 切语言时一起 push。
     #[serde(default)]
     pub open_home_accel: String,
@@ -146,6 +146,11 @@ fn get_platform_info() -> serde_json::Value {
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+fn get_saas_sdk_version() -> &'static str {
+    env!("OPENLOAF_SAAS_SDK_VERSION")
 }
 
 /// 应急清场：强制 drop cpal stream + 关掉残留 stt session。
@@ -973,6 +978,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             get_platform_info,
+            get_saas_sdk_version,
             exit_app,
             app_emergency_reset,
             relaunch_app,

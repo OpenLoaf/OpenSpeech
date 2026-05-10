@@ -30,7 +30,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 | 任务类别 | 触发词 | 先读 |
 |---|---|---|
 | 改 UI / 加文案 / 改样式 / 新建组件 / 新建 Dialog | i18n、文案、TE 风、样式、Logo、drag region、Dialog | `references/frontend.md` |
-| 改窗口 / 托盘 / 关闭行为 / 加 invoke / 加系统权限 / 改开机自启 | 窗口、托盘、关闭、Cmd+Q、Dock、capability、autostart | `references/desktop-runtime.md` |
+| 改窗口 / 托盘 / 关闭行为 / 加 invoke / 加系统权限 / 改开机自启 / 加新 quick panel 模式 | 窗口、托盘、关闭、Cmd+Q、Dock、capability、autostart、overlay、quick panel、Spotlight、nonactivating panel、drag region | `references/desktop-runtime.md` |
 | 改录音 / STT / 调 SaaS realtime ASR / 改触发录音 gate / 新增直连 SaaS 链路 | 录音、STT、ASR、PCM、SaaS、未登录、saas-file、chat completions、token 过期、401、被踢登录 | `references/asr-recording.md` |
 | 发版 / 改签名 / 测 updater / 加 NSIS 语言 | 发版、签名、updater、NSIS、entitlement | `references/release.md`（执行流程走 `openspeech-release` skill） |
 | 让 Claude 自己看 / 操作运行中的 UI | 截图、看一下界面、控制 UI、读 console | `references/tauri-mcp.md` |

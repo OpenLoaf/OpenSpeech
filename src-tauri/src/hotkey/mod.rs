@@ -438,13 +438,13 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
         return;
     }
 
-    // EditLastRecord：直接拉起 quick panel 的 edit-last-record 模式。
+    // EditLastRecord：toggle quick panel 的 edit-last-record 模式（再按一次自动收起）。
     // 不进 overlay show / cue / HOTKEY_EVENT —— 这是非录音类操作，与主窗口完全解耦，
     // 主窗口隐藏在托盘也照样工作。
     if matches!(id, BindingId::EditLastRecord) {
         if phase == "pressed" {
-            if let Err(e) = crate::quick_panel::show(app, "edit-last-record") {
-                log::warn!("[quick-panel] show failed: {e:?}");
+            if let Err(e) = crate::quick_panel::toggle(app, "edit-last-record") {
+                log::warn!("[quick-panel] toggle failed: {e:?}");
             }
         }
         return;

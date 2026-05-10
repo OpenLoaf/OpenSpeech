@@ -40,6 +40,10 @@ pub struct DictAgentEntry {
     pub term: String,
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// 历次 agent 决策落下来的"含义/为什么入库"说明。给模型当上下文，让它能利用
+    /// 旧条目的语义判断本次纠错是否归到同一项；同时避免重复 add 同一术语换个 reason。
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,14 +158,14 @@ fn build_system_prompt() -> String {
 <reference_tags>
 - <BaselineText>: ASR 给出的原始 / AI 优化后的最终文本（用户改之前看到的版本）。
 - <EditedText>: 用户改完后的最终文本。
-- <CurrentDictionary>: 当前字典里所有已存条目，每条形如 `id=... | term="..." | aliases=[...]`。term 是希望模型输出的"正确写法"，aliases 是常见的同音误识别。
+- <CurrentDictionary>: 当前字典里所有已存条目，每条形如 `id=... | term="..." | aliases=[...] | note="..."`。term 是希望模型输出的"正确写法"，aliases 是常见的同音误识别，note 是该条目的含义/上次入库原因（历史决策痕迹）。
 </reference_tags>
 
 <core_rules>
 1. 判断标准：把 BaselineText vs EditedText 当成"ASR 把 X 错听成 Y"的样本——若 X 与 Y **同音 / 谐音 / 近形 / 近发音**，且 Y 看起来更像合理的目标输出（专有名词、术语、人名、项目名、常见词的正确写法），就值得入字典。**不必等错误重复出现**——一次明显的同音误识别就足够 add 一条偏置。
-2. add：BaselineText 中的错词在 CurrentDictionary 里**完全没有 term 或 alias 命中**；EditedText 里对应的正确写法清晰可定位。返回 `{ "action": "add", "term": "<正确写法>", "aliases": ["<原错词>"] }`。
-3. update：BaselineText 中的错词正好可以归到 CurrentDictionary 已有某条 term 名下（之前未收录的别名），返回 `{ "action": "update", "id": "<已有条目 id>", "addAliases": ["<新别名>"] }`。**只增量加**，不会替换原 aliases。
-4. delete：极少使用。仅当用户把 CurrentDictionary 某条 term 改回一个**与该条目意图完全相反**的写法时返回 `{ "action": "delete", "id": "<...>" }`。默认不要 delete。
+2. add：BaselineText 中的错词在 CurrentDictionary 里**完全没有 term 或 alias 命中**；EditedText 里对应的正确写法清晰可定位。返回 `{ "action": "add", "term": "<正确写法>", "aliases": ["<原错词>"], "reason": "<一句话说明>" }`。
+3. update：BaselineText 中的错词正好可以归到 CurrentDictionary 已有某条 term 名下（之前未收录的别名），返回 `{ "action": "update", "id": "<已有条目 id>", "addAliases": ["<新别名>"], "reason": "<一句话说明>" }`。**只增量加**，不会替换原 aliases。
+4. delete：极少使用。仅当用户把 CurrentDictionary 某条 term 改回一个**与该条目意图完全相反**的写法时返回 `{ "action": "delete", "id": "<...>", "reason": "<一句话说明>" }`。默认不要 delete。
 5. noop：以下场景一律 noop——
    - 编辑只是改语序、语气、标点、空格、换行、繁简切换。
    - 编辑是整段改写或大幅删改（差异超过 30% 字符），无法定位单一错词。
@@ -178,7 +182,8 @@ fn build_system_prompt() -> String {
 ```
 通常 `decisions` 数组只含 1 条。同一次编辑里若同时出现多个独立误识别词，可返回多条 decision。
 7. term 不为空、不超过 60 字。aliases 中不允许与 term 字面一致的项。所有字符串用 UTF-8。
-8. 不要在 JSON 外输出任何额外文字。不要解释，不要 markdown 包裹。直接返回纯 JSON 对象。
+8. **add / update / delete 必须带 `reason` 字段**——一句中文（≤ 60 字）说明这条 term 的**含义 / 适用领域 / 为什么这次值得入库**，让用户在字典里能一眼读懂。例如 `"项目名 OpenSpeech，常被识别成 '欧片速器'"`、`"开源库 tRPC，注意大小写"`。**不要**只复述"用户把 X 改成了 Y"，要写"是什么"或"为什么这样写才对"。noop 决策可省略 reason。
+9. 不要在 JSON 外输出任何额外文字。不要解释，不要 markdown 包裹。直接返回纯 JSON 对象。
 </core_rules>"#.to_string()
 }
 
@@ -200,11 +205,19 @@ fn build_user_message(input: &DictionaryAgentInput) -> String {
                         .collect();
                     format!("[{}]", parts.join(", "))
                 };
+                let note = e
+                    .note
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| format!(" | note=\"{}\"", escape_quote(s)))
+                    .unwrap_or_default();
                 format!(
-                    "- id={} | term=\"{}\" | aliases={}",
+                    "- id={} | term=\"{}\" | aliases={}{}",
                     e.id,
                     escape_quote(&e.term),
-                    aliases
+                    aliases,
+                    note,
                 )
             })
             .collect::<Vec<_>>()

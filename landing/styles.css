@@ -1,0 +1,205 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+@import "@fontsource/space-mono/400.css";
+@import "@fontsource/space-mono/700.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  /* 中文字符走 PingFang SC（macOS） / Hiragino Sans GB / Microsoft YaHei，避免 fallback 到 generic sans-serif/monospace 时字形粗糙 */
+  --font-sans: 'Inter Variable', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Space Mono', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', ui-monospace, monospace;
+
+  /* TE 工业风 token —— 与桌面应用 src/App.css 完全一致 */
+  --color-te-bg: var(--te-bg);
+  --color-te-fg: var(--te-fg);
+  --color-te-accent: var(--te-accent);
+  --color-te-accent-fg: var(--te-accent-fg);
+  --color-te-gray: var(--te-gray);
+  --color-te-light-gray: var(--te-light-gray);
+  --color-te-surface: var(--te-surface);
+  --color-te-surface-hover: var(--te-surface-hover);
+  --color-te-dialog-bg: var(--te-dialog-bg);
+  --color-te-dialog-border: var(--te-dialog-border);
+}
+
+:root {
+  /* TE Light Theme（与 src/App.css 一致） */
+  --te-bg: #ffffff;
+  --te-fg: #0a0a0a;
+  --te-accent: #c49600;
+  --te-accent-fg: #ffffff;
+  --te-gray: #c9c9c9;
+  --te-light-gray: #555555;
+  --te-surface: #f0f0f0;
+  --te-surface-hover: #e4e4e4;
+  --te-dialog-bg: #fafafa;
+  --te-dialog-border: #999999;
+  --te-overlay: rgba(0, 0, 0, 0.6);
+
+  --te-bg-rgb: 255 255 255;
+  --te-fg-rgb: 10 10 10;
+  --te-accent-rgb: 196 150 0;
+  --te-gray-rgb: 201 201 201;
+  --te-light-gray-rgb: 85 85 85;
+  --te-surface-rgb: 240 240 240;
+  --te-dialog-bg-rgb: 250 250 250;
+  --te-dialog-border-rgb: 153 153 153;
+}
+
+.dark {
+  /* TE Dark Theme（与 src/App.css 一致） */
+  --te-bg: #000000;
+  --te-fg: #ffffff;
+  --te-accent: #ffcc00;
+  --te-accent-fg: #000000;
+  --te-gray: #3a3a3a;
+  --te-light-gray: #b5b5b5;
+  --te-surface: #141414;
+  --te-surface-hover: #222222;
+  --te-dialog-bg: #1a1a1a;
+  --te-dialog-border: #5a5a5a;
+  --te-overlay: rgba(0, 0, 0, 0.85);
+
+  --te-bg-rgb: 0 0 0;
+  --te-fg-rgb: 255 255 255;
+  --te-accent-rgb: 255 204 0;
+  --te-gray-rgb: 58 58 58;
+  --te-light-gray-rgb: 181 181 181;
+  --te-surface-rgb: 20 20 20;
+  --te-dialog-bg-rgb: 26 26 26;
+  --te-dialog-border-rgb: 90 90 90;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: var(--te-bg);
+  color: var(--te-fg);
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: auto;
+}
+
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(1100px 700px at 80% -10%, color-mix(in oklab, var(--te-accent) 10%, transparent), transparent 60%),
+    radial-gradient(900px 700px at -10% 110%, color-mix(in oklab, var(--te-accent) 6%, transparent), transparent 60%),
+    var(--te-bg);
+}
+
+::selection {
+  background: var(--te-accent);
+  color: var(--te-accent-fg);
+}
+
+/* color-mix() Safari 15 fallback —— 与 src/App.css 一致，确保 te-* 半透明 class 在旧浏览器也能正确渲染 */
+@supports not (background: color-mix(in oklab, red 50%, transparent)) {
+  .bg-te-accent\/5  { background-color: rgb(var(--te-accent-rgb) / 5%); }
+  .bg-te-accent\/8  { background-color: rgb(var(--te-accent-rgb) / 8%); }
+  .bg-te-accent\/10 { background-color: rgb(var(--te-accent-rgb) / 10%); }
+  .bg-te-accent\/15 { background-color: rgb(var(--te-accent-rgb) / 15%); }
+  .bg-te-accent\/30 { background-color: rgb(var(--te-accent-rgb) / 30%); }
+  .bg-te-accent\/70 { background-color: rgb(var(--te-accent-rgb) / 70%); }
+  .bg-te-accent\/85 { background-color: rgb(var(--te-accent-rgb) / 85%); }
+  .bg-te-accent\/90 { background-color: rgb(var(--te-accent-rgb) / 90%); }
+  .bg-te-bg\/30 { background-color: rgb(var(--te-bg-rgb) / 30%); }
+  .bg-te-bg\/40 { background-color: rgb(var(--te-bg-rgb) / 40%); }
+  .bg-te-bg\/60 { background-color: rgb(var(--te-bg-rgb) / 60%); }
+  .bg-te-bg\/80 { background-color: rgb(var(--te-bg-rgb) / 80%); }
+  .bg-te-gray\/30 { background-color: rgb(var(--te-gray-rgb) / 30%); }
+  .bg-te-gray\/40 { background-color: rgb(var(--te-gray-rgb) / 40%); }
+  .bg-te-gray\/60 { background-color: rgb(var(--te-gray-rgb) / 60%); }
+  .bg-te-light-gray\/25 { background-color: rgb(var(--te-light-gray-rgb) / 25%); }
+  .bg-te-light-gray\/50 { background-color: rgb(var(--te-light-gray-rgb) / 50%); }
+  .bg-te-surface\/30 { background-color: rgb(var(--te-surface-rgb) / 30%); }
+  .bg-te-surface\/40 { background-color: rgb(var(--te-surface-rgb) / 40%); }
+  .bg-te-surface\/50 { background-color: rgb(var(--te-surface-rgb) / 50%); }
+  .bg-te-surface\/60 { background-color: rgb(var(--te-surface-rgb) / 60%); }
+  .border-te-accent\/30 { border-color: rgb(var(--te-accent-rgb) / 30%); }
+  .border-te-accent\/40 { border-color: rgb(var(--te-accent-rgb) / 40%); }
+  .border-te-accent\/50 { border-color: rgb(var(--te-accent-rgb) / 50%); }
+  .border-te-accent\/60 { border-color: rgb(var(--te-accent-rgb) / 60%); }
+  .border-te-accent\/70 { border-color: rgb(var(--te-accent-rgb) / 70%); }
+  .border-te-fg\/50     { border-color: rgb(var(--te-fg-rgb) / 50%); }
+  .border-te-gray\/20   { border-color: rgb(var(--te-gray-rgb) / 20%); }
+  .border-te-gray\/30   { border-color: rgb(var(--te-gray-rgb) / 30%); }
+  .border-te-gray\/40   { border-color: rgb(var(--te-gray-rgb) / 40%); }
+  .border-te-gray\/50   { border-color: rgb(var(--te-gray-rgb) / 50%); }
+  .border-te-gray\/60   { border-color: rgb(var(--te-gray-rgb) / 60%); }
+  .text-te-accent\/70    { color: rgb(var(--te-accent-rgb) / 70%); }
+  .text-te-accent\/80    { color: rgb(var(--te-accent-rgb) / 80%); }
+  .text-te-accent\/90    { color: rgb(var(--te-accent-rgb) / 90%); }
+  .text-te-fg\/40        { color: rgb(var(--te-fg-rgb) / 40%); }
+  .text-te-fg\/70        { color: rgb(var(--te-fg-rgb) / 70%); }
+  .text-te-fg\/80        { color: rgb(var(--te-fg-rgb) / 80%); }
+  .text-te-light-gray\/40 { color: rgb(var(--te-light-gray-rgb) / 40%); }
+  .text-te-light-gray\/50 { color: rgb(var(--te-light-gray-rgb) / 50%); }
+  .text-te-light-gray\/60 { color: rgb(var(--te-light-gray-rgb) / 60%); }
+  .text-te-light-gray\/70 { color: rgb(var(--te-light-gray-rgb) / 70%); }
+}
+
+/* 桌面窗口阴影 + 倒影背光，让仿 macOS 窗口浮起来 */
+.te-window-shadow {
+  box-shadow:
+    0 1px 0 rgb(var(--te-fg-rgb) / 0.06) inset,
+    0 30px 80px -20px rgba(0, 0, 0, 0.7),
+    0 80px 200px -40px rgb(var(--te-accent-rgb) / 0.18);
+}
+
+/* 节段指示点辉光 */
+.te-dot-glow {
+  box-shadow: 0 0 18px rgb(var(--te-accent-rgb) / 0.55);
+}
+
+/* eyebrow 等宽小标签 */
+.te-eyebrow {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  font-size: 11px;
+  color: var(--te-accent);
+}
+
+/* 与桌面应用一致的滚动条样式 */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--te-gray);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 0;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--te-light-gray);
+  background-clip: padding-box;
+}
+
+/* 中文片段的字距复位 —— 在用 mono+tracking 的容器里手动套这 class 让汉字部分恢复 0 字距，避免"散字"。
+   英文 caps 标签（FN / CTRL / OPEN·SPEECH）保留原有 tracking 不受影响。 */
+.cn-tight { letter-spacing: 0.02em; }
+.cn-normal { letter-spacing: 0; }
+
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}

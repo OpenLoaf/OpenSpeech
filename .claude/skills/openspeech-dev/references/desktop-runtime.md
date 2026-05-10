@@ -68,6 +68,55 @@
 
 ---
 
+## Quick Panel（通用快速操作面板，Spotlight 风格）
+
+> 真相来源：`src-tauri/src/quick_panel/mod.rs`、`src/pages/QuickPanel/`、`capabilities/quick-panel.json`。
+
+通用容器 + 按 `mode` 字符串路由不同视图（首版 `edit-last-record`，后续翻译/问答等同模式挂上来）。Rust 端 `quick_panel::show(app, mode)` 在 emit 之前把 mode 推给前端，前端按 `openspeech://quick-panel-mode` 事件切视图。
+
+### 必须做对的几件 macOS 事
+
+**1. show 不能让 OpenSpeech 成为 frontmost。**
+- `Tauri set_focus` 底层调 `[NSApp activateIgnoringOtherApps:]` —— OpenSpeech 一旦 active，**所有 visible window**（包括主窗、即便它被其他 app 挡着）都被 z-order 抬到最前，用户感知就是"按快捷键主窗冒出来"。
+- 解法：把 NSWindow 切到 **nonactivating NSPanel**（mask `1 << 7`） —— `[NSApp activate]` 路径短路。
+- 但 nonactivating panel 默认 `canBecomeKeyWindow = NO`，textarea 收不到键盘事件。
+
+**2. 动态 NSPanel 子类 + override `canBecomeKeyWindow = YES`。**
+- overlay 注释里的"动态子类撞 wry KVO"指的是给 **wry NSWindow class** 创建子类。给 system **NSPanel** 创建子类不撞 —— wry 的 KVO observer 链注册在原 wry class 那侧，跟我们 `object_setClass` 切到的新 panel 子类无关。
+- 实现：`objc_allocateClassPair(NSPanel, "OpenSpeechKeyableNonactivatingPanel", 0)` + `class_addMethod(canBecomeKeyWindow → YES)` + `class_addMethod(canBecomeMainWindow → NO)` → `objc_registerClassPair` → `object_setClass`。class 用 `OnceLock` 缓存只注册一次。
+
+**3. hide 时绝对不要用 `[NSApp deactivate]` 或 `[NSApp hide:nil]`。**
+踩过的失败方案：
+| 尝试 | 失败原因 |
+|---|---|
+| `[NSApp deactivate]` | **异步**生效，`panel orderOut` **同步**触发 AppKit "find next key window"，主窗（normal NSWindow，canBecomeKey=YES）被 makeKey + raise 到 z-order 最前；deactivate 还没生效主窗已经露脸 |
+| `[panel resignKeyWindow]` + `[NSApp deactivate]` | 同上，仍异步 |
+| `[NSApp hide:nil]` | 同步够狠，但等价 Cmd+H —— **主窗如果本来 visible 也跟着藏**，下次按快捷键 unhide 时主窗与 panel "一起出现一起消失"，不可接受 |
+
+**正解（Spotlight / Raycast 同款）**：
+- `show` 入口最早处用 `[[NSWorkspace sharedWorkspace] frontmostApplication]` 拿 PID，**排除 OpenSpeech 自己的 pid**，存进全局 `AtomicI32`。
+- `hide` 时 `[NSRunningApplication runningApplicationWithProcessIdentifier:] activateWithOptions:0` 把前一个 app 拉回前台 —— 那个 app 一旦 active，OpenSpeech 自动让出 frontmost，AppKit 不会再去 OpenSpeech 内部找 next key，主窗 z-order/visible 完全不动。
+- 边角：show 时 frontmost == self（用户在主窗里按快捷键）→ 不记录 PID，hide 时 fallback 走 `[NSApp deactivate]`，主窗保持原状。
+
+**4. capability 必加 `core:window:allow-start-dragging`。** drag region 才工作。
+
+### 视觉：transparent 圆角窗口的 shadow
+
+- `.shadow(true)`（NSWindow 系统 shadow）+ transparent + 圆角内容 → 底部圆角外露出**矩形 shadow 角**，看起来像两个直角。
+- 解法：`.shadow(false)` + CSS `shadow-2xl` 自己画，shadow 跟着 `rounded-2xl` 边界。但 webview 必须**比 panel 视觉尺寸大一圈**（每边 +40px 透明边距），否则 CSS shadow 被 webview 边界裁掉。
+
+### `data-tauri-drag-region` 不走 closest
+
+- wry 检查的是 **`event.target` 自身** 的 attribute，不爬祖先链。容器加了不够，里面的 plain `<div>`（标题、提示文字）也得各自加，否则 mousedown 命中子元素就不触发拖动。
+- 交互元素（textarea / button）**不**加 —— 自然拦截 mousedown 不拖动。
+
+### 多 webview 数据契约
+
+- quick panel 是独立 JS runtime（同 overlay 模式），按 `WINDOW_LABEL === "quick-panel"` 在 `main.tsx` 分流；boot 跑精简版（settings + history + i18n），不挂 hotkey listener / recording listener。
+- 每次 mount 主动 `useHistoryStore.reload()` —— 主窗里 `add()` 后，quick panel 的内存 store 看不到，必须从 SQLite 重读。
+
+---
+
 ## Tauri 权限关键项（`capabilities/default.json` 必显式声明）
 
 `core:default` **不含**以下，必须额外加：

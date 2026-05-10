@@ -514,8 +514,38 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
     });
     let request_envelope = serde_json::to_string_pretty(&envelope).ok();
     if log::log_enabled!(log::Level::Debug) {
-        if let Some(ref s) = request_envelope {
-            log::debug!("[ai_refine] request body:\n{}", s);
+        // 先打印折叠掉 messages.content 的结构骨架，再按 role 逐条打印完整 content；
+        // 直接 pretty 整个 envelope 会把多段提示词压成一长行带 \n 转义，看不清结构
+        let mut skeleton = envelope.clone();
+        if let Some(arr) = skeleton
+            .pointer_mut("/body/messages")
+            .and_then(Value::as_array_mut)
+        {
+            for m in arr.iter_mut() {
+                let chars = m
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0);
+                if let Some(obj) = m.as_object_mut() {
+                    obj.insert(
+                        "content".into(),
+                        Value::String(format!("<omitted, {chars} chars>")),
+                    );
+                }
+            }
+        }
+        if let Ok(s) = serde_json::to_string_pretty(&skeleton) {
+            log::debug!("[ai_refine] request body (messages folded):\n{}", s);
+        }
+        if let Some(arr) = envelope.pointer("/body/messages").and_then(Value::as_array) {
+            for (i, m) in arr.iter().enumerate() {
+                let role = m.get("role").and_then(Value::as_str).unwrap_or("");
+                let content = m.get("content").and_then(Value::as_str).unwrap_or("");
+                log::debug!(
+                    "[ai_refine] messages[{i}] role={role}\n----- content begin -----\n{content}\n----- content end -----",
+                );
+            }
         }
     }
 

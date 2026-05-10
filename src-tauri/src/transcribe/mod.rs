@@ -716,8 +716,8 @@ async fn run_asr_short_blocking(
             log::info!(
                 "[transcribe] asr_short with system_prompt: chars={chars} bytes={bytes} lines={lines} lang={lang_short:?} preview={preview:?}"
             );
-            // trace 等级才输出全文，避免开发期 debug 日志被几千字提示词刷屏。
-            log::trace!(
+            // debug 等级输出全文——info 级只看到长度概览，调 prompt 时仍要看到原文。
+            log::debug!(
                 "[transcribe] asr_short system_prompt full body ({chars} chars):\n{sp}"
             );
             if chars > 2000 {

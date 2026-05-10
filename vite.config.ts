@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -13,12 +14,13 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  // 多入口：index.html 是 Tauri 桌面应用的入口，promo.html 是面向公网的宣传页（不依赖 Tauri）。
+  // 多入口：index.html 是 Tauri 桌面应用的入口，promo.html 是面向公网的宣传页，landing.html 是新一代功能展示页（独立 landing/ 目录，便于后续迁出）。
   build: {
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, "index.html"),
         promo: path.resolve(__dirname, "promo.html"),
+        landing: path.resolve(__dirname, "landing.html"),
       },
     },
   },
@@ -43,5 +45,11 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+  },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test/setup.ts"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
 }));

@@ -184,6 +184,21 @@ pub fn show<R: Runtime>(app: &AppHandle<R>, mode: &str) -> tauri::Result<()> {
     Ok(())
 }
 
+/// 快捷键再按一次：可见 → hide，不可见 → show。`mode` 仅在 show 路径生效。
+pub fn toggle<R: Runtime>(app: &AppHandle<R>, mode: &str) -> tauri::Result<()> {
+    let visible = app
+        .get_webview_window(QUICK_PANEL_LABEL)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        log::warn!("[quick-panel] toggle: visible → hide");
+        hide(app)
+    } else {
+        log::warn!("[quick-panel] toggle: hidden → show mode={mode}");
+        show(app, mode)
+    }
+}
+
 pub fn hide<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     log::warn!("[quick-panel] hide ENTER");
     if let Some(w) = app.get_webview_window(QUICK_PANEL_LABEL) {
