@@ -122,6 +122,10 @@ pnpm tauri dev
 
 环境要求：Node.js ≥ 18、pnpm ≥ 9、Rust stable。平台依赖参见 [Tauri 官方先决条件](https://tauri.app/start/prerequisites/)。
 
+> **关于前端源码**
+> 前端源码托管在独立的私有仓库，通过 npm 包 [`@openloaf/openspeech-frontend`](https://www.npmjs.com/package/@openloaf/openspeech-frontend) 以预构建产物形式分发。`pnpm install` 会自动拉到 `node_modules`，`pnpm tauri dev` / `pnpm tauri build` 自动取用，无需额外步骤。
+> Tauri / Rust 部分（`src-tauri/`）以及构建脚本、桌面打包配置全部开源在本仓库。
+
 ## 贡献
 
 欢迎提 Issue / Pull Request。较大改动建议先开 Issue 讨论方案。

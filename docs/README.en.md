@@ -122,6 +122,10 @@ pnpm tauri dev
 
 Requirements: Node.js ≥ 18, pnpm ≥ 9, Rust stable. See the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for platform-specific dependencies.
 
+> **About the frontend source**
+> The React frontend lives in a separate private repository and is distributed as the prebuilt npm package [`@openloaf/openspeech-frontend`](https://www.npmjs.com/package/@openloaf/openspeech-frontend). `pnpm install` fetches it into `node_modules`; `pnpm tauri dev` / `pnpm tauri build` consume it automatically — no extra setup required.
+> The Tauri / Rust side (`src-tauri/`) plus all build scripts and desktop packaging config remain fully open-source in this repo.
+
 ## Contributing
 
 Issues and pull requests are welcome. For non-trivial changes, please open an issue first to discuss the approach.
