@@ -1,0 +1,32 @@
+{
+  "folders": [
+    {
+      "name": "OpenSpeech (public)",
+      "path": "."
+    },
+    {
+      "name": "OpenSpeech-Frontend (private)",
+      "path": "./src"
+    }
+  ],
+  "settings": {
+    "typescript.tsdk": "src/node_modules/typescript/lib",
+    "typescript.enablePromptUseWorkspaceTsdk": true,
+    "files.exclude": {
+      "**/.DS_Store": true,
+      "**/node_modules": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/dist-landing": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "rust-lang.rust-analyzer",
+      "tauri-apps.tauri-vscode",
+      "biomejs.biome"
+    ]
+  }
+}
