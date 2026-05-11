@@ -94,6 +94,10 @@ const EMPTY_MAX_RMS: f32 = 0.003;
 // 计算 voice 边界用的能量门：≈ -40 dBFS，过滤 webrtc-vad 在低能噪声上的假阳，
 // 让 first/last_voice 不被环境底噪拉宽，导致 trim padding 失效。
 const VAD_FRAME_MIN_RMS: f32 = 0.01;
+// 累计 voiced 帧时长低于该阈值时整段当 Empty 丢弃。叹气 / 喷麦 / 键盘音常被 VAD 判
+// 成"有声"但通常只有 100~250ms 持续，真人 "嗯/好/是" 也至少 300ms+；阈值卡在 300ms
+// 兜底过滤这类一秒内的误触输入，避免 ASR 在噪声上幻觉文字（如把短促叹气识成"硬塞"）。
+const MIN_VOICED_MS: u32 = 300;
 // OGG Vorbis 输出：采样率 / 声道跟随采集配置，不做 resample / 下混——这两步
 // 留给 STT 集成阶段（大多数 STT 服务上传前自己会做）。
 // 质量取 0.4（≈ 96 kbps mono），人声完全够用且文件 ~1/10 WAV 大小。
@@ -575,6 +579,7 @@ fn analyze_recording_trim(
     );
     let mut first_voice: Option<usize> = None;
     let mut last_voice: Option<usize> = None;
+    let mut voiced_frame_count: u32 = 0;
     for i in 0..frame_count {
         let start = i * VAD_FRAME_SAMPLES;
         let frame = &pcm_i16[start..start + VAD_FRAME_SAMPLES];
@@ -589,6 +594,20 @@ fn analyze_recording_trim(
             first_voice = Some(i);
         }
         last_voice = Some(i);
+        voiced_frame_count += 1;
+    }
+
+    // 累计 voiced 时长 < MIN_VOICED_MS 视为无效内容（叹气 / 喷麦 / 键盘音）。
+    // 不能只看 first/last 的 span：用户在 PTT 时段中可能只有零星几帧噪声越过门，
+    // 看 voiced_frame_count 才是真正"被 VAD 认可的人声样本数"。
+    let voiced_ms = voiced_frame_count * 30;
+    if voiced_ms < MIN_VOICED_MS {
+        log::info!(
+            "[audio] trim: voiced span too short ({}ms < {}ms) → Empty",
+            voiced_ms,
+            MIN_VOICED_MS
+        );
+        return TrimDecision::Empty;
     }
 
     let total_ms = (total_frames as u64 * 1000) / sample_rate.max(1) as u64;
