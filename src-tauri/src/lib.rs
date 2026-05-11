@@ -767,6 +767,18 @@ pub fn run() {
                 }
             }
 
+            // ---- 输入设备列表 warmup ----------------------------------------
+            // cpal::input_devices() 在 macOS 上偶发卡 3-10s（蓝牙休眠 / coreaudiod
+            // 抖动 / 虚拟声卡）。挂在前端 preflight 的关键路径上会让 PTT 卡死后
+            // 触发 race。启动期间后台预热一次，之后前端 preflight 永远走 cache
+            // （微秒级）。
+            std::thread::Builder::new()
+                .name("openspeech-device-warmup".into())
+                .spawn(|| {
+                    audio::warmup_input_device_cache();
+                })
+                .ok();
+
             // ---- OpenLoaf 启动自检 + 自动恢复登录 ---------------------------
             // 静态库版本自检 + 若 Keychain 存了 refresh token 则尝试 refresh。
             // 失败（过期/网络）只记日志，不阻断 UI。

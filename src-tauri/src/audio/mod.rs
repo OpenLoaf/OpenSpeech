@@ -672,8 +672,28 @@ pub struct InputDeviceInfo {
     pub is_default: bool,
 }
 
-#[tauri::command]
-pub fn audio_list_input_devices() -> Vec<InputDeviceInfo> {
+// 输入设备列表 cache：cpal::Host::input_devices() 在 macOS 上要走 CoreAudio HAL，
+// 蓝牙耳机休眠/重连、虚拟声卡（OBS / BlackHole / Loopback）、`coreaudiod` 短时
+// 阻塞都会让它卡 3-10s。这个调用历来被挂在前端 preflight 的关键路径上，是
+// 2026-05-11 用户日志里"启用/转录失败"race 的根因（详见
+// src/stores/recording.preflight-race.test.ts）。
+//
+// 策略：启动期间 warmup 一次 → cache。后续调用读 cache 微秒返回；TTL 过期时
+// 返回旧数据 + 后台 refresh，永不阻塞前端。
+struct DeviceCacheEntry {
+    devices: Vec<InputDeviceInfo>,
+    refreshed_at: Instant,
+}
+
+static DEVICE_CACHE: OnceLock<Mutex<Option<DeviceCacheEntry>>> = OnceLock::new();
+static DEVICE_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+const DEVICE_CACHE_TTL: Duration = Duration::from_secs(5);
+
+fn device_cache() -> &'static Mutex<Option<DeviceCacheEntry>> {
+    DEVICE_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn enumerate_input_devices_uncached() -> Vec<InputDeviceInfo> {
     let host = cpal::default_host();
     let default_name = host.default_input_device().and_then(|d| device_label(&d));
     let mut out = Vec::new();
@@ -686,6 +706,67 @@ pub fn audio_list_input_devices() -> Vec<InputDeviceInfo> {
         }
     }
     out
+}
+
+fn spawn_device_refresh_if_idle() {
+    if DEVICE_REFRESH_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    thread::Builder::new()
+        .name("openspeech-device-refresh".into())
+        .spawn(|| {
+            let devices = enumerate_input_devices_uncached();
+            if let Ok(mut g) = device_cache().lock() {
+                *g = Some(DeviceCacheEntry {
+                    devices,
+                    refreshed_at: Instant::now(),
+                });
+            }
+            DEVICE_REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
+        })
+        .ok();
+}
+
+/// 应用启动期间调用一次，blocking 把 cache 填好；之后前端 preflight 永远命中。
+pub fn warmup_input_device_cache() {
+    let devices = enumerate_input_devices_uncached();
+    if let Ok(mut g) = device_cache().lock() {
+        *g = Some(DeviceCacheEntry {
+            devices,
+            refreshed_at: Instant::now(),
+        });
+    }
+}
+
+#[tauri::command]
+pub fn audio_list_input_devices() -> Vec<InputDeviceInfo> {
+    let cache = device_cache();
+    // 快速路径：cache 在 TTL 内直接返回。
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(entry) = guard.as_ref() {
+            if entry.refreshed_at.elapsed() < DEVICE_CACHE_TTL {
+                return entry.devices.clone();
+            }
+            // 过期：返回旧数据 + 后台 refresh（调用方不等）。
+            let stale = entry.devices.clone();
+            drop(guard);
+            spawn_device_refresh_if_idle();
+            return stale;
+        }
+    }
+    // 冷启动且没 warmup（理论上 setup hook 已经 warmup，这里是兜底）。
+    let devices = enumerate_input_devices_uncached();
+    if let Ok(mut g) = cache.lock() {
+        *g = Some(DeviceCacheEntry {
+            devices: devices.clone(),
+            refreshed_at: Instant::now(),
+        });
+    }
+    devices
 }
 
 /// audio 线程把 stream 起来 / 起失败的结果回报给 `start()`，让命令真正同步。
