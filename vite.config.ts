@@ -4,52 +4,30 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
-const host = process.env.TAURI_DEV_HOST;
-
-// https://vite.dev/config/
-export default defineConfig(async () => ({
+// 公开仓 vite 配置：只编 landing.html（公网落地页），产出到 dist-landing/。
+// app 本体（main + promo）已经迁出到 @openloaf/openspeech-frontend npm 包，
+// 由 scripts/frontend.sh 统一协调到 ./dist 供 Tauri 消费，跟此处的 landing
+// 产物完全隔离。
+export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
-  },
-  // 多入口：index.html 是 Tauri 桌面应用的入口，promo.html 是面向公网的宣传页，landing.html 是新一代功能展示页（独立 landing/ 目录，便于后续迁出）。
   build: {
+    outDir: "dist-landing",
+    emptyOutDir: true,
     rollupOptions: {
       input: {
-        main: path.resolve(__dirname, "index.html"),
-        promo: path.resolve(__dirname, "promo.html"),
         landing: path.resolve(__dirname, "landing.html"),
       },
     },
   },
-
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
-  clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+  // landing dev 走 1421，避开 1420（Tauri webview / src 私仓 vite 占用），
+  // 允许 `pnpm dev`（landing）和 `pnpm tauri:dev`（app 本体）同机并行。
   server: {
-    port: 1420,
+    port: 1421,
     strictPort: true,
-    host: host || false,
-    hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: 1421,
-        }
-      : undefined,
-    watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
-    },
   },
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    include: ["landing/**/*.{test,spec}.{ts,tsx}"],
   },
 }));

@@ -18,13 +18,9 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
+    "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "landing"],
+  "include": ["landing"],
+  "exclude": ["src", "node_modules", "dist", "dist-landing"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
