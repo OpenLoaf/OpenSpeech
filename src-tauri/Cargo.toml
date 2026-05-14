@@ -66,6 +66,17 @@ tungstenite = { version = "0.24", default-features = false, features = ["handsha
 rodio = { version = "0.22.2", default-features = false, features = ["wav", "playback"] }
 active-win-pos-rs = "0.10.1"
 whoami = "2.1.2"
+# device/ws_server.rs：ESP32 设备端连入桌面端的 WS server。tokio-tungstenite 比拉 axum 更轻，
+# 只需一个 listener + 升级头校验。0.24 与现有 tungstenite 0.24 同源避免版本撕裂。
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+# device 模块 mDNS 广告：发布 _openspeech-mic._tcp.local. 给设备扫描。
+mdns-sd = "0.11"
+# device/ble_scanner.rs：BLE 中央角色——扫描 ESP32 设备广播。macOS CoreBluetooth /
+# Windows WinRT / Linux BlueZ 跨平台一份代码。macOS 需要 Info.plist 加
+# NSBluetoothAlwaysUsageDescription（见 tauri.conf.json）。
+btleplug = "0.11"
+# device/mod.rs start_server 错误聚合；轻量、已被依赖树传递引入。
+anyhow = "1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

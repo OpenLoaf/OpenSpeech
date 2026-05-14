@@ -65,3 +65,8 @@ dist-landing
 # 公开仓不再追踪 src/，外人 clone 后由 @openloaf/openspeech-frontend
 # npm 包提供已 build 的 dist 给 Tauri 消费。
 /src/
+
+# 无线麦克风 SDK 源码走独立私有仓（待用户创建后填 remote）。
+# 本地路径 ./sdk，由独立 .git 管理；本公开仓不追踪 sdk/。
+# 父仓需要的话只引用 sdk 内导出的 path crate（不入库）。
+/sdk/

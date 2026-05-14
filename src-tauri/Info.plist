@@ -16,5 +16,10 @@
        所以无需 NSAppleEventsUsageDescription 声明。 -->
   <key>NSAccessibilityUsageDescription</key>
   <string>OpenSpeech 需要辅助功能权限以将识别后的文字写入当前焦点的输入框。</string>
+
+  <!-- 蓝牙中央角色：扫描 ESP32 无线麦克风的 BLE 广播以发现可配对设备。
+       macOS 12+ 强制要求；缺失会让 CoreBluetooth 在首次 start_scan 时直接拒绝。 -->
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>OpenSpeech 需要蓝牙权限以扫描并配对 ESP32 无线麦克风设备。</string>
 </dict>
 </plist>
