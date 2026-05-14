@@ -25,9 +25,6 @@ importers:
       '@fontsource/space-mono':
         specifier: ^5.2.9
         version: 5.2.9
-      '@openloaf/openspeech-frontend':
-        specifier: 0.2.35
-        version: 0.2.35(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
       '@tailwindcss/vite':
         specifier: ^4.2.4
         version: 4.2.4(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
@@ -134,6 +131,9 @@ importers:
         specifier: ^5.0.12
         version: 5.0.12(@types/react@19.2.14)(immer@11.1.7)(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
     devDependencies:
+      '@openloaf/openspeech-frontend':
+        specifier: 0.2.36
+        version: 0.2.36(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.10.1
@@ -710,8 +710,8 @@ packages:
   '@open-draft/until@2.1.0':
     resolution: {integrity: sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg==}
 
-  '@openloaf/openspeech-frontend@0.2.35':
-    resolution: {integrity: sha512-8ONwCFbNhZTduwaHMCQS5J0en4N+Kp8T3EkHZ4su34HHMpuroNive/wVzocE4hgHVYVLkdTlcyqZQuYAVXt2ZQ==}
+  '@openloaf/openspeech-frontend@0.2.36':
+    resolution: {integrity: sha512-s7C5yik6WXzxcbp1BVB8XQb6unvlpxSKARC7KelvR/us7VKrEneffR74eR6hmjabYv/AkvOYGxPszkseIk1zNA==}
 
   '@reduxjs/toolkit@2.11.2':
     resolution: {integrity: sha512-Kd6kAHTA6/nUpp8mySPqj3en3dm0tdMIgbttnQ1xFMVpufoj+ADi8pXLBsd4xzTRHQa7t/Jv8W5UnCuW4kuWMQ==}
@@ -3894,7 +3894,7 @@ snapshots:
 
   '@open-draft/until@2.1.0': {}
 
-  '@openloaf/openspeech-frontend@0.2.35(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))':
+  '@openloaf/openspeech-frontend@0.2.36(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))':
     dependencies:
       '@base-ui/react': 1.4.1(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@fontsource-variable/geist': 5.2.8
