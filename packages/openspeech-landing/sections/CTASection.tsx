@@ -60,71 +60,11 @@ export default function CTASection() {
         <div className="absolute right-[-160px] bottom-[10%] h-[420px] w-[420px] rounded-full bg-te-accent/8 blur-[120px]" />
       </div>
 
-      <div
-        ref={ref}
-        className="relative mx-auto flex w-full max-w-6xl flex-col gap-24 px-6 lg:px-12"
-      >
-        {/* ============== 上半 · 信任三件套 ============== */}
-        <div className="flex flex-col items-center gap-12">
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
-            transition={{ duration: 0.55 }}
-            className="flex flex-col items-center gap-4 text-center"
-          >
-            <span className="te-eyebrow">05 · Privacy first</span>
-            <h2 className="font-mono text-[clamp(1.7rem,3.6vw,2.8rem)] font-bold leading-[1.1] tracking-tighter text-te-fg">
-              你说的话，
-              <span className="bg-gradient-to-r from-te-accent to-te-accent/80 bg-clip-text text-transparent">
-                不经过我们
-              </span>
-              。
-            </h2>
-            <p className="max-w-xl text-balance text-sm leading-relaxed text-te-light-gray md:text-base">
-              录音从你的麦克风直接送到你自己配置的语音识别服务，OpenSpeech 不在链路中间。
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
-            transition={{ duration: 0.65, delay: 0.08 }}
-            className="w-full"
-          >
-            <DataFlowDiagram />
-          </motion.div>
-
-          <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-3">
-            {trustChips.map((chip, i) => {
-              const Icon = chip.icon;
-              return (
-                <motion.div
-                  key={chip.title}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={
-                    active ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }
-                  }
-                  transition={{ duration: 0.5, delay: 0.15 + i * 0.05 }}
-                  className="flex flex-col gap-3 border border-te-gray/40 bg-te-surface/40 p-5"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-9 w-9 items-center justify-center border border-te-accent/40 bg-te-accent/10 text-te-accent">
-                      <Icon className="h-4 w-4" strokeWidth={1.8} />
-                    </span>
-                    <span className="font-mono text-[13px] font-bold uppercase tracking-[0.12em] text-te-fg">
-                      {chip.title}
-                    </span>
-                  </div>
-                  <p className="text-sm leading-relaxed text-te-light-gray">
-                    {chip.body}
-                  </p>
-                </motion.div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* ============== 下半 · 三平台下载 ============== */}
+        <div
+          ref={ref}
+          className="relative mx-auto flex w-full max-w-6xl flex-col gap-10 px-6 lg:px-12"
+        >
+        {/* ============== 下载板块 ============== */}
         <div className="flex flex-col items-center gap-10">
           <motion.div
             initial={{ opacity: 0, y: 8 }}
@@ -132,14 +72,14 @@ export default function CTASection() {
             transition={{ duration: 0.55, delay: 0.2 }}
             className="flex flex-col items-center gap-4 text-center"
           >
-            <span className="te-eyebrow">Get OpenSpeech</span>
+            <span className="te-eyebrow">04 · Get OpenSpeech</span>
             <h2 className="font-mono text-[clamp(2.2rem,5.2vw,4.2rem)] font-bold leading-[1.02] tracking-tighter text-te-fg">
               <span className="bg-gradient-to-b from-te-fg to-te-fg/70 bg-clip-text text-transparent">
                 按下快捷键，
               </span>
               <br />
               <span className="bg-gradient-to-r from-te-accent to-te-accent/80 bg-clip-text text-transparent">
-                开始用嘴打字。
+                开口即文字。
               </span>
             </h2>
             <p className="max-w-xl text-balance text-base text-te-light-gray md:text-lg">

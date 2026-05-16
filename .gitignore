@@ -70,3 +70,9 @@ dist-landing
 # 本地路径 ./sdk，由独立 .git 管理；本公开仓不追踪 sdk/。
 # 父仓需要的话只引用 sdk 内导出的 path crate（不入库）。
 /sdk/
+
+# 本项目 monorepo 用 pnpm-lock.yaml；禁止双锁文件（r-package-manager）。
+bun.lock
+
+# Sisyphus CLI 本地状态文件
+.sisyphus/

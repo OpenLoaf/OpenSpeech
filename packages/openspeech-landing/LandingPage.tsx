@@ -5,15 +5,12 @@ import HeroSection from "./sections/HeroSection";
 import WhyNotImeSection from "./sections/WhyNotImeSection";
 import AccuracySection from "./sections/AccuracySection";
 import DictionarySection from "./sections/DictionarySection";
-import MeetingSection from "./sections/MeetingSection";
 import CTASection from "./sections/CTASection";
 
-// 6 段叙事：钩（Hero）→ 差异化锚点（凭什么换）→ 解（润色对比）→ 深（词典）→ 拓（会议）→ 收（隐私 + 下载）
 const SECTIONS = [
   { id: "hero", label: "首页" },
   { id: "accuracy", label: "润色" },
   { id: "dictionary", label: "词典" },
-  { id: "meeting", label: "会议" },
   { id: "download", label: "下载" },
 ];
 
@@ -35,7 +32,6 @@ export default function LandingPage() {
         <WhyNotImeSection />
         <AccuracySection />
         <DictionarySection />
-        <MeetingSection />
         <CTASection />
       </main>
 

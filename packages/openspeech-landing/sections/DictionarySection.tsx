@@ -37,7 +37,7 @@ export default function DictionarySection() {
         >
           <span className="te-eyebrow">04 · Custom Dictionary</span>
           <h2 className="font-mono text-[clamp(2rem,4.6vw,3.6rem)] font-bold leading-[1.05] tracking-tighter text-te-fg">
-            <span>同事的英文名，</span>
+            <span>专属名词、行业术语，</span>
             <span className="bg-gradient-to-r from-te-accent to-te-accent/80 bg-clip-text text-transparent">
               再也不会写错
             </span>

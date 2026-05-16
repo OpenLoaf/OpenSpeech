@@ -1,0 +1,55 @@
+{
+  "name": "@openloaf/openspeech-landing",
+  "version": "0.2.37",
+  "description": "OpenSpeech landing page components",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "keywords": [
+    "openspeech",
+    "landing",
+    "voice-typing",
+    "react"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openloaf/openspeech.git",
+    "directory": "packages/openspeech-landing"
+  },
+  "bugs": {
+    "url": "https://github.com/openloaf/openspeech/issues"
+  },
+  "homepage": "https://github.com/openloaf/openspeech#readme",
+  "author": "",
+  "license": "LICENSE",
+  "peerDependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.4.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.38.0",
+    "i18next": "^26.0.7",
+    "lucide-react": "^1.9.0",
+    "react-i18next": "^17.0.4",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "typescript": "~5.8.3"
+  }
+}

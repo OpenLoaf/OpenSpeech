@@ -192,13 +192,15 @@ export function DictionaryStatic() {
               </p>
             </div>
 
-            <button
+            <motion.button
               type="button"
               onClick={() => setNewOpen(true)}
               className="shrink-0 bg-te-accent px-4 py-2 font-mono text-xs uppercase tracking-wider text-te-accent-fg transition-[filter] hover:brightness-110"
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
             >
               + 新词
-            </button>
+            </motion.button>
           </motion.div>
         </div>
       </div>
@@ -442,16 +444,18 @@ function DictionaryGrid({
   return (
     <>
       {showDomains ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-          {selectedDomains.map((id, index) => (
-            <DomainCard
-              key={`domain-${id}`}
-              id={id}
-              index={index}
-              onRemove={() => onRemoveDomain(id)}
-            />
-          ))}
-        </div>
+         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+           <AnimatePresence mode="popLayout">
+             {selectedDomains.map((id, index) => (
+               <DomainCard
+                 key={`domain-${id}`}
+                 id={id}
+                 index={index}
+                 onRemove={() => onRemoveDomain(id)}
+               />
+             ))}
+           </AnimatePresence>
+         </div>
       ) : null}
 
       {showDivider ? (
@@ -463,14 +467,16 @@ function DictionaryGrid({
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-        {entries.map((entry, index) => (
-          <EntryCard
-            key={entry.id}
-            entry={entry}
-            index={index}
-            onDelete={() => onDeleteEntry(entry.id)}
-          />
-        ))}
+        <AnimatePresence mode="popLayout">
+          {entries.map((entry, index) => (
+            <EntryCard
+              key={entry.id}
+              entry={entry}
+              index={index}
+              onDelete={() => onDeleteEntry(entry.id)}
+            />
+          ))}
+        </AnimatePresence>
       </div>
 
       <div className="mt-10 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-te-light-gray/60">
@@ -576,20 +582,24 @@ function NewWordDialog({
               </div>
 
               <div className="flex flex-row justify-end gap-2 border-t border-te-gray/40 bg-te-surface-hover px-4 py-3">
-                <button
+                <motion.button
                   type="button"
                   onClick={() => onOpenChange(false)}
                   className="border border-te-gray/60 px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-te-fg transition-colors hover:border-te-accent hover:text-te-accent"
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
                 >
                   取消
-                </button>
-                <button
+                </motion.button>
+                <motion.button
                   type="button"
                   onClick={submit}
                   className="bg-te-accent px-4 py-1.5 font-mono text-xs uppercase tracking-wider text-te-accent-fg transition-[filter] hover:brightness-110"
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
                 >
                   添加
-                </button>
+                </motion.button>
               </div>
             </div>
           </motion.div>
@@ -613,9 +623,11 @@ function DomainCard({
   const Icon = DOMAIN_ICONS[id];
   return (
     <motion.article
-      className="group flex items-center gap-3 border border-te-accent/60 bg-te-accent/10 px-3 py-2.5 text-te-accent transition-colors hover:border-te-accent"
-      initial={{ opacity: 0, y: 8 }}
-      whileInView={{ opacity: 1, y: 0 }}
+      className="group flex items-center gap-3 border border-te-accent/60 bg-te-accent/10 px-3 py-2.5 text-te-accent transition-all hover:border-te-accent"
+      initial={{ opacity: 0, y: 8, scale: 0.96 }}
+      whileInView={{ opacity: 1, y: 0, scale: 1 }}
+      whileHover={{ y: -2, boxShadow: "0 4px 20px rgba(0, 200, 140, 0.15)" }}
+      whileTap={{ scale: 0.98 }}
       viewport={{ once: true }}
       transition={{ duration: 0.3, delay: Math.min(index * 0.02, 0.2) }}
     >
@@ -626,15 +638,17 @@ function DomainCard({
         {DOMAIN_NAMES[id]}
       </h3>
       <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-        <button
-          type="button"
-          aria-label="删除"
-          title="删除"
-          onClick={onRemove}
-          className="inline-flex size-6 items-center justify-center transition-colors hover:text-te-fg"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+         <motion.button
+           type="button"
+           aria-label="删除"
+           title="删除"
+           onClick={onRemove}
+           className="inline-flex size-6 items-center justify-center transition-colors hover:text-te-fg"
+           whileHover={{ scale: 1.1 }}
+           whileTap={{ scale: 0.9 }}
+         >
+           <Trash2 className="size-3.5" />
+         </motion.button>
       </div>
     </motion.article>
   );
@@ -655,9 +669,12 @@ function EntryCard({
 
   return (
     <motion.article
-      className="group flex items-center gap-3 border border-te-gray/40 bg-te-surface px-3 py-2.5 transition-colors hover:border-te-accent"
-      initial={{ opacity: 0, y: 8 }}
-      whileInView={{ opacity: 1, y: 0 }}
+      className="group flex items-center gap-3 border border-te-gray/40 bg-te-surface px-3 py-2.5 transition-all hover:border-te-accent"
+      initial={{ opacity: 0, y: 8, scale: 0.96 }}
+      whileInView={{ opacity: 1, y: 0, scale: 1 }}
+      whileHover={{ y: -2, boxShadow: "0 4px 20px rgba(0, 0, 0, 0.1)" }}
+      whileTap={{ scale: 0.98 }}
+      exit={{ opacity: 0, scale: 0.9, x: -10 }}
       viewport={{ once: true }}
       transition={{ duration: 0.3, delay: Math.min(index * 0.02, 0.2) }}
     >
@@ -673,23 +690,27 @@ function EntryCard({
       </h3>
 
       <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-        <button
+        <motion.button
           type="button"
           aria-label="编辑"
           title="编辑"
           className="inline-flex size-6 items-center justify-center text-te-light-gray transition-colors hover:text-te-accent"
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
         >
           <Pencil className="size-3.5" />
-        </button>
-        <button
+        </motion.button>
+        <motion.button
           type="button"
           aria-label="删除"
           title="删除"
           onClick={onDelete}
           className="inline-flex size-6 items-center justify-center text-te-light-gray transition-colors hover:text-te-accent"
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
         >
           <Trash2 className="size-3.5" />
-        </button>
+        </motion.button>
       </div>
     </motion.article>
   );

@@ -15,7 +15,7 @@ export default defineConfig(() => ({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        landing: path.resolve(__dirname, "landing.html"),
+        index: path.resolve(__dirname, "index.html"),
       },
     },
   },
@@ -24,6 +24,7 @@ export default defineConfig(() => ({
   server: {
     port: 1421,
     strictPort: true,
+    open: true,
   },
   test: {
     environment: "jsdom",

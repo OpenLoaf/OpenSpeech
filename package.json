@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "pnpm -r build",
+    "build:web": "tsc && vite build",
+    "build:landing": "cd packages/openspeech-landing && tsc",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
@@ -20,10 +22,7 @@
     "onlyBuiltDependencies": [
       "fs-xattr",
       "macos-alias"
-    ],
-    "patchedDependencies": {
-      "appdmg": "patches/appdmg.patch"
-    }
+    ]
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -67,7 +66,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@openloaf/openspeech-frontend": "0.2.36",
+    "@openloaf/openspeech-frontend": "0.2.37",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -82,5 +81,8 @@
   },
   "optionalDependencies": {
     "appdmg": "^0.6.6"
+  },
+  "patchedDependencies": {
+    "appdmg": "patches/appdmg.patch"
   }
 }

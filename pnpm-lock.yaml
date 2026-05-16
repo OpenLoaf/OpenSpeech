@@ -4,11 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  appdmg:
-    hash: af940030844d5c760900e7cd8f0c4617dfcb1f39f74443933b91c7895de5753b
-    path: patches/appdmg.patch
-
 importers:
 
   .:
@@ -132,8 +127,8 @@ importers:
         version: 5.0.12(@types/react@19.2.14)(immer@11.1.7)(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
     devDependencies:
       '@openloaf/openspeech-frontend':
-        specifier: 0.2.36
-        version: 0.2.36(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
+        specifier: 0.2.37
+        version: 0.2.37(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.10.1
@@ -170,7 +165,50 @@ importers:
     optionalDependencies:
       appdmg:
         specifier: ^0.6.6
-        version: 0.6.6(patch_hash=af940030844d5c760900e7cd8f0c4617dfcb1f39f74443933b91c7895de5753b)
+        version: 0.6.6
+
+  packages/openspeech-landing:
+    dependencies:
+      '@base-ui/react':
+        specifier: ^1.4.1
+        version: 1.4.1(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      framer-motion:
+        specifier: ^12.38.0
+        version: 12.38.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      i18next:
+        specifier: ^26.0.7
+        version: 26.0.7(typescript@5.8.3)
+      lucide-react:
+        specifier: ^1.9.0
+        version: 1.9.0(react@19.2.5)
+      react:
+        specifier: ^19.1.0
+        version: 19.2.5
+      react-dom:
+        specifier: ^19.1.0
+        version: 19.2.5(react@19.2.5)
+      react-i18next:
+        specifier: ^17.0.4
+        version: 17.0.4(i18next@26.0.7(typescript@5.8.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.8.3)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.5.0
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.8
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.6
+        version: 19.2.3(@types/react@19.2.14)
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
 
 packages:
 
@@ -710,8 +748,8 @@ packages:
   '@open-draft/until@2.1.0':
     resolution: {integrity: sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg==}
 
-  '@openloaf/openspeech-frontend@0.2.36':
-    resolution: {integrity: sha512-s7C5yik6WXzxcbp1BVB8XQb6unvlpxSKARC7KelvR/us7VKrEneffR74eR6hmjabYv/AkvOYGxPszkseIk1zNA==}
+  '@openloaf/openspeech-frontend@0.2.37':
+    resolution: {integrity: sha512-pn36rTdaSRWMZHGLjX2zU8XNk+oyYR0lpL0yxFa8ifrERPSzY+a+n/JZM+x32jIrOfkQynkvKquu/2byHuECyg==}
 
   '@reduxjs/toolkit@2.11.2':
     resolution: {integrity: sha512-Kd6kAHTA6/nUpp8mySPqj3en3dm0tdMIgbttnQ1xFMVpufoj+ADi8pXLBsd4xzTRHQa7t/Jv8W5UnCuW4kuWMQ==}
@@ -3894,7 +3932,7 @@ snapshots:
 
   '@open-draft/until@2.1.0': {}
 
-  '@openloaf/openspeech-frontend@0.2.36(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))':
+  '@openloaf/openspeech-frontend@0.2.37(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))':
     dependencies:
       '@base-ui/react': 1.4.1(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@fontsource-variable/geist': 5.2.8
@@ -4433,7 +4471,7 @@ snapshots:
 
   ansi-styles@5.2.0: {}
 
-  appdmg@0.6.6(patch_hash=af940030844d5c760900e7cd8f0c4617dfcb1f39f74443933b91c7895de5753b):
+  appdmg@0.6.6:
     dependencies:
       async: 1.5.2
       ds-store: 0.1.6
