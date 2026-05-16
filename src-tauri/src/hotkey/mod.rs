@@ -461,31 +461,34 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
         return;
     }
 
-    // 按下立即 show overlay（不等前端事件往返，消除 50-100ms 感知延迟）；
-    // hide 交给 overlay 窗口自己——进入 idle 状态时 invoke overlay_hide。
-    // 即使会议录制中也照样弹一下：让用户看到视觉反馈，前端 FSM 没收到 pressed
-    // 会自动把 overlay 收起来。
-    if phase == "pressed" {
-        if let Err(e) = crate::overlay::show(app) {
-            log::warn!("[overlay] show failed: {e:?}");
-        }
-    }
-
     // 会议录制中拦下听写/翻译/Ask 的录音类绑定——不播开录音 cue、不进 FSM、emit toast。
     if maybe_block_for_meeting(app, id, phase) {
         return;
     }
 
     if phase == "pressed" {
-        // 与 overlay::show 同帧触发 start cue。cue 模块自己判 ENABLED + ACTIVE，
-        // 录音中再按一次（toggle off）不会重复播 start。stop / cancel 由前端
-        // 在 state 过渡时通过 cue_play 命令补播。
         crate::cue::play_start();
     }
 
+    // 先 emit 事件给前端 FSM——保证按键事件不被后续 overlay 操作阻塞。
+    // 之前 overlay::show() 放在 emit 前面同步调用，在 rdev 回调线程上会 block
+    // 主线程导致 webview 无法处理事件（空闲后首次按键前 2-3 次事件全部丢失）。
     let payload = HotkeyEventPayload { id, phase };
     if let Err(e) = app.emit(HOTKEY_EVENT, payload) {
         log::warn!("[hotkey] emit failed: {e:?}");
+    }
+
+    // overlay::show 异步调度到主线程——不阻塞当前 handler / rdev 回调线程。
+    // 感知延迟 < 1 event loop tick，用户不可察觉。
+    if phase == "pressed" {
+        let app_for_overlay = app.clone();
+        if let Err(e) = app.run_on_main_thread(move || {
+            if let Err(e) = crate::overlay::show(&app_for_overlay) {
+                log::warn!("[overlay] show failed: {e:?}");
+            }
+        }) {
+            log::warn!("[overlay] schedule show failed: {e:?}");
+        }
     }
 }
 

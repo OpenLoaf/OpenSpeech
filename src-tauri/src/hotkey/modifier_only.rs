@@ -632,21 +632,31 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
 
             for (id, id_str) in newly_pressed_ids {
                 log::warn!("[modifier_only] pressed: {id_str} id={id:?}");
-                // 与 combo 路径一致：按下立即 show overlay 消除感知延迟（会议录制
-                // 中也照弹，前端 FSM 没进 active 会自动 hide，配合 toast 提示）。
-                if let Err(e) = crate::overlay::show(&app_clone) {
-                    log::warn!("[overlay] show failed: {e:?}");
-                }
                 if super::maybe_block_for_meeting(&app_clone, id, "pressed") {
                     continue;
                 }
                 crate::cue::play_start();
+                // 先 emit 事件给前端 FSM——保证按键事件不被后续 overlay 操作阻塞。
+                // 之前 overlay::show() 放在 emit 前面，rdev 回调线程上同步调窗口操作
+                // 会 block 住主线程，导致 webview JS 无法处理 emit 出的事件：空闲后
+                // 首次按快捷键前 2-3 次事件全部丢失，积压后 burst 到前端引发 FSM 乱跳。
                 let payload = HotkeyEventPayload {
                     id,
                     phase: "pressed",
                 };
                 if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
                     log::warn!("[modifier_only] emit pressed failed: {e:?}");
+                }
+                // 非阻塞：run_on_main_thread 把 overlay::show 调度到主线程异步执行，
+                // 不阻塞 rdev 回调线程，后续 release 事件能立刻处理。
+                // overlay 仍会在主线程空闲后尽快 show，感知延迟 < 1 event loop tick。
+                let app_for_overlay = app_clone.clone();
+                if let Err(e) = app_clone.run_on_main_thread(move || {
+                    if let Err(e) = crate::overlay::show(&app_for_overlay) {
+                        log::warn!("[overlay] show failed: {e:?}");
+                    }
+                }) {
+                    log::warn!("[overlay] schedule show failed: {e:?}");
                 }
             }
             for (id, id_str) in newly_released_ids {
