@@ -238,6 +238,14 @@ fn resolved_log_dir() -> std::path::PathBuf {
 // 时 productName 仍是 "OpenSpeech"，会和正式版日志混写。
 const DEV_LOG_FILE_NAME: &str = "OpenSpeech_dev";
 
+// 是否走"调试日志"档位：debug 构建本身，或 release 构建里的 prerelease
+// （语义版本带连字符：0.2.37-beta.1 / -rc.x / -alpha.x）。
+// beta 包发给早期用户，出问题需要 Debug 级日志+落盘归档辅助排查，所以和 dev 同档。
+// 正式版（不带 -）仍走 Info，避免普通用户机器堆几百 MB 噪声日志。
+fn is_debug_log_build() -> bool {
+    cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains('-')
+}
+
 // debug 构建启动时把上一轮 dev 日志删掉，实现"每次启动覆盖"。
 // 必须在 tauri_plugin_log 注册之前调用——plugin 注册即打开文件句柄，
 // 之后再 remove，macOS 下 fd 仍可写入幽灵 inode。
@@ -647,8 +655,9 @@ pub fn run() {
                 .clear_targets()
                 // 默认 UseUtc，终端时间会差一个时区，改本地时区。
                 .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
-                // Debug 整体放开 + 把噪声过大的网络栈拽回 Info；release 维持 Info。
-                .level(if cfg!(debug_assertions) {
+                // Debug 整体放开 + 把噪声过大的网络栈拽回 Info；正式版维持 Info。
+                // beta 等 prerelease 走 Debug，方便回收用户日志。
+                .level(if is_debug_log_build() {
                     tauri_plugin_log::log::LevelFilter::Debug
                 } else {
                     tauri_plugin_log::log::LevelFilter::Info
@@ -1028,6 +1037,7 @@ pub fn run() {
             openloaf::openloaf_web_url,
             openloaf::openloaf_health_check,
             openloaf::feedback::openloaf_submit_feedback,
+            openloaf::feedback::openloaf_submit_history_feedback,
             audio::audio_level_start,
             audio::audio_level_stop,
             audio::audio_list_input_devices,
