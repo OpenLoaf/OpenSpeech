@@ -1043,6 +1043,12 @@ fn spawn_monitor_thread<R: Runtime>(
                 }
             }
 
+            // macOS 15 (Sequoia) 起 CoreAudio HAL 对 stop 信号更敏感：光靠 cpal Drop
+            // 隐式 AudioOutputUnitStop + Dispose，状态栏麦克风指示偶发不熄灭。显式
+            // pause() 走一遍 stop 路径，再 drop 让 Dispose 收尾，indicator 才稳定熄。
+            if let Err(e) = stream.pause() {
+                log::warn!("[audio] stream.pause before drop failed: {e}");
+            }
             drop(stream);
             {
                 let mut g = stream_info().lock().expect("stream_info poisoned");
@@ -1059,7 +1065,16 @@ fn spawn_monitor_thread<R: Runtime>(
 /// 上限——超时即视为失败，调用方拿到 Err 不会再贸然走 stt_start。
 const STREAM_READY_TIMEOUT: Duration = Duration::from_millis(1500);
 
+#[track_caller]
 pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Result<(), String> {
+    let caller = std::panic::Location::caller();
+    log::info!(
+        "[audio] start() called from {}:{} device={:?}",
+        caller.file(),
+        caller.line(),
+        device_name
+    );
+
     // 僵尸自愈：thread 已 finished 但 ref_count > 0，是上轮 audio 线程因 cpal error /
     // panic 提前退出后状态没回滚的残留——直接 force_stop 清零，避免下面快速路径漏掉
     // 已死线程导致 stream_info=None 后续报 "audio stream not running"。
@@ -1086,21 +1101,31 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
         let alive = guard.thread.as_ref().is_some_and(|th| !th.is_finished());
         if alive && guard.current_device == device_name {
             guard.ref_count += 1;
+            log::info!(
+                "[audio] start: fast path (same device alive), ref_count -> {}",
+                guard.ref_count
+            );
             return Ok(());
         }
     }
 
-    // 需要 (re)spawn。若 thread 已在（设备不同 / 僵尸），先停掉旧线程，保持 ref_count 不变
-    // 的前提下替换设备。
-    let (old_tx, old_th) = {
+    // 需要 (re)spawn。若 thread 已在（设备不同 / 僵尸），先停掉旧线程，**ref_count 保持不变**
+    // 替换设备——同一 caller 的引用从旧 stream 转移到新 stream，不应再 +1，否则
+    // caller 后续单次 stop() 永远减不到 0，cpal stream 不释放，macOS 状态栏麦克风
+    // 指示器（橙点）一直亮。
+    let was_respawn;
+    {
         let mut guard = monitor().lock().expect("monitor mutex poisoned");
-        (guard.stop_tx.take(), guard.thread.take())
-    };
-    if let Some(tx) = old_tx {
-        let _ = tx.send(());
-    }
-    if let Some(th) = old_th {
-        let _ = th.join();
+        let old_tx = guard.stop_tx.take();
+        let old_th = guard.thread.take();
+        was_respawn = old_th.is_some();
+        drop(guard);
+        if let Some(tx) = old_tx {
+            let _ = tx.send(());
+        }
+        if let Some(th) = old_th {
+            let _ = th.join();
+        }
     }
 
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
@@ -1127,10 +1152,18 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
     }
 
     let mut guard = monitor().lock().expect("monitor mutex poisoned");
-    guard.ref_count += 1;
+    if !was_respawn {
+        guard.ref_count += 1;
+    }
     guard.current_device = device_name;
     guard.stop_tx = Some(stop_tx);
     guard.thread = Some(th);
+    log::info!(
+        "[audio] start: respawn={} ref_count={} (caller-owned stream {})",
+        was_respawn,
+        guard.ref_count,
+        if was_respawn { "moved to new device" } else { "newly opened" }
+    );
     Ok(())
 }
 
