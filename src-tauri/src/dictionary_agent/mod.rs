@@ -31,6 +31,21 @@ pub struct DictionaryAgentInput {
     pub dictionary: Vec<DictAgentEntry>,
     #[serde(default)]
     pub history_id: Option<String>,
+    /// 前端扫最近 N 条已编辑历史得到的"反复纠正同一字段"信号。空时不注入。
+    /// 让模型看到"用户已经第 3 次把 X 改成 Y"——这是必入库的强信号。
+    #[serde(default)]
+    pub recent_corrections: Option<Vec<RecentCorrection>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentCorrection {
+    /// ASR 原识别（错听）
+    pub wrong: String,
+    /// 用户改成的版本（正确写法）
+    pub correct: String,
+    /// 最近 N 条历史里这条"X → Y"出现了几次（含本次）
+    pub count: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -59,12 +74,18 @@ pub async fn analyze_dictionary_correction<R: Runtime>(
     app: AppHandle<R>,
     input: DictionaryAgentInput,
 ) -> Result<DictionaryAgentResult, String> {
+    let recent_count = input
+        .recent_corrections
+        .as_ref()
+        .map(|v| v.len())
+        .unwrap_or(0);
     log::info!(
-        "[dict_agent] enter history_id={:?} baseline_len={} edited_len={} dict_size={}",
+        "[dict_agent] enter history_id={:?} baseline_len={} edited_len={} dict_size={} recent_corrections={}",
         input.history_id,
         input.baseline.chars().count(),
         input.edited.chars().count(),
         input.dictionary.len(),
+        recent_count,
     );
 
     let resolved = resolve_saas(&app).await?;
@@ -159,6 +180,7 @@ fn build_system_prompt() -> String {
 - <BaselineText>: ASR 给出的原始 / AI 优化后的最终文本（用户改之前看到的版本）。
 - <EditedText>: 用户改完后的最终文本。
 - <CurrentDictionary>: 当前字典里所有已存条目，每条形如 `id=... | term="..." | aliases=[...] | note="..."`。term 是希望模型输出的"正确写法"，aliases 是常见的同音误识别，note 是该条目的含义/上次入库原因（历史决策痕迹）。
+- <RecentCorrections>（可选段，空时不出现）: 最近若干条历史里，用户**重复**把同一个 ASR 误识别改成同一正确写法的统计。每条形如 `wrong="X" correct="Y" count=N`。count 含本次。这是用户行为给的最强信号：他都改 N 次了，就是要这个词。
 </reference_tags>
 
 <core_rules>
@@ -166,13 +188,17 @@ fn build_system_prompt() -> String {
 2. add：BaselineText 中的错词在 CurrentDictionary 里**完全没有 term 或 alias 命中**；EditedText 里对应的正确写法清晰可定位。返回 `{ "action": "add", "term": "<正确写法>", "aliases": ["<原错词>"], "reason": "<一句话说明>" }`。
 3. update：BaselineText 中的错词正好可以归到 CurrentDictionary 已有某条 term 名下（之前未收录的别名），返回 `{ "action": "update", "id": "<已有条目 id>", "addAliases": ["<新别名>"], "reason": "<一句话说明>" }`。**只增量加**，不会替换原 aliases。
 4. delete：极少使用。仅当用户把 CurrentDictionary 某条 term 改回一个**与该条目意图完全相反**的写法时返回 `{ "action": "delete", "id": "<...>", "reason": "<一句话说明>" }`。默认不要 delete。
-5. noop：以下场景一律 noop——
+5. **强制 add（禁止 noop）的情况**：
+   - <RecentCorrections> 中某条 `count ≥ 2`、且 wrong↔correct **同音 / 谐音 / 近音**、且 CurrentDictionary 没有任何 term/alias 命中 correct 或 wrong：**必须** 返回 `{ "action": "add", "term": "<correct>", "aliases": ["<wrong>"], "reason": "<...>"}`。这是用户反复改的硬信号，不许保守判 noop。
+   - 同上但 correct 已是某条 term：必须 `{ "action": "update", "id": "...", "addAliases": ["<wrong>"], "reason": "..." }`。
+6. noop：以下场景一律 noop——
    - 编辑只是改语序、语气、标点、空格、换行、繁简切换。
    - 编辑是整段改写或大幅删改（差异超过 30% 字符），无法定位单一错词。
    - 编辑是补充 / 删除多余口头语（如去掉"嗯"、"那个"），不是错听。
    - 错词与正确写法读音 / 字形完全不相关（用户在做内容改写而非纠错）。
    - 任何拿不准的情况——错误入库会污染所有后续 ASR，宁缺勿滥。
-6. 输出 JSON 形如：
+   - **例外**：上一条"强制 add"成立时，本条不适用——优先入库。
+7. 输出 JSON 形如：
 ```
 {
   "decisions": [
@@ -181,9 +207,9 @@ fn build_system_prompt() -> String {
 }
 ```
 通常 `decisions` 数组只含 1 条。同一次编辑里若同时出现多个独立误识别词，可返回多条 decision。
-7. term 不为空、不超过 60 字。aliases 中不允许与 term 字面一致的项。所有字符串用 UTF-8。
-8. **add / update / delete 必须带 `reason` 字段**——一句中文（≤ 60 字）说明这条 term 的**含义 / 适用领域 / 为什么这次值得入库**，让用户在字典里能一眼读懂。例如 `"项目名 OpenSpeech，常被识别成 '欧片速器'"`、`"开源库 tRPC，注意大小写"`。**不要**只复述"用户把 X 改成了 Y"，要写"是什么"或"为什么这样写才对"。noop 决策可省略 reason。
-9. 不要在 JSON 外输出任何额外文字。不要解释，不要 markdown 包裹。直接返回纯 JSON 对象。
+8. term 不为空、不超过 60 字。aliases 中不允许与 term 字面一致的项。所有字符串用 UTF-8。
+9. **add / update / delete 必须带 `reason` 字段**——一句中文（≤ 60 字）说明这条 term 的**含义 / 适用领域 / 为什么这次值得入库**，让用户在字典里能一眼读懂。例如 `"项目名 OpenSpeech，常被识别成 '欧片速器'"`、`"开源库 tRPC，注意大小写"`。**不要**只复述"用户把 X 改成了 Y"，要写"是什么"或"为什么这样写才对"。noop 决策可省略 reason。
+10. 不要在 JSON 外输出任何额外文字。不要解释，不要 markdown 包裹。直接返回纯 JSON 对象。
 </core_rules>"#.to_string()
 }
 
@@ -224,9 +250,37 @@ fn build_user_message(input: &DictionaryAgentInput) -> String {
             .join("\n")
     };
 
+    let recent_block = input
+        .recent_corrections
+        .as_ref()
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            let lines: Vec<String> = v
+                .iter()
+                .filter(|r| !r.wrong.trim().is_empty() && !r.correct.trim().is_empty())
+                .map(|r| {
+                    format!(
+                        "- wrong=\"{}\" correct=\"{}\" count={}",
+                        escape_quote(&r.wrong),
+                        escape_quote(&r.correct),
+                        r.count,
+                    )
+                })
+                .collect();
+            if lines.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\n<RecentCorrections>\n{}\n</RecentCorrections>",
+                    lines.join("\n"),
+                )
+            }
+        })
+        .unwrap_or_default();
+
     format!(
-        "<BaselineText>\n{}\n</BaselineText>\n\n<EditedText>\n{}\n</EditedText>\n\n<CurrentDictionary>\n{}\n</CurrentDictionary>",
-        input.baseline, input.edited, dict_block,
+        "<BaselineText>\n{}\n</BaselineText>\n\n<EditedText>\n{}\n</EditedText>\n\n<CurrentDictionary>\n{}\n</CurrentDictionary>{}",
+        input.baseline, input.edited, dict_block, recent_block,
     )
 }
 

@@ -27,6 +27,24 @@ use crate::openloaf::{
 };
 use crate::secrets;
 
+mod postprocess;
+use postprocess::{StreamingStripper, StripMode};
+
+/// 截取 system_prompt 的前 N 字做日志预览。换行替成 ⏎ 让一行能看清结构。
+fn preview_for_log(s: &str, max_chars: usize) -> String {
+    let mut buf = String::with_capacity(max_chars * 4);
+    for ch in s.chars().take(max_chars) {
+        if ch == '\n' {
+            buf.push('⏎');
+        } else if ch == '\r' {
+            // skip
+        } else {
+            buf.push(ch);
+        }
+    }
+    buf
+}
+
 const EVENT_DELTA: &str = "openspeech://ai-refine:delta";
 const EVENT_DONE: &str = "openspeech://ai-refine:done";
 const EVENT_ERROR: &str = "openspeech://ai-refine:error";
@@ -66,6 +84,9 @@ pub struct RefineChatInput {
     pub custom_keyring_id: Option<String>,
     #[serde(default)]
     pub task_id: Option<String>,
+    /// 输出尾句号过滤：off / auto / always。None = auto。
+    #[serde(default)]
+    pub strip_trailing_period: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -440,14 +461,25 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
     input: RefineChatInput,
 ) -> Result<RefineChatResult, String> {
     let task_id = input.task_id.clone();
+    let sp_chars = input.system_prompt.chars().count();
+    let sp_bytes = input.system_prompt.len();
+    let sp_lines = input.system_prompt.lines().count();
+    let sp_has_hotwords_tag = input.system_prompt.contains("<system-tag type=\"HotWords\"")
+        || input.system_prompt.contains("<HotWords");
+    let sp_preview = preview_for_log(&input.system_prompt, 200);
     log::info!(
-        "[ai_refine] enter command mode={} text_len={} hotwords={} history={} task_id={:?}",
+        "[ai_refine] enter command mode={} text_len={} hotwords={} history={} sp_chars={} sp_bytes={} sp_lines={} sp_has_hotwords_tag={} task_id={:?}",
         input.mode,
         input.user_text.chars().count(),
         input.hotwords.as_ref().map(|v| v.len()).unwrap_or(0),
         input.history_entries.as_ref().map(|v| v.len()).unwrap_or(0),
+        sp_chars,
+        sp_bytes,
+        sp_lines,
+        sp_has_hotwords_tag,
         task_id,
     );
+    log::info!("[ai_refine] system_prompt preview={sp_preview:?}");
     let resolved = match input.mode.as_str() {
         "saas" => match resolve_saas(&app).await {
             Ok(r) => r,
@@ -638,6 +670,9 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         return Err(raw);
     };
 
+    let strip_mode = StripMode::from_str_or_auto(input.strip_trailing_period.as_deref());
+    let mut stripper = StreamingStripper::new();
+
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     let mut full = String::new();
@@ -682,24 +717,61 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
             for choice in parsed.choices {
                 if let Some(content) = choice.delta.content {
                     if !content.is_empty() {
-                        full.push_str(&content);
-                        let _ = app.emit(
-                            EVENT_DELTA,
-                            DeltaPayload {
-                                task_id: task_id.clone(),
-                                chunk: content,
-                            },
-                        );
+                        // 经过 stripper 做 tail-hold；潜在尾句号字符被 hold 住
+                        // 不立即 emit，下一段 delta 来时（或 finalize 时）再决断。
+                        let to_emit = stripper.push(&content);
+                        if !to_emit.is_empty() {
+                            full.push_str(&to_emit);
+                            let _ = app.emit(
+                                EVENT_DELTA,
+                                DeltaPayload {
+                                    task_id: task_id.clone(),
+                                    chunk: to_emit,
+                                },
+                            );
+                        }
                     }
                 }
             }
         }
     }
 
+    // 流式收完，让 stripper 决定 hold 的尾巴怎么处理。
+    let (final_extra, final_full) = stripper.finalize(&full, &input.user_text, strip_mode);
+    if !final_extra.is_empty() {
+        // off 模式 / 用户原话本来就带句号 → 把 hold 的尾巴补一帧 delta 出去
+        full.push_str(&final_extra);
+        let _ = app.emit(
+            EVENT_DELTA,
+            DeltaPayload {
+                task_id: task_id.clone(),
+                chunk: final_extra,
+            },
+        );
+    } else if final_full.len() < full.len() {
+        // 防御性：理论上 finalize 不该让 final_full 比 full 短（emit 已经走完），
+        // 这里走不到。留 sanity check 日志。
+        log::warn!(
+            "[ai_refine] stripper produced shorter final_full ({} < {}) without extra emit",
+            final_full.len(),
+            full.len()
+        );
+    }
+    // 最终态以 stripper 的 final_full 为准（含被砍尾后的版本）。
+    let full = final_full;
+
+    let trailing_period = full
+        .trim_end()
+        .chars()
+        .last()
+        .map(|c| matches!(c, '。' | '．' | '.' | '｡'))
+        .unwrap_or(false);
     log::info!(
-        "[ai_refine] done mode={} chars={} task_id={:?} text={:?}",
+        "[ai_refine] done mode={} chars={} strip={:?} ends_with_period={} task_id={:?} text={:?}",
         input.mode,
         full.chars().count(),
+        strip_mode,
+        trailing_period,
         task_id,
         full,
     );
