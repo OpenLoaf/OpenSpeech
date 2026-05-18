@@ -1040,6 +1040,8 @@ pub fn run() {
             audio::audio_recording_delete,
             cue::cue_set_enabled,
             cue::cue_set_active,
+            cue::cue_reset_active,
+            cue::cue_diagnose_and_test,
             cue::cue_play,
             stt::stt_start,
             stt::stt_finalize,
