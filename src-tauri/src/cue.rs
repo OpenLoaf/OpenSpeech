@@ -178,6 +178,16 @@ pub fn cue_reset_active() {
     }
 }
 
+/// 录音活跃期由 audio level emit 路径（20Hz）持续调用以续约 ACTIVE_SET_AT_MS。
+/// 否则一旦单次录音超过 ACTIVE_STALE_MS（30s），结束时再按一下 PTT/toggle
+/// 会被 play_start_internal 的"脏状态"分支误判，导致先播 start 再播 stop（两声）。
+/// ACTIVE=false 时本函数 no-op，对设置页的电平表预览路径无副作用。
+pub fn keepalive_active() {
+    if ACTIVE.load(Ordering::Relaxed) {
+        ACTIVE_SET_AT_MS.store(now_ms(), Ordering::Relaxed);
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct CueDiagnose {
     pub enabled: bool,

@@ -1039,6 +1039,9 @@ fn spawn_monitor_thread<R: Runtime>(
                         };
                         let peak = (gated * PEAK_GAIN).clamp(0.0, 1.0);
                         let _ = app.emit(AUDIO_LEVEL_EVENT, peak);
+                        // 录音活跃期续约 cue ACTIVE_SET_AT_MS，避免长录音（>30s）结束
+                        // 时被 stale 守卫误判脏状态、强制 reset 后多播一声 start cue。
+                        crate::cue::keepalive_active();
                     }
                 }
             }
