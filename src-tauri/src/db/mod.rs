@@ -265,5 +265,55 @@ ALTER TABLE dictionary ADD COLUMN created_by TEXT;
             sql: "ALTER TABLE history ADD COLUMN target_app_id TEXT;",
             kind: MigrationKind::Up,
         },
+        // v16：会议崩溃恢复用的 status='recovered'。
+        // 会议中途进程被杀（webview OOM、用户强退），jsonl 已 append 到磁盘但 history 行
+        // 没插入。boot 时孤儿扫描会读 jsonl 拼回 history 行并标 status='recovered'，UI
+        // 上对这种行加个图标表示"自动恢复"。SQLite 不支持改 CHECK 约束，必须重建表。
+        Migration {
+            version: 16,
+            description: "history_status_add_recovered",
+            sql: r#"
+CREATE TABLE history_new (
+    id           TEXT PRIMARY KEY,
+    type         TEXT NOT NULL CHECK (type IN ('dictation', 'ask', 'translate', 'meeting')),
+    text         TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('success', 'failed', 'cancelled', 'recovered')),
+    error        TEXT,
+    duration_ms  INTEGER NOT NULL,
+    created_at   INTEGER NOT NULL,
+    target_app   TEXT,
+    audio_path   TEXT,
+    refined_text TEXT,
+    asr_source   TEXT,
+    ai_model     TEXT,
+    segment_mode TEXT,
+    provider_kind TEXT,
+    target_lang  TEXT,
+    meeting_id   TEXT,
+    asr_ms       INTEGER,
+    refine_ms    INTEGER,
+    transcript_path TEXT,
+    summary_path TEXT,
+    debug_payload TEXT,
+    text_edited  TEXT,
+    text_edited_at INTEGER,
+    focus_title  TEXT,
+    target_app_id TEXT
+);
+INSERT INTO history_new SELECT
+    id, type, text, status, error, duration_ms, created_at, target_app, audio_path,
+    refined_text, asr_source, ai_model, segment_mode, provider_kind, target_lang,
+    meeting_id, asr_ms, refine_ms, transcript_path, summary_path, debug_payload,
+    text_edited, text_edited_at, focus_title, target_app_id
+FROM history;
+DROP TABLE history;
+ALTER TABLE history_new RENAME TO history;
+
+CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_history_type ON history(type);
+CREATE INDEX IF NOT EXISTS idx_history_meeting_id ON history(meeting_id);
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

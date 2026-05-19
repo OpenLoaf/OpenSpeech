@@ -35,7 +35,10 @@ use crate::asr::meeting::{
 };
 use crate::audio::is_valid_date_segment;
 use crate::db;
+use crate::meetings::writers::{MeetingAudioWriter, MeetingTranscriptAppender};
 use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
+
+mod writers;
 
 /// 前端订阅的事件名。
 pub const EVENT_READY: &str = "meetings://ready";
@@ -133,6 +136,10 @@ struct ActiveMeeting {
     started_at: Instant,
     /// 累计运行毫秒（包含历史 pause 区间之间的活动时间）。
     elapsed_baseline_ms: u64,
+    /// `recordings/<date>/<id>.ogg`——meeting_start 创建 writer 时就定好，
+    /// meeting_stop 直接返回给前端写 history.audio_path，无需等 worker 回报。
+    audio_rel_path: String,
+    transcript_rel_path: String,
 }
 
 fn active_slot() -> &'static Mutex<Option<ActiveMeeting>> {
@@ -210,19 +217,34 @@ pub struct StartArgs {
     pub language: String,
     /// 直接复用听写通道的 ProviderRef（mode + 自定义 provider id + tencentAppId 等）。
     pub provider: ProviderRef,
+    /// 本地日期 yyyy-MM-dd——audio/transcript 文件落到 recordings/<date>/<id>.{ogg,jsonl}。
+    /// 由前端按本地时区生成，避免 Rust 端拿到 UTC 跟用户「翻文件夹」的语义偏一天。
+    pub date: String,
+}
+
+/// meeting_start 的返回值：前端拿到 paths 后立刻 INSERT 一条 status='in_progress'
+/// 的 history 行，会议中途崩溃也能在重启后找到入口。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingStartResult {
+    pub audio_path: String,
+    pub transcript_path: String,
 }
 
 #[tauri::command]
 pub async fn meeting_start<R: Runtime>(
     app: AppHandle<R>,
     args: StartArgs,
-) -> Result<(), String> {
+) -> Result<MeetingStartResult, String> {
     tauri::async_runtime::spawn_blocking(move || meeting_start_impl(app, args))
         .await
         .map_err(|e| format!("meeting_start join: {e}"))?
 }
 
-fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<(), String> {
+fn meeting_start_impl<R: Runtime>(
+    app: AppHandle<R>,
+    args: StartArgs,
+) -> Result<MeetingStartResult, String> {
     log::info!(
         "[meetings] meeting_start id={} lang={} provider_mode={:?}",
         args.meeting_id,
@@ -296,6 +318,22 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         },
     );
 
+    // 流式落盘 writers：握手成功后才开文件，避免握手失败留下空 .ogg/.jsonl 孤儿。
+    // create 失败要按顺序清理：transcript 失败时把已开的 audio 文件删掉，免得下次启动
+    // 扫到一个没字幕的孤儿录音。
+    let audio_writer = MeetingAudioWriter::create(&app, &args.meeting_id, &args.date)?;
+    let audio_rel_path = audio_writer.rel_path().to_string();
+    let transcript_writer = match MeetingTranscriptAppender::create(&app, &args.meeting_id, &args.date) {
+        Ok(w) => w,
+        Err(e) => {
+            // audio_writer 拿在手里，drop 会 flush；这里直接放弃 audio 文件最干净。
+            // 不显式 unlink——后续 orphan_scan 会收掉；当下保留可读 OGG 比静默删除更安全。
+            drop(audio_writer);
+            return Err(e);
+        }
+    };
+    let transcript_rel_path = transcript_writer.rel_path().to_string();
+
     let paused = Arc::new(AtomicBool::new(false));
     let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>();
 
@@ -314,6 +352,8 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
                 paused_for_worker,
                 provider_for_worker,
                 session_config,
+                audio_writer,
+                transcript_writer,
             )
         })
         .map_err(|e| format!("spawn meetings worker: {e}"))?;
@@ -328,6 +368,8 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
             worker: Some(handle),
             started_at: Instant::now(),
             elapsed_baseline_ms: 0,
+            audio_rel_path: audio_rel_path.clone(),
+            transcript_rel_path: transcript_rel_path.clone(),
         });
     }
 
@@ -340,7 +382,10 @@ fn meeting_start_impl<R: Runtime>(app: AppHandle<R>, args: StartArgs) -> Result<
         },
     );
 
-    Ok(())
+    Ok(MeetingStartResult {
+        audio_path: audio_rel_path,
+        transcript_path: transcript_rel_path,
+    })
 }
 
 /// audio callback / 测试代码喂 PCM16 LE 帧的入口。无激活会议时无 op。
@@ -409,15 +454,25 @@ pub fn meeting_resume<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
+/// meeting_stop 的返回值：duration + audio/transcript 相对路径。
+/// 前端拿 audio_path 直接 UPDATE history.audio_path，replace 原来 stopRecordingAndSave 的角色。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingStopResult {
+    pub duration_ms: u64,
+    pub audio_path: String,
+    pub transcript_path: String,
+}
+
 #[tauri::command]
-pub async fn meeting_stop<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
+pub async fn meeting_stop<R: Runtime>(app: AppHandle<R>) -> Result<MeetingStopResult, String> {
     tauri::async_runtime::spawn_blocking(move || meeting_stop_impl(app))
         .await
         .map_err(|e| format!("meeting_stop join: {e}"))?
 }
 
-fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
-    let (worker_handle, meeting_id, total_ms) = {
+fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<MeetingStopResult, String> {
+    let (worker_handle, meeting_id, total_ms, audio_path, transcript_path) = {
         let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
         let mut a = slot.take().ok_or("no active meeting")?;
         let total_ms = a.elapsed_baseline_ms
@@ -427,7 +482,14 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
                 a.started_at.elapsed().as_millis() as u64
             };
         // drop a → drop audio_tx → worker 在 try_recv 拿到 Disconnected 后调 session.finish()
-        (a.worker.take(), a.meeting_id, total_ms)
+        // → worker 退出前 finalize writers（flush OGG EOS page、jsonl flush）
+        (
+            a.worker.take(),
+            a.meeting_id,
+            total_ms,
+            a.audio_rel_path,
+            a.transcript_rel_path,
+        )
     };
 
     if let Some(h) = worker_handle {
@@ -444,7 +506,11 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
         },
     );
     let _ = app.emit(EVENT_END, meeting_id);
-    Ok(total_ms)
+    Ok(MeetingStopResult {
+        duration_ms: total_ms,
+        audio_path,
+        transcript_path,
+    })
 }
 
 // ---------- Worker：把 vendor 事件转成前端 emit ----------
@@ -459,6 +525,7 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
 //   4) 等到 Ready 后回到主循环，audio_rx 期间堆积的帧丢弃（追不上的时间，gap 也没识别价值）
 //
 // vendor 协议层 Error（鉴权 / 引擎未授权）一律不重连，它们大概率是配置错误。
+#[allow(clippy::too_many_arguments)]
 fn event_pump<R: Runtime>(
     app: AppHandle<R>,
     meeting_id: String,
@@ -467,6 +534,8 @@ fn event_pump<R: Runtime>(
     paused: Arc<AtomicBool>,
     provider: Arc<dyn MeetingAsrProvider>,
     config: MeetingSessionConfig,
+    mut audio_writer: MeetingAudioWriter,
+    mut transcript_writer: MeetingTranscriptAppender,
 ) {
     let mut sentence_id_offset: i64 = 0;
     let mut time_offset_ms: u64 = 0;
@@ -486,14 +555,18 @@ fn event_pump<R: Runtime>(
             time_offset_ms,
             &mut max_sid_in_session,
             &mut max_end_ms_in_session,
+            &mut audio_writer,
+            &mut transcript_writer,
         );
 
         match exit {
             SessionExit::EndOfStream => {
+                finalize_writers(audio_writer, transcript_writer);
                 let _ = app.emit(EVENT_END, meeting_id.clone());
                 return;
             }
             SessionExit::Error { code, message } => {
+                finalize_writers(audio_writer, transcript_writer);
                 let _ = app.emit(
                     EVENT_ERROR,
                     ErrorPayload {
@@ -506,6 +579,7 @@ fn event_pump<R: Runtime>(
             }
             SessionExit::NetworkExit(reason) => {
                 if reconnect_attempts >= RECONNECT_MAX_ATTEMPTS {
+                    finalize_writers(audio_writer, transcript_writer);
                     let _ = app.emit(
                         EVENT_RECONNECTING,
                         ReconnectPayload {
@@ -561,6 +635,7 @@ fn event_pump<R: Runtime>(
                         while audio_rx.try_recv().is_ok() {}
                     }
                     None => {
+                        finalize_writers(audio_writer, transcript_writer);
                         let _ = app.emit(
                             EVENT_RECONNECTING,
                             ReconnectPayload {
@@ -587,6 +662,17 @@ fn event_pump<R: Runtime>(
     }
 }
 
+/// 同时 finalize 两个 writer。一个失败不阻断另一个——OGG 文件失 EOS 仍能被 ffmpeg
+/// 读前半段，jsonl 失 flush 也能丢 4KB 内的数据，最大化保留可用资产。
+fn finalize_writers(audio: MeetingAudioWriter, transcript: MeetingTranscriptAppender) {
+    if let Err(e) = audio.finalize() {
+        log::warn!("[meetings] audio writer finalize failed: {e}");
+    }
+    if let Err(e) = transcript.finalize() {
+        log::warn!("[meetings] transcript writer finalize failed: {e}");
+    }
+}
+
 enum SessionExit {
     EndOfStream,
     Error { code: String, message: String },
@@ -604,14 +690,21 @@ fn run_session<R: Runtime>(
     time_offset_ms: u64,
     max_sid_in_session: &mut i64,
     max_end_ms_in_session: &mut u64,
+    audio_writer: &mut MeetingAudioWriter,
+    transcript_writer: &mut MeetingTranscriptAppender,
 ) -> SessionExit {
     let mut finished = false;
     let mut finish_deadline: Option<Instant> = None;
     loop {
         // 1) 排空 audio queue：尽量把堆积的帧一次性灌进 session，避免节奏被打散。
+        //    同时把 PCM 编码追加到本地 OGG——pause 中也写盘，否则 review 的音频
+        //    跟字幕时间线会对不上（字幕时间线含 pause 间隔）。
         loop {
             match audio_rx.try_recv() {
                 Ok(pcm) => {
+                    if let Err(e) = audio_writer.push_pcm16(&pcm) {
+                        log::warn!("[meetings] audio writer push failed: {e}");
+                    }
                     if !paused.load(Ordering::Relaxed) {
                         if let Err(e) = session.send_audio(pcm) {
                             log::warn!("[meetings] send_audio failed: {e}");
@@ -659,17 +752,19 @@ fn run_session<R: Runtime>(
                 if s.end_ms > *max_end_ms_in_session {
                     *max_end_ms_in_session = s.end_ms;
                 }
-                let _ = app.emit(
-                    EVENT_FINAL,
-                    SegmentPayload {
-                        meeting_id: meeting_id.to_string(),
-                        sentence_id: s.sentence_id + sentence_id_offset,
-                        speaker_id: s.speaker_id,
-                        text: s.text,
-                        start_ms: s.start_ms.saturating_add(time_offset_ms),
-                        end_ms: s.end_ms.saturating_add(time_offset_ms),
-                    },
-                );
+                let payload = SegmentPayload {
+                    meeting_id: meeting_id.to_string(),
+                    sentence_id: s.sentence_id + sentence_id_offset,
+                    speaker_id: s.speaker_id,
+                    text: s.text,
+                    start_ms: s.start_ms.saturating_add(time_offset_ms),
+                    end_ms: s.end_ms.saturating_add(time_offset_ms),
+                };
+                // 先落盘后 emit：哪怕 emit 期间 webview crash，磁盘上字幕已落定。
+                if let Err(e) = transcript_writer.append_final(&payload) {
+                    log::warn!("[meetings] transcript append failed: {e}");
+                }
+                let _ = app.emit(EVENT_FINAL, payload);
             }
             MeetingEvent::Error { code, message } => {
                 return SessionExit::Error { code, message };
@@ -764,6 +859,83 @@ fn attempt_reconnect<R: Runtime>(
     }
     log::warn!("[meetings] reconnect handshake timeout");
     None
+}
+
+// ---------- 孤儿扫描 ----------
+//
+// 会议中途进程被杀（webview OOM、用户强退、系统断电）时：
+//   - audio writer 已经在 worker 内 push_pcm16 写盘，BufWriter 内最多丢几 KB
+//   - transcript appender 每段 final 都 flush，已识别段全部落地
+//   - **但** history 行因为前端没机会调 insertMeetingHistory，没插入
+//
+// 启动时枚举 recordings/<date>/*.jsonl，前端拿这个 list 对照 history 表，
+// 缺失的就读 jsonl 拼回一条 status='recovered' 的 history 行。
+//
+// 只返回路径不读内容——读 jsonl 走前端已有 meeting_transcript_load 通道，
+// 避免在 Rust 端再写一遍同样的解析逻辑。
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanCandidate {
+    /// 从文件名解出的 meeting_id（去掉 .jsonl 后缀）。
+    pub meeting_id: String,
+    /// 形如 "recordings/2026-05-19/<id>.jsonl"，前端可直接传给 meeting_transcript_load。
+    pub transcript_path: String,
+    /// 形如 "recordings/2026-05-19/<id>.ogg"——可能不存在（writer 创建失败 / 旧版数据）。
+    pub audio_path: Option<String>,
+    /// 文件 mtime 毫秒，给前端排序/展示用。
+    pub mtime_ms: Option<i64>,
+}
+
+#[tauri::command]
+pub fn meeting_scan_orphans<R: Runtime>(
+    app: AppHandle<R>,
+    dates: Vec<String>,
+) -> Result<Vec<OrphanCandidate>, String> {
+    let base = db::recordings_dir(&app)?;
+    let mut out = Vec::new();
+    for date in dates {
+        if !is_valid_date_segment(&date) {
+            continue;
+        }
+        let day_dir = base.join(&date);
+        let Ok(entries) = std::fs::read_dir(&day_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(stem) = name.strip_suffix(".jsonl") else {
+                continue;
+            };
+            // meeting_id 校验：start 时同样的规则——防止有人手动塞奇怪文件名进来
+            if stem.is_empty() || stem.contains("..") {
+                continue;
+            }
+            let transcript_path = format!("recordings/{date}/{stem}.jsonl");
+            let ogg_abs = day_dir.join(format!("{stem}.ogg"));
+            let audio_path = if ogg_abs.exists() {
+                Some(format!("recordings/{date}/{stem}.ogg"))
+            } else {
+                None
+            };
+            let mtime_ms = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64);
+            out.push(OrphanCandidate {
+                meeting_id: stem.to_string(),
+                transcript_path,
+                audio_path,
+                mtime_ms,
+            });
+        }
+    }
+    Ok(out)
 }
 
 // ---------- 时间轴文件（jsonl）IO ----------

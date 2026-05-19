@@ -54,12 +54,13 @@ pub const DEFAULT_BASE_URL: &str = match option_env!("OPENLOAF_BASE_URL") {
 
 // OpenLoaf Web 前端地址。订阅/充值走 Web 页面（App 内不内嵌支付流程），
 // 前端通过 openloaf_web_url command 拿完整 URL 后 openUrl 到浏览器。
+// 注意：Web 站点已独立到 openloaf-website 子域，与 REST API（openloaf.hexems.com）分开。
 #[cfg(all(debug_assertions, not(feature = "staging")))]
 const FALLBACK_WEB_URL: &str = "http://localhost:5180";
 #[cfg(all(debug_assertions, feature = "staging"))]
-const FALLBACK_WEB_URL: &str = "https://openloaf.hexems.com";
+const FALLBACK_WEB_URL: &str = "https://openloaf-website.hexems.com";
 #[cfg(not(debug_assertions))]
-const FALLBACK_WEB_URL: &str = "https://openloaf.hexems.com";
+const FALLBACK_WEB_URL: &str = "https://openloaf-website.hexems.com";
 
 pub const DEFAULT_WEB_URL: &str = match option_env!("OPENLOAF_WEB_URL") {
     Some(v) => v,
@@ -748,7 +749,7 @@ pub async fn openloaf_try_recover(
 
 /// 拼出 OpenLoaf Web 的页面 URL（订阅 / 充值等）。前端拿到后用 openUrl 打开。
 ///
-/// 例：`path = "/pricing"` → `https://openloaf.hexems.com/pricing`
+/// 例：`path = "/pricing"` → `https://openloaf-website.hexems.com/pricing`
 #[tauri::command]
 pub fn openloaf_web_url(path: String) -> String {
     // 兼容前端不小心传了完整 URL 的情况：以 http 开头就原样返回。

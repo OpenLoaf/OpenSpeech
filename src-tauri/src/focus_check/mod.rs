@@ -21,6 +21,29 @@ mod imp {
     const KCF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
     const AX_SUCCESS: AXError = 0;
 
+    // HIServices/AXError.h 常量名映射，方便日志直接看出"权限丢了"还是"目标进程没暴露"。
+    fn ax_err_name(err: AXError) -> &'static str {
+        match err {
+            0 => "Success",
+            -25200 => "Failure",
+            -25201 => "IllegalArgument",
+            -25202 => "InvalidUIElement",
+            -25203 => "InvalidUIElementObserver",
+            -25204 => "CannotComplete",
+            -25205 => "AttributeUnsupported",
+            -25206 => "ActionUnsupported",
+            -25207 => "NotificationUnsupported",
+            -25208 => "NotImplemented",
+            -25209 => "NotificationAlreadyRegistered",
+            -25210 => "NotificationNotRegistered",
+            -25211 => "APIDisabled",
+            -25212 => "NoValue",
+            -25213 => "ParameterizedAttributeUnsupported",
+            -25214 => "NotEnoughPrecision",
+            _ => "Unknown",
+        }
+    }
+
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
         fn AXUIElementCreateSystemWide() -> AXUIElementRef;
@@ -121,7 +144,8 @@ mod imp {
         // 私有 view（部分 Electron 早期版本 / 全屏游戏）。视为"未知"，调用方走旧路径。
         if err != AX_SUCCESS || focused.is_null() {
             log::warn!(
-                "[focus] AXFocusedUIElement unavailable err={err} focused_null={} → return None (Unknown)",
+                "[focus] AXFocusedUIElement unavailable err={err}({}) focused_null={} → return None (Unknown)",
+                ax_err_name(err),
                 focused.is_null()
             );
             return None;

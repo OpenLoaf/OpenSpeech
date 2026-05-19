@@ -31,6 +31,7 @@ mod focus_check;
 mod hotkey;
 mod http;
 mod idle;
+mod ime;
 mod inject;
 mod meetings;
 mod openloaf;
@@ -1006,6 +1007,7 @@ pub fn run() {
             hide_to_tray,
             get_active_window_info_cmd,
             focus_check::focus_is_editable_cmd,
+            ime::active_ime_id_cmd,
             show_main_window_cmd,
             tray_refresh,
             update_tray_labels,
@@ -1067,6 +1069,7 @@ pub fn run() {
             meetings::meeting_summary_write,
             meetings::meeting_summary_load,
             meetings::meeting_summary_delete,
+            meetings::meeting_scan_orphans,
             ai_refine::refine_text_via_chat_stream,
             dictionary_agent::analyze_dictionary_correction,
             transcribe::transcribe_recording_file,
