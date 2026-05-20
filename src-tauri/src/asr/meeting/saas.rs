@@ -50,7 +50,9 @@ impl MeetingAsrProvider for SaasMeetingProvider {
             supported_languages: SUPPORTED_LANGUAGES,
             // OL-TL-RT-003 服务端 60s 无音频帧主动断开（idle_timeout）。
             max_idle_silence_ms: 60_000,
-            recommended_chunk_ms: 100,
+            // 腾讯 16k_zh_en_speaker 上游限制 ≤25 chunks/秒（推荐 200ms/帧、5 个/秒）。
+            // 超频会触发 TENCENT_4016 立即终止会话。SaasMeetingSession 内部按 200ms 聚合。
+            recommended_chunk_ms: 200,
             sample_rate: 16_000,
         }
     }
@@ -115,22 +117,45 @@ fn is_unauthorized(s: &str) -> bool {
     l.contains("401") || l.contains("unauthorized") || l.contains("unauthenticated")
 }
 
+// 腾讯 16k_zh_en_speaker 推荐 200ms/帧。200ms @ 16kHz mono PCM16 = 3200 sample * 2B = 6400B。
+// cpal callback 默认 ~10ms/帧（约 340B），不聚合直接转发会做到 96 chunks/秒，远超腾讯
+// ≤25 chunks/秒上限，触发 TENCENT_4016 后会话立即终止——见 2026-05 排查记录。
+const SAAS_CHUNK_BYTES: usize = 6400;
+
 struct SaasMeetingSession {
     sess: RealtimeAsrSession,
+    /// 聚合 cpal 小帧到 ≥SAAS_CHUNK_BYTES 再 send_audio，避免上游限频。
+    send_buffer: Vec<u8>,
 }
 
 impl SaasMeetingSession {
     fn new(sess: RealtimeAsrSession) -> Self {
-        Self { sess }
+        Self {
+            sess,
+            send_buffer: Vec::with_capacity(SAAS_CHUNK_BYTES * 2),
+        }
     }
 }
 
 impl MeetingSession for SaasMeetingSession {
     fn send_audio(&mut self, pcm16: Vec<u8>) -> Result<(), String> {
-        self.sess.send_audio(pcm16).map_err(|e| e.to_string())
+        self.send_buffer.extend_from_slice(&pcm16);
+        while self.send_buffer.len() >= SAAS_CHUNK_BYTES {
+            let chunk: Vec<u8> = self.send_buffer.drain(..SAAS_CHUNK_BYTES).collect();
+            self.sess.send_audio(chunk).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     fn finish(&mut self) -> Result<(), String> {
+        // 残留尾包（<200ms）发出去——4016 限的是频率不是大小，单个小尾包不会超频；
+        // 失败也继续走 finish，避免吞掉服务端最终段。
+        if !self.send_buffer.is_empty() {
+            let leftover = std::mem::take(&mut self.send_buffer);
+            if let Err(e) = self.sess.send_audio(leftover) {
+                log::warn!(target: LOG_TARGET, "[finish] leftover send_audio failed: {e}");
+            }
+        }
         self.sess.finish().map_err(|e| e.to_string())
     }
 
