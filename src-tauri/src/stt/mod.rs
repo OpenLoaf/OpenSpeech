@@ -130,6 +130,9 @@ struct SessionState {
     /// 已收到的 Final 段总数；finalize 用它判断"段是否还在增长"做尾部等待。
     final_count: Arc<AtomicI64>,
     stop_signal: Arc<AtomicBool>,
+    /// 服务端 Closed 帧给的本次会话累计 credits（SaaS 路径才有；BYOK / 未到 Closed = None）。
+    /// worker 收到 Closed 时写入；finalize 在 worker join 之后读出来一并返回。
+    total_credits: Arc<Mutex<Option<f64>>>,
 }
 
 fn slot() -> &'static Mutex<Option<SessionState>> {
@@ -444,10 +447,12 @@ fn stt_start_impl<R: Runtime>(
     let stop_signal = Arc::new(AtomicBool::new(false));
     let final_segments: Arc<Mutex<BTreeMap<i64, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
     let final_count = Arc::new(AtomicI64::new(0));
+    let total_credits: Arc<Mutex<Option<f64>>> = Arc::new(Mutex::new(None));
 
     let stop_worker = stop_signal.clone();
     let final_worker = final_segments.clone();
     let count_worker = final_count.clone();
+    let credits_worker = total_credits.clone();
     let app_worker = app.clone();
 
     let worker = thread::Builder::new()
@@ -460,6 +465,7 @@ fn stt_start_impl<R: Runtime>(
                 stop_worker,
                 final_worker,
                 count_worker,
+                credits_worker,
             )
         })
         .map_err(|e| format!("spawn stt worker: {e}"))?;
@@ -470,6 +476,7 @@ fn stt_start_impl<R: Runtime>(
         final_segments,
         final_count,
         stop_signal,
+        total_credits,
     });
     Ok(())
 }
@@ -508,6 +515,7 @@ fn run_worker<R: Runtime>(
     stop: Arc<AtomicBool>,
     final_segments: Arc<Mutex<BTreeMap<i64, String>>>,
     final_count: Arc<AtomicI64>,
+    total_credits: Arc<Mutex<Option<f64>>>,
 ) {
     // 退出原因：用于决定是否要给前端发 worker_dead 信号。
     // - Stop:        Control::Stop / stop_signal / 通道断开 —— 是上层主动收尾，
@@ -570,7 +578,7 @@ fn run_worker<R: Runtime>(
             }
             other => {
                 consecutive_decode_errs = 0;
-                if handle_event(&app, other, &final_segments, &final_count) {
+                if handle_event(&app, other, &final_segments, &final_count, &total_credits) {
                     break 'outer ExitReason::ServerEnd;
                 }
             }
@@ -607,6 +615,7 @@ fn handle_event<R: Runtime>(
     ev: RealtimeBackendEvent,
     final_segments: &Arc<Mutex<BTreeMap<i64, String>>>,
     final_count: &Arc<AtomicI64>,
+    total_credits: &Arc<Mutex<Option<f64>>>,
 ) -> bool {
     match ev {
         RealtimeBackendEvent::Ready { session_id } => {
@@ -671,14 +680,19 @@ fn handle_event<R: Runtime>(
         }
         RealtimeBackendEvent::Closed {
             reason,
-            total_credits,
+            total_credits: credits_in,
         } => {
             log::warn!(
-                "[stt] server closed session: reason={reason:?} total_credits={total_credits:?}"
+                "[stt] server closed session: reason={reason:?} total_credits={credits_in:?}"
             );
+            if let Some(c) = credits_in {
+                if let Ok(mut g) = total_credits.lock() {
+                    *g = Some(c);
+                }
+            }
             let _ = app.emit(
                 EVENT_CLOSED,
-                json!({ "reason": reason, "totalCredits": total_credits }),
+                json!({ "reason": reason, "totalCredits": credits_in }),
             );
             return true;
         }
@@ -696,21 +710,30 @@ fn handle_event<R: Runtime>(
     false
 }
 
+/// stt_finalize 返回值：拼接后的 final transcript + 本次会话消耗的 OpenLoaf SaaS credits。
+/// `credits_consumed`：SaaS Realtime 走 Closed 帧的 total_credits；BYOK / 没等到 Closed 时为 0。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SttFinalizeResult {
+    pub text: String,
+    pub credits_consumed: f64,
+}
+
 /// 录音正常结束时调。发 finish 提示服务端"音频已送完"，等服务端把
 /// 累积的所有 Final 段（VAD 分段）发完后，按 sentenceId 顺序拼成一整段返回。
 ///
-/// 返回值：拼接后的最终文字；空串表示一段 Final 都没拿到（超时 / 全程静音）。
+/// 返回 text + credits_consumed。空 text 表示一段 Final 都没拿到（超时 / 全程静音）。
 ///
 /// async + spawn_blocking：实现里有最长 FINALIZE_WAIT_MS 的轮询 + worker
 /// join，同步 command 会把 IPC 命令线程池堵死，重按快捷键时感觉整个 app 卡。
 #[tauri::command]
-pub async fn stt_finalize() -> Result<String, String> {
+pub async fn stt_finalize() -> Result<SttFinalizeResult, String> {
     tauri::async_runtime::spawn_blocking(stt_finalize_impl)
         .await
         .map_err(|e| format!("stt_finalize join: {e}"))?
 }
 
-fn stt_finalize_impl() -> Result<String, String> {
+fn stt_finalize_impl() -> Result<SttFinalizeResult, String> {
     let state = slot().lock().map_err(|e| e.to_string())?.take();
     let Some(mut state) = state else {
         return Err("no active stt session".into());
@@ -777,7 +800,19 @@ fn stt_finalize_impl() -> Result<String, String> {
         let _ = h.join();
     }
 
-    Ok(combined)
+    // worker join 后 total_credits 不会再被写，安全读取。SaaS 路径会在 Closed
+    // 帧里写入；BYOK / 没等到 Closed（超时分支）保持 None，对外返回 0。
+    let credits_consumed = state
+        .total_credits
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .unwrap_or(0.0);
+
+    Ok(SttFinalizeResult {
+        text: combined,
+        credits_consumed,
+    })
 }
 
 /// 用户 Esc / 误触 / 前端异常时调。立即关 session，不等 Final，不返回文本。

@@ -98,6 +98,9 @@ pub struct RefineChatResult {
     /// 给 dev / 调试用，前端按 env 决定是否落到 history.debug_payload。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_envelope: Option<String>,
+    /// 本次 refine 消耗的 OpenLoaf SaaS credits（SSE 末尾非标元数据帧 `x_credits_consumed`）。
+    /// custom provider 无此字段 → 恒 0；多帧累加。
+    pub credits_consumed: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -676,6 +679,7 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     let mut full = String::new();
+    let mut credits_consumed: f64 = 0.0;
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(c) => c,
@@ -702,12 +706,15 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
                 continue;
             }
             // SaaS 末尾会发非标元数据帧（如 {"x_credits_consumed":0.04}），无 "choices"
-            // 字段；按 OpenAI 协议丢弃，不告警。
+            // 字段；累加到本次会话的 credits_consumed，再忽略。
             let v: Value = match serde_json::from_str(payload) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
             if !v.is_object() || !v.as_object().unwrap().contains_key("choices") {
+                if let Some(c) = v.get("x_credits_consumed").and_then(|x| x.as_f64()) {
+                    credits_consumed += c;
+                }
                 continue;
             }
             let parsed: CreateChatCompletionStreamResponse = match serde_json::from_value(v) {
@@ -788,6 +795,7 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
         refined_text: full,
         task_id,
         request_envelope,
+        credits_consumed,
     })
 }
 

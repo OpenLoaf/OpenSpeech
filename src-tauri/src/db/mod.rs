@@ -315,5 +315,35 @@ CREATE INDEX IF NOT EXISTS idx_history_meeting_id ON history(meeting_id);
 "#,
             kind: MigrationKind::Up,
         },
+        // v17：会议手工修订 / AI 概括标题。
+        // - title：AI 生成的简洁会议标题（≤15 字）；NULL = 还没生成，UI 降级显示日期。
+        // - speaker_names_json：用户在 review 视图双击改名后存的 speakerId → name 映射，
+        //   JSON 形如 {"0":"张三","1":"李四"}。NULL = 没改过任何 speaker 名字。
+        //   字段同行：删除会议时随 history 行 DELETE，免去额外联动。
+        Migration {
+            version: 17,
+            description: "history_add_title_and_speaker_names",
+            sql: r#"
+ALTER TABLE history ADD COLUMN title TEXT;
+ALTER TABLE history ADD COLUMN speaker_names_json TEXT;
+"#,
+            kind: MigrationKind::Up,
+        },
+        // v18：本次会话消耗的 OpenLoaf SaaS credits 分两列存。
+        // - credits_asr：SaaS Realtime 取 Closed.totalCredits / REST 文件转写取
+        //   transcribe_recording_file 返回值；BYOK 路径恒 0。
+        // - credits_refine：refine SSE 末尾 `x_credits_consumed` 累加；custom
+        //   provider 恒 0。
+        // 分两列便于事后诊断"是 ASR 还是 LLM 更费钱"；UI 展示合并显示。
+        // NULL = v18 之前的老记录（未采集）；0 = 采集到了且本次没花。
+        Migration {
+            version: 18,
+            description: "history_add_credits_asr_and_refine",
+            sql: r#"
+ALTER TABLE history ADD COLUMN credits_asr REAL;
+ALTER TABLE history ADD COLUMN credits_refine REAL;
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
