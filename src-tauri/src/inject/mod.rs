@@ -143,6 +143,28 @@ fn type_segment(enigo: &mut Enigo, segment: &str) -> Result<(), InputError> {
     }
 }
 
+// macOS 注音 / 拼音 / 仓颉 / 三方 Windows IME 在 active composition 期间会吞掉所有按键
+// 事件——Cmd/Ctrl+V 也不例外。pasteAllAtOnce 在 IME blocked 路径下被 IME 异常处理 →
+// composition 残留显示成高亮（视觉上像"全选"）+ paste 内容没真正落地。在 Cmd+V 之前
+// 发一次 RightArrow：composition active 时 IME 会 commit 当前候选 + 光标右移；没
+// composition 时仅光标右移 1（副作用最小，比 Esc 丢字 / Return 误发消息都稳）。
+#[tauri::command]
+pub fn inject_commit_ime() -> Result<(), String> {
+    log::info!("[inject] commit_ime enter");
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
+        log::error!("[inject] commit_ime enigo init failed: {e}");
+        e.to_string()
+    })?;
+    enigo
+        .key(Key::RightArrow, Direction::Click)
+        .map_err(|e| {
+            log::error!("[inject] commit_ime right click failed: {e}");
+            e.to_string()
+        })?;
+    log::info!("[inject] commit_ime ok");
+    Ok(())
+}
+
 #[tauri::command]
 pub fn inject_paste() -> Result<(), String> {
     log::info!("[inject] paste enter");
