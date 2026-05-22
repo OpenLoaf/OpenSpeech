@@ -262,8 +262,52 @@ fn truncate_dev_log_on_start() {
     }
 }
 
+// 记录上次启动写入日志时的版本号，用来判断是否需要按版本切档。
+const LOG_VERSION_MARKER: &str = ".log_version";
+
+// release 包启动时若发现版本号变了，把当前 OpenSpeech.log 归档为
+// OpenSpeech_<epoch>_v<old_version>.log，新版本从空文件开始写。
+// 这样升级 / 回滚 / beta 互切都能在日志里一眼分段，排查不会被混在一条文件里。
+// 归档名首字符是 epoch 数字，会被 purge_old_log_files 7 天后自动清理，无需另写淘汰逻辑。
+// dev 构建走 truncate_dev_log_on_start，不参与本流程。
+// 必须在 tauri_plugin_log 注册之前调用——plugin 一旦持有 fd，rename 后 macOS 下仍会写幽灵 inode。
+fn archive_log_on_version_change() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let dir = resolved_log_dir();
+    let marker = dir.join(LOG_VERSION_MARKER);
+    let current = env!("CARGO_PKG_VERSION");
+    let previous = std::fs::read_to_string(&marker)
+        .ok()
+        .map(|s| s.trim().to_string());
+
+    if previous.as_deref() == Some(current) {
+        return;
+    }
+
+    let active = dir.join("OpenSpeech.log");
+    if active.exists() {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let old_tag = previous.as_deref().unwrap_or("unknown");
+        let archived = dir.join(format!("OpenSpeech_{secs}_v{old_tag}.log"));
+        if let Err(e) = std::fs::rename(&active, &archived) {
+            eprintln!("[log] archive on version change failed: {e:?}");
+            return;
+        }
+    }
+
+    if let Err(e) = std::fs::write(&marker, current) {
+        eprintln!("[log] write {LOG_VERSION_MARKER} failed: {e:?}");
+    }
+}
+
 // RotationStrategy::KeepAll 不会自删历史，配合 max_file_size=10MB 长期会无限堆。
-// 启动时清掉 mtime 超过 7 天的滚动归档（OpenSpeech_<timestamp>.log）；
+// 启动时清掉 mtime 超过 7 天的归档（tauri 滚动归档 OpenSpeech_<timestamp>.log
+// 与 archive_log_on_version_change 写出的 OpenSpeech_<epoch>_v<ver>.log 都覆盖）。
 // 当前正在写的 OpenSpeech.log 文件名不带下划线时间戳，不会被命中。
 fn purge_old_log_files() {
     use std::time::{Duration, SystemTime};
@@ -645,6 +689,7 @@ fn disable_macos_fullscreen(window: &tauri::WebviewWindow) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     truncate_dev_log_on_start();
+    archive_log_on_version_change();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
