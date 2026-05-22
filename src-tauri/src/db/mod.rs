@@ -345,5 +345,19 @@ ALTER TABLE history ADD COLUMN credits_refine REAL;
 "#,
             kind: MigrationKind::Up,
         },
+        // v19：历史记录收藏。
+        // - is_starred：用户在 History / 听写卡片上标星的条目；UI 提供专门的「收藏」tab。
+        // - starred_at：标星时间戳（ms）；用于后续按收藏时间倒序显示。取消收藏写 NULL。
+        // 加偏函数索引让 starred tab 只扫已收藏行。
+        Migration {
+            version: 19,
+            description: "history_add_starred",
+            sql: r#"
+ALTER TABLE history ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0 CHECK (is_starred IN (0, 1));
+ALTER TABLE history ADD COLUMN starred_at INTEGER;
+CREATE INDEX IF NOT EXISTS idx_history_starred ON history(starred_at DESC) WHERE is_starred = 1;
+"#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
