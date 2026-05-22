@@ -36,6 +36,161 @@
 
 use enigo::{Direction, Enigo, InputError, Key, Keyboard, Settings};
 
+// macOS 注音 / 仓颉 / RIME / 搜狗 / 百度 这类强 composition IME 即便 composition 为空，
+// 也会拦截字母键 keyDown 当作组字输入——Cmd+V 的 V 一旦进 IME，paste 就完全没发生
+// 在目标 App 上，屏幕表现是 composition 高亮残留（视觉上像"全选"）。前端
+// imeStatus.ts 的 BLOCKED_IME_PREFIXES 必须与此保持同步。
+#[cfg(target_os = "macos")]
+const MACOS_BLOCKING_IME_PREFIXES: &[&str] = &[
+    "com.apple.inputmethod.TCIM.",
+    "com.apple.inputmethod.TYIM.",
+    "im.rime.inputmethod.",
+    "com.sogou.",
+    "com.baidu.",
+];
+
+#[cfg(target_os = "macos")]
+mod ime_bypass {
+    use std::os::raw::{c_char, c_void};
+    use std::ptr;
+
+    type CFTypeRef = *const c_void;
+    type CFStringRef = *const c_void;
+    type TISInputSourceRef = *const c_void;
+    type OSStatus = i32;
+
+    const KCF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
+        fn TISCopyCurrentASCIICapableKeyboardLayoutInputSource() -> TISInputSourceRef;
+        fn TISSelectInputSource(source: TISInputSourceRef) -> OSStatus;
+        fn TISGetInputSourceProperty(
+            source: TISInputSourceRef,
+            property_key: CFStringRef,
+        ) -> CFTypeRef;
+        static kTISPropertyInputSourceID: CFStringRef;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: CFTypeRef);
+        fn CFStringGetCString(
+            s: CFStringRef,
+            buf: *mut c_char,
+            buflen: i64,
+            encoding: u32,
+        ) -> u8;
+    }
+
+    fn cfstring_to_string(s: CFStringRef) -> Option<String> {
+        if s.is_null() {
+            return None;
+        }
+        let mut buf = [0i8; 256];
+        let ok = unsafe {
+            CFStringGetCString(
+                s,
+                buf.as_mut_ptr(),
+                buf.len() as i64,
+                KCF_STRING_ENCODING_UTF8,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        let bytes: Vec<u8> = buf[..len].iter().map(|&c| c as u8).collect();
+        String::from_utf8(bytes).ok()
+    }
+
+    fn input_source_id(src: TISInputSourceRef) -> Option<String> {
+        let id_cf = unsafe { TISGetInputSourceProperty(src, kTISPropertyInputSourceID) };
+        cfstring_to_string(id_cf)
+    }
+
+    fn should_bypass(id: &str) -> bool {
+        super::MACOS_BLOCKING_IME_PREFIXES
+            .iter()
+            .any(|p| id.starts_with(p))
+    }
+
+    pub struct Guard {
+        previous: TISInputSourceRef,
+        previous_id: String,
+    }
+
+    impl Guard {
+        /// 当前 IME 命中阻塞名单时，临时切到 ASCII-capable 键盘布局（通常是
+        /// com.apple.keylayout.ABC / US），返回 Guard；Drop 时还原。
+        ///
+        /// 切换不是同步原子的——TIS 切换是异步派发给 IM 服务的，需要一小段 sleep
+        /// 让事件循环把 keyboard state 真切换过去，否则随后的 Cmd+V 仍可能被旧
+        /// IME 拦截。
+        pub fn enter() -> Option<Self> {
+            let prev = unsafe { TISCopyCurrentKeyboardInputSource() };
+            if prev.is_null() {
+                return None;
+            }
+            let Some(prev_id) = input_source_id(prev) else {
+                unsafe { CFRelease(prev) };
+                return None;
+            };
+            if !should_bypass(&prev_id) {
+                unsafe { CFRelease(prev) };
+                return None;
+            }
+
+            let ascii = unsafe { TISCopyCurrentASCIICapableKeyboardLayoutInputSource() };
+            if ascii.is_null() {
+                log::warn!("[inject] ime bypass: TISCopyCurrentASCIICapableKeyboardLayoutInputSource returned null");
+                unsafe { CFRelease(prev) };
+                return None;
+            }
+            let ascii_id = input_source_id(ascii).unwrap_or_else(|| "<unknown>".into());
+
+            let status = unsafe { TISSelectInputSource(ascii) };
+            unsafe { CFRelease(ascii) };
+            if status != 0 {
+                log::warn!(
+                    "[inject] ime bypass: TISSelectInputSource(ascii) status={status} prev={prev_id}"
+                );
+                unsafe { CFRelease(prev) };
+                return None;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            log::info!(
+                "[inject] ime bypass enter: prev={prev_id} → ascii={ascii_id}"
+            );
+            Some(Self {
+                previous: prev,
+                previous_id: prev_id,
+            })
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            // paste 已经发出去了，给目标 App 一点时间消化 Cmd+V，再把 IME 切回去，
+            // 否则用户回到输入框继续敲字时可能仍是英文键盘。
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let status = unsafe { TISSelectInputSource(self.previous) };
+            if status != 0 {
+                log::warn!(
+                    "[inject] ime bypass restore: TISSelectInputSource(prev={}) status={status}",
+                    self.previous_id
+                );
+            } else {
+                log::info!("[inject] ime bypass restore ok: {}", self.previous_id);
+            }
+            unsafe { CFRelease(self.previous) };
+            self.previous = ptr::null();
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 const WIN_TYPE_CHUNK_CHARS: usize = 4;
 #[cfg(target_os = "windows")]
@@ -172,6 +327,11 @@ pub fn inject_paste() -> Result<(), String> {
         log::error!("[inject] paste enigo init failed: {e}");
         e.to_string()
     })?;
+
+    // 注音 / 仓颉 / RIME / 搜狗 / 百度 这类 IME 即便空 composition 也会拦截 Cmd+V 的 V，
+    // 把它当字母键吃进 composition；这里临时切到 ASCII 键盘布局让 Cmd+V 落地，Drop 时还原。
+    #[cfg(target_os = "macos")]
+    let _ime_guard = ime_bypass::Guard::enter();
 
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
