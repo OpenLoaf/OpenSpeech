@@ -4,9 +4,14 @@ description: >
   OpenSpeech 版本更新执行总入口（即 GitHub Release / OTA 推送链路）。当用户在 OpenSpeech 仓库说
   「自动更新 / 推更新 / 给用户推更新 / 一键更新 / 让用户能收到更新 / 让线上的人能更新到 /
   让桌面端弹出升级提示 / 触发 OTA / 触发自动更新 / 发版 / release / 发布新版本 / 打个新包 /
-  升级版本号 / bump / 提交并发版 / patch / minor / major / 推 tag」等任意一种意图时，**都触发本
-  skill**。涵盖完整流程：提交累计改动 → 写 changelog → bump 版本号 → 推 tag → 监控 CI →
+  升级版本号 / bump / 提交并发版 / patch / minor / major / 推 tag /
+  全量发版 / src 下的也要发 / 前端也要推 npm / 推 npm / 发 npm 包 / publish frontend /
+  上一版前端没生效 / desktop 跑的还是老前端 / npm publish 401 / OTP / bypass 2FA」等任意一种意图时，
+  **都触发本 skill**。涵盖完整流程：双仓顺序（src/ 私仓 pnpm publish → 主仓 bump frontend 依赖 →
+  pnpm install）→ 提交累计改动 → 写 changelog → bump 版本号 → 推 tag → 监控 CI →
   publish draft Release，并讲清每步会动哪些文件、哪些步骤会真的影响生产（终端用户）。
+  **关键约束：前端 npm 包必须在后端 bump 之前发到 npm**，CI 跑 `pnpm install --frozen-lockfile`
+  时不会读 `src/` 目录，顺序搞反会发出空版本（0.2.39 那次的教训）。
   不要凭印象 push tag——本 skill 列出的检查与确认动作必须按顺序跑完。
 ---
 
@@ -20,6 +25,10 @@ description: >
 ## 一、链路速览（一句话版）
 
 ```
+[src/ 私仓] 改前端 → bump src/package.json → pnpm publish → npm 上有新 frontend
+   ↓
+[主仓] 改 package.json frontend 依赖到新版 → pnpm install 同步 lockfile
+   ↓
 本地 commit → 写 docs/changelogs/{ver}/zh.md → pnpm version <seg>
    → git push origin main + git push origin v{ver}
    → CI（6 平台 build → release job 拼 latest.json → 上传 R2 + 镜像 COS 兜底）
@@ -27,16 +36,21 @@ description: >
    → 终端用户收到更新
 ```
 
+> ⚠️ **前端 npm 发布必须在后端 bump 之前**。CI 跑 `pnpm install --frozen-lockfile` 时只会从 npm registry
+> 拉 lockfile 锁定的 frontend 版本，**不会读 `src/` 目录**。顺序搞反 → desktop bundle 跑老前端 →
+> 本版 changelog 承诺全没生效。详见 `references/frontend-npm.md`。
+
 分发改造（自 v0.2.30-beta.3）：单写 Cloudflare R2（`openspeech-r2.hexems.com`），国内由腾讯云 CDN
 （`openspeech-cdn.hexems.com`）回源 R2；客户端按 `LANG / LC_*` 信号在两个 host 间分流，第三层
 fallback GitHub Release。COS 仅保留 `latest.json` / `latest-beta.json` 给 ≤ v0.2.30-beta.2 老客户端兜底。
 
 完整流程图、SSoT 表、文件索引、CI 各 step 细节看 `references/architecture.md`；R2/CDN 配置 + 验证 +
-排错看 `references/r2-cdn.md`。
+排错看 `references/r2-cdn.md`；前端 npm 包发布（首次配置 + 顺序 + 错误诊断）看 `references/frontend-npm.md`。
 
 **最关键的几条 SSoT（不要弄反）：**
 
 - 应用版本号 SSoT = `package.json.version`（Cargo.toml / tauri.conf.json 自动同步，**不要手改**）
+- 前端 SSoT = npm registry 上的 `@openloaf/openspeech-frontend@<ver>`（**不是** `src/` 目录），主仓通过 `package.json.devDependencies` + `pnpm-lock.yaml` 锁定；`src/` 是独立私仓（`OpenLoaf/OpenSpeech-Frontend`），被主仓 `.gitignore` 忽略
 - Release 正文 SSoT = `docs/changelogs/{version}/zh.md`（缺失则正文回退默认占位，体验差）
 - Updater 运行时 endpoint SSoT = `src-tauri/src/update_channel.rs`（按 region × channel 4 选 1；`tauri.conf.json` 里的 `endpoints` 只是占位）
 - 分发主存储 = Cloudflare R2 bucket `openspeech`（不再单写 COS；COS 只剩 manifest 兜底）
@@ -58,6 +72,8 @@ fallback GitHub Release。COS 仅保留 `latest.json` / `latest-beta.json` 给 �
 | 「只改 Release 正文」「修 changelog 不发版」 | 单独编辑 release notes | `references/troubleshooting.md` |
 | 国内下载慢 / R2 / CDN / manifest 指哪儿 / updater 日志 / 回源 / 老客户端兜底 | R2 + CDN 分发链路 | `references/r2-cdn.md` |
 | 改 release.yml / SDK 升级 / 排查 CI / Secrets | 架构层面 | `references/architecture.md` |
+| 前端 npm publish 报错 / token 401 / OTP 拦截 / 「上一版前端没生效要补救」 | 双仓发版 / npm 凭据 | `references/frontend-npm.md` |
+| 「src 下的也要发」「全量发」「前端也要推」 | 双仓同步发版 | 本文件 §3.5 + `references/frontend-npm.md` |
 
 **含糊不清时**：先 `git status` + `git log --oneline -5` + `node -p "require('./package.json').version"`，
 把现状摆给用户，再问要不要发版、bump 哪段、走哪个通道。
@@ -87,6 +103,93 @@ git tag -l 'v*' | tail -5
 
 异常情形（不在 main / 远程错 / 工作区有 .tmp / version 不一致 / 上一个 tag 还是 draft）的处理见
 `references/troubleshooting.md` 末尾。
+
+---
+
+## 三·五、双仓发版顺序（关键，发版前必读一次）
+
+> **0.2.39 那个坑就是这步搞反的**：直接发后端没先发前端，结果 desktop bundle 跑的是老前端，
+> changelog 承诺的修复全没生效，被迫 bump 到 0.2.40 重发。
+
+OpenSpeech 是**两个 git 仓**：
+
+- 主仓 `OpenLoaf/OpenSpeech`：Tauri 配置 + CI + changelog（当前目录）
+- 前端私仓 `OpenLoaf/OpenSpeech-Frontend`：React 代码，挂载在主仓 `src/` 目录（被主仓 `.gitignore` 忽略）
+
+**前端代码不是用 `src/` 目录构建的**，CI 跑 `pnpm install --frozen-lockfile` 时从 npm 拉
+`@openloaf/openspeech-frontend@<ver>`（版本由主仓 `pnpm-lock.yaml` 锁定）。
+
+### Pre-bump 检查：版本三方对齐
+
+发后端 bump 之前，必须确认前端已经在 npm 上，否则白发：
+
+```bash
+NPM_VER=$(node -p "require('./package.json').devDependencies['@openloaf/openspeech-frontend']")
+LOCK_VER=$(grep -A 1 "'@openloaf/openspeech-frontend':" pnpm-lock.yaml | grep specifier | head -1 | awk '{print $NF}')
+REMOTE_VER=$(npm view @openloaf/openspeech-frontend version --registry https://registry.npmjs.org 2>/dev/null)
+
+echo "主仓 package.json:   $NPM_VER"
+echo "pnpm-lock.yaml:       $LOCK_VER"
+echo "npm registry latest:  $REMOTE_VER"
+
+[ "$NPM_VER" = "$LOCK_VER" ] && [ "$LOCK_VER" = "$REMOTE_VER" ] \
+  && echo "✅ 三方对齐，可发后端" \
+  || echo "❌ 不对齐，先按下面 §3.5.1 把前端发版顺序补齐"
+```
+
+### 3.5.1 双仓同步发版完整顺序（src/ 有改动时）
+
+```bash
+# === A. src/ 私仓先发前端 ===
+cd src/
+git status                                          # ① 看私仓状态
+git log --oneline -3
+
+# ② 改 src/package.json 版本到目标版（与主仓即将发的版本号一致）
+#   例：要发 0.2.40，src/package.json 也改成 0.2.40
+
+# ③ 提交私仓改动并推送
+git add -u && git add <new-files>
+git commit -m "chore(release): 0.2.40 — <要点>"
+git push origin main
+
+# ④ pnpm publish（prepublishOnly 自动跑 frozen-lockfile install + build）
+pnpm publish --no-git-checks
+# 必须看到 "+ @openloaf/openspeech-frontend@0.2.40" 才算成功
+
+# ⑤ 立刻验证 npm registry 真的有这版（防止误判 publish 成功）
+npm view @openloaf/openspeech-frontend@0.2.40 --registry https://registry.npmjs.org
+
+# === B. 回主仓 bump frontend 依赖 ===
+cd ..
+
+# ⑥ 改主仓 package.json devDependencies."@openloaf/openspeech-frontend" → 0.2.40
+# ⑦ pnpm install → 更新 pnpm-lock.yaml
+pnpm install
+
+# === C. 之后才是标准后端发版（§四 起） ===
+```
+
+> **src/ 没改动也别忽略这步**——仍要 `npm view` 确认主仓引用的版本在 npm 上是有的。
+> 极端情况：上一次 publish 失败但没注意到，token 失效等。
+
+### 3.5.2 npm publish 环境（首次配置，一次性）
+
+详见 `references/frontend-npm.md` §三：
+
+- `~/.npmrc` 配 npmjs.org 的 **bypass-2FA Granular Access Token**（普通 token 会被 npm 平台强制要求 OTP）
+- `.claude/settings.local.json` 加 `"Bash(npm *)"` 白名单（否则 Claude Code auto mode 会 hard block）
+
+### 3.5.3 publish 常见错误诊断
+
+| 错误 | 含义 | 处理 |
+|---|---|---|
+| `401 GET /-/whoami` | token 失效 | 重生成 bypass-2FA token，更新 ~/.npmrc |
+| `404 PUT /@openloaf%2f...` | token 权限不够 | 重生成时 scope 选 `@openloaf` + Read+Write |
+| `403 ... Two-factor authentication ... is required` | token 没勾 bypass 2FA | 重生成时**勾上 Security settings 里 "Bypass two-factor authentication (2FA)"** |
+| `EOTP` | 同上 / 临时绕过 `pnpm publish --otp=<6 位>` | 长期解：重生成 bypass-2FA token |
+| Claude Code「Create Public Surface hard block」 | settings 白名单没加 | 加 `Bash(npm *)` |
+| `pnpm install` 404 主仓 | 主仓引用的 frontend 版本 npm 上还没有 | 顺序搞反了，**回 src/ 先 publish** |
 
 ---
 
@@ -311,6 +414,11 @@ dev 模式 `import.meta.env.DEV === true` 跳过启动检查，只能托盘手�
 
 | 错误 | 正确做法 |
 |---|---|
+| **直接发后端没先发前端到 npm**（0.2.39 那次） | 严格按 §3.5.1 双仓顺序：先 src/ pnpm publish → 主仓 bump frontend 依赖 → pnpm install → 再发后端。**发后端前必须跑 §3.5 三方对齐检查** |
+| 主仓 `git add src/...` 报 ignored | `src/` 是独立私仓（被主仓 `.gitignore`），src 改动**只能在 `cd src/` 下提交**，远程是 `OpenLoaf/OpenSpeech-Frontend` |
+| 以为「成功 publish」就真发到 npm 了 | publish 输出必须看到 `+ @openloaf/openspeech-frontend@x.y.z`；最后再 `npm view <pkg>@<ver>` 独立验证一次 |
+| npm publish 报 401/403/404 当成 npmjs 故障 | 99% 是 token 问题，参见 §3.5.3 错误诊断表 / `references/frontend-npm.md` §五 |
+| 普通 npm token publish 被卡 OTP | npm 平台**强制 scoped package publish 走 2FA**，长期解：用 **Granular Access Token + 勾上 "Bypass two-factor authentication (2FA)"** |
 | `git add -A` 把 `.tmp/` 一起提交 | `git add -u` + 逐个 add 新文件，先验 `git status --short` |
 | commit message 写 `[skip ci]` | **永远不要** —— tag push 后 CI 不会跑 |
 | 手改 `Cargo.toml` 或 `tauri.conf.json` 的 version | 走 `pnpm version`，由 `sync-version.mjs` 同步 |
@@ -330,6 +438,27 @@ dev 模式 `import.meta.env.DEV === true` 跳过启动检查，只能托盘手�
 ## 十、Quick Reference（标准 stable 一把梭）
 
 ```bash
+# === A. 如果 src/ 有改动（双仓发版）===
+cd src/
+git status                                        # A1 看私仓状态
+# 改 src/package.json 的 version 到下一个目标版本（如 0.2.40）
+git add -u && git add <new-files>
+git commit -m "chore(release): 0.x.y — ..."
+git push origin main
+pnpm publish --no-git-checks                      # A2 发到 npm
+npm view @openloaf/openspeech-frontend@0.x.y --registry https://registry.npmjs.org
+                                                  # A3 独立验证 npm 真的有了
+cd ..
+
+# 修改主仓 package.json 的 devDependencies."@openloaf/openspeech-frontend" 到 0.x.y
+pnpm install                                      # A4 同步 lockfile
+
+# === B. 三方对齐预检（永远跑一次）===
+NPM_VER=$(node -p "require('./package.json').devDependencies['@openloaf/openspeech-frontend']")
+REMOTE_VER=$(npm view @openloaf/openspeech-frontend version --registry https://registry.npmjs.org)
+[ "$NPM_VER" = "$REMOTE_VER" ] && echo "✅ 可以发后端" || echo "❌ 先把 §3.5 跑完"
+
+# === C. 后端发版 ===
 git status                                        # ① 看清楚
 git add -u && git add <new-files>                 # ② 暂存
 git commit -m "feat(xxx): ..."                    # ③ 提交累计改动
@@ -364,11 +493,14 @@ curl -sL https://github.com/OpenLoaf/OpenSpeech/releases/latest/download/latest.
 | 场景 | 文档 |
 |---|---|
 | 完整链路图 / SSoT 大表 / 文件索引 / GitHub Secrets | `references/architecture.md` |
+| **前端 npm 包发版 / 双仓顺序 / npm token 配置 / publish 错误诊断 / 「上一版前端没生效」补救** | `references/frontend-npm.md` |
 | Beta 通道发版 / 转正 | `references/beta.md` |
 | 跳过 beta 直接发 stable | `references/skip-beta.md` |
 | R2 + CDN 分发 / 回源配置 / updater 日志 / 应急 / 老客户端兜底 | `references/r2-cdn.md` |
 | 重跑 CI / 撤回 / 修 changelog / Tauri 2 产物 / Pre-flight 异常 | `references/troubleshooting.md` |
 
 > **维护要求**：`release.yml` / `tauri.conf.json` updater 段 / `update_channel.rs` /
-> `sync-version.mjs` / `docs/changelogs/` 路径约定 / R2 / 腾讯云 CDN / COS 兜底链路有变更时，
-> 必须同步本 SKILL.md 与对应 `references/*.md`（特别是 `references/r2-cdn.md` 与 `references/architecture.md`）。
+> `sync-version.mjs` / `docs/changelogs/` 路径约定 / R2 / 腾讯云 CDN / COS 兜底链路 /
+> `src/` 私仓与 `@openloaf/openspeech-frontend` npm 包之间的发版顺序有变更时，
+> 必须同步本 SKILL.md 与对应 `references/*.md`（特别是 `references/r2-cdn.md` /
+> `references/architecture.md` / `references/frontend-npm.md`）。
