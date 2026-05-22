@@ -864,6 +864,12 @@ pub fn run() {
             // ~50ms，预热后首次按激活键 mixer.add 就是同步入队，零延迟。
             cue::warm_up();
 
+            // ---- IME 切换观察 ------------------------------------------------
+            // 1s 周期轮询当前 keyboard input source，仅在切换时 info log。
+            // 排查 WPS / 注音 / 仓颉 等 IME 触发的 paste 失败时，能在日志里直接看到
+            // "切到了哪个 IME 之后 inject 路径开始走 paste-all"。
+            ime::spawn_ime_watcher();
+
             // ---- modifier-only state 注册（rdev::listen 暂不启动）----
             // 负责 Fn / Ctrl+Win / Right Alt 等"按住即触发"绑定——
             // tauri-plugin-global-shortcut 不接受这种绑定。依赖 rustdesk-org/rdev

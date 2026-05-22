@@ -73,9 +73,47 @@ mod imp {
     }
 }
 
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+fn last_seen_slot() -> &'static Mutex<Option<String>> {
+    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn note_observed(curr: &Option<String>, source: &str) {
+    let mut slot = match last_seen_slot().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if slot.as_deref() != curr.as_deref() {
+        log::info!(
+            "[ime] switched ({source}): {:?} → {:?}",
+            slot.as_deref(),
+            curr.as_deref()
+        );
+        *slot = curr.clone();
+    }
+}
+
 #[tauri::command]
 pub fn active_ime_id_cmd() -> Option<String> {
     let v = imp::active_ime_id();
-    log::info!("[ime] active_ime_id → {:?}", v);
+    note_observed(&v, "cmd");
     v
+}
+
+/// 后台轮询当前键盘输入源，1s 周期，仅在 id 变化时打 info log；不变化静默。
+/// 没有原生 distributed notification 订阅，但 1s 间隔对人类切换 IME 已经够快感知。
+pub fn spawn_ime_watcher() {
+    std::thread::Builder::new()
+        .name("openspeech-ime-watcher".into())
+        .spawn(|| {
+            loop {
+                let v = imp::active_ime_id();
+                note_observed(&v, "watcher");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        })
+        .ok();
 }
