@@ -37,32 +37,36 @@ mod imp {
     }
 
     pub fn active_ime_id() -> Option<String> {
-        let src = unsafe { TISCopyCurrentKeyboardInputSource() };
-        if src.is_null() {
-            return None;
-        }
-        // TISGetInputSourceProperty 返回的 CFStringRef 是 borrowed，**不要** CFRelease。
-        let id_cf = unsafe { TISGetInputSourceProperty(src, kTISPropertyInputSourceID) };
-        if id_cf.is_null() {
+        // macOS 26.2 给 TIS 上了主线程断言；从后台线程调会 SIGTRAP。整段 TIS 操作
+        // 派回 main queue 同步执行，闭包只返 Send 的 Option<String>。
+        crate::mac_main_thread::run_sync(|| {
+            let src = unsafe { TISCopyCurrentKeyboardInputSource() };
+            if src.is_null() {
+                return None;
+            }
+            // TISGetInputSourceProperty 返回的 CFStringRef 是 borrowed，**不要** CFRelease。
+            let id_cf = unsafe { TISGetInputSourceProperty(src, kTISPropertyInputSourceID) };
+            if id_cf.is_null() {
+                unsafe { CFRelease(src) };
+                return None;
+            }
+            let mut buf = [0i8; 256];
+            let ok = unsafe {
+                CFStringGetCString(
+                    id_cf,
+                    buf.as_mut_ptr(),
+                    buf.len() as i64,
+                    KCF_STRING_ENCODING_UTF8,
+                )
+            };
             unsafe { CFRelease(src) };
-            return None;
-        }
-        let mut buf = [0i8; 256];
-        let ok = unsafe {
-            CFStringGetCString(
-                id_cf,
-                buf.as_mut_ptr(),
-                buf.len() as i64,
-                KCF_STRING_ENCODING_UTF8,
-            )
-        };
-        unsafe { CFRelease(src) };
-        if ok == 0 {
-            return None;
-        }
-        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        let bytes: Vec<u8> = buf[..len].iter().map(|&c| c as u8).collect();
-        String::from_utf8(bytes).ok()
+            if ok == 0 {
+                return None;
+            }
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let bytes: Vec<u8> = buf[..len].iter().map(|&c| c as u8).collect();
+            String::from_utf8(bytes).ok()
+        })
     }
 }
 
@@ -81,14 +85,18 @@ fn last_seen_slot() -> &'static Mutex<Option<String>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-fn note_observed(curr: &Option<String>, source: &str) {
+// macOS 26.2 给 Text Input Source Manager 上了主线程断言，TIS API 从后台线程
+// 第二次调用会 SIGTRAP。所以本模块**只在** #[tauri::command] 路径上调 TIS——
+// command handler 由 tauri invoke 路由进来，跑在合法上下文里；不要再起任何
+// 后台 polling 线程调 TIS。
+fn note_observed(curr: &Option<String>) {
     let mut slot = match last_seen_slot().lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
     if slot.as_deref() != curr.as_deref() {
         log::info!(
-            "[ime] switched ({source}): {:?} → {:?}",
+            "[ime] switched: {:?} → {:?}",
             slot.as_deref(),
             curr.as_deref()
         );
@@ -99,21 +107,6 @@ fn note_observed(curr: &Option<String>, source: &str) {
 #[tauri::command]
 pub fn active_ime_id_cmd() -> Option<String> {
     let v = imp::active_ime_id();
-    note_observed(&v, "cmd");
+    note_observed(&v);
     v
-}
-
-/// 后台轮询当前键盘输入源，1s 周期，仅在 id 变化时打 info log；不变化静默。
-/// 没有原生 distributed notification 订阅，但 1s 间隔对人类切换 IME 已经够快感知。
-pub fn spawn_ime_watcher() {
-    std::thread::Builder::new()
-        .name("openspeech-ime-watcher".into())
-        .spawn(|| {
-            loop {
-                let v = imp::active_ime_id();
-                note_observed(&v, "watcher");
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        })
-        .ok();
 }

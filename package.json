@@ -20,6 +20,7 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "esbuild",
       "fs-xattr",
       "macos-alias"
     ]
@@ -67,7 +68,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@openloaf/openspeech-frontend": "0.2.42",
+    "@openloaf/openspeech-frontend": "0.2.43",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

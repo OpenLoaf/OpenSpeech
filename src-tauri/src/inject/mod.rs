@@ -52,7 +52,6 @@ const MACOS_BLOCKING_IME_PREFIXES: &[&str] = &[
 #[cfg(target_os = "macos")]
 mod ime_bypass {
     use std::os::raw::{c_char, c_void};
-    use std::ptr;
 
     type CFTypeRef = *const c_void;
     type CFStringRef = *const c_void;
@@ -116,8 +115,12 @@ mod ime_bypass {
             .any(|p| id.starts_with(p))
     }
 
+    // macOS 26.2 给 TIS 上了主线程断言：从后台线程调 TISCopyCurrent* /
+    // TISSelectInputSource 会 SIGTRAP。本 Guard 的 enter 和 drop 都跑在 tauri
+    // command worker pool 线程上，所以全部 TIS 操作必须经 mac_main_thread::run_sync
+    // 派回 main queue。previous 这个 TISInputSourceRef 跨主线程边界用 usize 存。
     pub struct Guard {
-        previous: TISInputSourceRef,
+        previous_addr: usize,
         previous_id: String,
     }
 
@@ -129,43 +132,50 @@ mod ime_bypass {
         /// 让事件循环把 keyboard state 真切换过去，否则随后的 Cmd+V 仍可能被旧
         /// IME 拦截。
         pub fn enter() -> Option<Self> {
-            let prev = unsafe { TISCopyCurrentKeyboardInputSource() };
-            if prev.is_null() {
-                return None;
-            }
-            let Some(prev_id) = input_source_id(prev) else {
-                unsafe { CFRelease(prev) };
-                return None;
-            };
-            if !should_bypass(&prev_id) {
-                unsafe { CFRelease(prev) };
-                return None;
-            }
+            // 把 copy current → 判定 bypass → copy ascii → select ascii 整段在
+            // 主线程里跑完，返回 (prev_ref as usize, prev_id, ascii_id)。
+            let result: Option<(usize, String, String)> =
+                crate::mac_main_thread::run_sync(|| {
+                    let prev = unsafe { TISCopyCurrentKeyboardInputSource() };
+                    if prev.is_null() {
+                        return None;
+                    }
+                    let Some(prev_id) = input_source_id(prev) else {
+                        unsafe { CFRelease(prev) };
+                        return None;
+                    };
+                    if !should_bypass(&prev_id) {
+                        unsafe { CFRelease(prev) };
+                        return None;
+                    }
+                    let ascii = unsafe { TISCopyCurrentASCIICapableKeyboardLayoutInputSource() };
+                    if ascii.is_null() {
+                        log::warn!(
+                            "[inject] ime bypass: TISCopyCurrentASCIICapableKeyboardLayoutInputSource returned null"
+                        );
+                        unsafe { CFRelease(prev) };
+                        return None;
+                    }
+                    let ascii_id =
+                        input_source_id(ascii).unwrap_or_else(|| "<unknown>".into());
+                    let status = unsafe { TISSelectInputSource(ascii) };
+                    unsafe { CFRelease(ascii) };
+                    if status != 0 {
+                        log::warn!(
+                            "[inject] ime bypass: TISSelectInputSource(ascii) status={status} prev={prev_id}"
+                        );
+                        unsafe { CFRelease(prev) };
+                        return None;
+                    }
+                    Some((prev as usize, prev_id, ascii_id))
+                });
 
-            let ascii = unsafe { TISCopyCurrentASCIICapableKeyboardLayoutInputSource() };
-            if ascii.is_null() {
-                log::warn!("[inject] ime bypass: TISCopyCurrentASCIICapableKeyboardLayoutInputSource returned null");
-                unsafe { CFRelease(prev) };
-                return None;
-            }
-            let ascii_id = input_source_id(ascii).unwrap_or_else(|| "<unknown>".into());
-
-            let status = unsafe { TISSelectInputSource(ascii) };
-            unsafe { CFRelease(ascii) };
-            if status != 0 {
-                log::warn!(
-                    "[inject] ime bypass: TISSelectInputSource(ascii) status={status} prev={prev_id}"
-                );
-                unsafe { CFRelease(prev) };
-                return None;
-            }
-
+            let (prev_addr, prev_id, ascii_id) = result?;
+            // sleep 留在 caller 线程（worker），不阻塞主线程 / UI。
             std::thread::sleep(std::time::Duration::from_millis(40));
-            log::info!(
-                "[inject] ime bypass enter: prev={prev_id} → ascii={ascii_id}"
-            );
+            log::info!("[inject] ime bypass enter: prev={prev_id} → ascii={ascii_id}");
             Some(Self {
-                previous: prev,
+                previous_addr: prev_addr,
                 previous_id: prev_id,
             })
         }
@@ -173,20 +183,27 @@ mod ime_bypass {
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            // paste 已经发出去了，给目标 App 一点时间消化 Cmd+V，再把 IME 切回去，
-            // 否则用户回到输入框继续敲字时可能仍是英文键盘。
-            std::thread::sleep(std::time::Duration::from_millis(60));
-            let status = unsafe { TISSelectInputSource(self.previous) };
-            if status != 0 {
-                log::warn!(
-                    "[inject] ime bypass restore: TISSelectInputSource(prev={}) status={status}",
-                    self.previous_id
-                );
-            } else {
-                log::info!("[inject] ime bypass restore ok: {}", self.previous_id);
+            if self.previous_addr == 0 {
+                return;
             }
-            unsafe { CFRelease(self.previous) };
-            self.previous = ptr::null();
+            // paste 已经发出去了，给目标 App 一点时间消化 Cmd+V，再把 IME 切回去，
+            // 否则用户回到输入框继续敲字时可能仍是英文键盘。sleep 仍在 worker 线程。
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let prev_addr = self.previous_addr;
+            let prev_id = self.previous_id.clone();
+            crate::mac_main_thread::run_sync(move || {
+                let prev = prev_addr as TISInputSourceRef;
+                let status = unsafe { TISSelectInputSource(prev) };
+                if status != 0 {
+                    log::warn!(
+                        "[inject] ime bypass restore: TISSelectInputSource(prev={prev_id}) status={status}"
+                    );
+                } else {
+                    log::info!("[inject] ime bypass restore ok: {prev_id}");
+                }
+                unsafe { CFRelease(prev) };
+            });
+            self.previous_addr = 0;
         }
     }
 }
