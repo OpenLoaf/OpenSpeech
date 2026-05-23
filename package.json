@@ -1,7 +1,7 @@
 {
   "name": "openspeech",
   "private": true,
-  "version": "0.2.45",
+  "version": "0.2.46",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -68,7 +68,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@openloaf/openspeech-frontend": "0.2.45",
+    "@openloaf/openspeech-frontend": "0.2.46",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
