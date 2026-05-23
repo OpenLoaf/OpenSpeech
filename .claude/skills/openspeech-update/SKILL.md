@@ -349,7 +349,22 @@ git push origin :refs/tags/v0.x.y
 让 manifest 指针压回正确版本——`gh workflow run` 或 `git push origin :refs/tags/v0.x.y`
 后再 `git push origin v0.x.y`。
 
-监控：
+### 7.3 Push 完必输出 Actions run URL（给用户点击）
+
+**强制规则**：`git push origin v0.x.y` 成功后**立刻**拿本次 run-id 并把完整 GitHub Actions URL
+输出给用户，让用户直接点进去看构建进度，不用自己去翻列表 / 拼 URL。**不能省略也不能等
+用户问**——发版 summary 里必须含这一行。
+
+```bash
+RUN_ID=$(gh run list --repo OpenLoaf/OpenSpeech --workflow release.yml --limit 1 \
+  --json databaseId --jq '.[0].databaseId')
+echo "Release run: https://github.com/OpenLoaf/OpenSpeech/actions/runs/$RUN_ID"
+```
+
+把 `echo` 那行的完整 URL 原样贴到给用户的最终 summary / 表格里（不要替换成相对路径 /
+不要省略 `https://`），保证 IDE / 终端能直接 cmd-click 跳转。
+
+### 7.4 监控（可选深度操作）
 
 ```bash
 gh run list --repo OpenLoaf/OpenSpeech --workflow release.yml --limit 3
