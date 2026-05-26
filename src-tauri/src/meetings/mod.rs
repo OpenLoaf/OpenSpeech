@@ -36,7 +36,7 @@ use crate::asr::meeting::{
 use crate::audio::is_valid_date_segment;
 use crate::db;
 use crate::meetings::writers::{MeetingAudioWriter, MeetingTranscriptAppender};
-use crate::openloaf::{SharedOpenLoaf, handle_session_expired};
+use crate::openloaf::{RefreshOutcome, SharedOpenLoaf, handle_session_expired};
 
 mod writers;
 
@@ -236,9 +236,98 @@ pub async fn meeting_start<R: Runtime>(
     app: AppHandle<R>,
     args: StartArgs,
 ) -> Result<MeetingStartResult, String> {
-    tauri::async_runtime::spawn_blocking(move || meeting_start_impl(app, args))
-        .await
-        .map_err(|e| format!("meeting_start join: {e}"))?
+    // 只对 SaaS 直连做 token 协作；BYOK / Tencent 自带凭据不走 OpenLoaf。
+    // dispatch 失败留给 meeting_start_impl 自己报 ERR_MEETING_PROVIDER_NOT_CONFIGURED。
+    let needs_saas_auth = matches!(
+        dispatch_dictation_backend(&args.provider, DictationModality::Realtime),
+        Ok(DictationBackend::SaasRealtime)
+    );
+
+    let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
+
+    // B：握手前先确保 access_token 没过期。睡眠唤醒后第一次开会必踩这条——
+    // SDK 后台 refresh 定时器睡眠期间停跑，醒来 token 已过期，直接握手必 401。
+    if needs_saas_auth {
+        match ol.ensure_access_token_fresh().await {
+            RefreshOutcome::Refreshed => {}
+            RefreshOutcome::AuthLost => {
+                log::warn!("[meetings] saas preflight rejected by server; signaling auth-lost");
+                handle_session_expired(&app, &ol);
+                return Err(format!("{ERR_NOT_AUTHENTICATED}: SaaS preflight rejected"));
+            }
+            RefreshOutcome::Network => {
+                log::warn!(
+                    "[meetings] saas preflight network/5xx; keeping session, returning network error"
+                );
+                return Err("network: saas preflight network/5xx".into());
+            }
+        }
+    }
+
+    let first = {
+        let app = app.clone();
+        let args = args.clone();
+        tauri::async_runtime::spawn_blocking(move || meeting_start_impl(app, args))
+            .await
+            .map_err(|e| format!("meeting_start join: {e}"))?
+    };
+
+    match first {
+        Ok(r) => Ok(r),
+        Err(e) if needs_saas_auth && looks_unauthorized(&e) => {
+            // C：握手 401 → 续期一次再重试一次；续期失败 / 重试还 401 才清场。
+            // 第一次失败时 writer/worker/slot 都还没创建（meeting_start_impl 在
+            // build_provider + provider.open 之前只清了 stale slot，那步幂等），
+            // 直接整段重跑即可。
+            log::warn!("[meetings] saas start hit 401; attempting refresh + retry. raw={e}");
+            match ol.ensure_fresh_token().await {
+                RefreshOutcome::Refreshed => {}
+                RefreshOutcome::AuthLost => {
+                    log::warn!("[meetings] refresh rejected; signaling auth-lost");
+                    handle_session_expired(&app, &ol);
+                    return Err(format!("{ERR_NOT_AUTHENTICATED}: refresh rejected"));
+                }
+                RefreshOutcome::Network => {
+                    log::warn!(
+                        "[meetings] refresh network/5xx; keeping session, returning network error"
+                    );
+                    return Err("network: refresh network/5xx".into());
+                }
+            }
+            let retry = {
+                let app = app.clone();
+                tauri::async_runtime::spawn_blocking(move || meeting_start_impl(app, args))
+                    .await
+                    .map_err(|e| format!("meeting_start join: {e}"))?
+            };
+            match retry {
+                Ok(r) => {
+                    log::info!("[meetings] saas start retry after refresh succeeded");
+                    Ok(r)
+                }
+                Err(e2) if looks_unauthorized(&e2) => {
+                    log::warn!(
+                        "[meetings] saas start retry still 401 after refresh; clearing session. raw={e2}"
+                    );
+                    handle_session_expired(&app, &ol);
+                    Err(format!("{ERR_NOT_AUTHENTICATED}: retry still 401"))
+                }
+                Err(e2) => Err(e2),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// 匹配从 `meeting_start_impl` 冒出来的 401 字符串。
+///
+/// SaaS provider 的 `[open] connect failed` 走 `MeetingProviderError::Unauthenticated`
+/// → Display = `"unauthenticated: network error: HTTP error: 401 Unauthorized"`。
+/// 故意**不**匹配 `not_authenticated`——那是 `build_provider` 在拿不到 client 时
+/// 已经 handle_session_expired 过的清场路径，不该再重试。
+fn looks_unauthorized(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    l.contains("401") || l.contains("unauthorized") || l.contains("unauthenticated")
 }
 
 fn meeting_start_impl<R: Runtime>(
