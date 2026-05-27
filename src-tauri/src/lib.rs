@@ -471,6 +471,13 @@ fn hide_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     {
         let _ = app.set_activation_policy(ActivationPolicy::Accessory);
     }
+    // 主窗隐藏 = 用户明确想暂离 UI，audio 也得让位。否则 ref_count 上一轮漏减（webview
+    // reload / PTT 被打断 / stt 错误路径未平衡）残留的 stream 会一直把 macOS 状态栏的
+    // 麦克风指示灯钉亮，用户体感「OpenSpeech 没关麦克风」。
+    // 用 force_stop 而不是 stop()——后者要求 ref_count 已经 0，但出现这种现象的前提
+    // 恰恰就是 ref_count 没被减到 0。trade-off：极少数「PTT 录音中主窗被主动 hide」
+    // 场景会被掐——但 PTT 期间用户在按键 + 看 overlay，不会同时主动收主窗，实际近 0。
+    audio::force_stop();
 }
 
 /// 全局 toggle：可见 + 已聚焦 → 隐藏；其它一律 show + focus。
