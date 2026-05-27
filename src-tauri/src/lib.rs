@@ -791,6 +791,11 @@ pub fn run() {
 
     builder
         .manage(hotkey::SharedHotkeyState::default())
+        // modifier-only state 必须在 setup 之前 manage：apply_hotkey_config 是 async invoke，
+        // webview 一加载完就被 Tokio 调度执行，会和 setup 同步代码并发。如果延后到 setup 内部
+        // 再 manage，前端首次 apply_bindings 时 try_state 拿不到 → 整个会话 PTT / 翻译键全失活，
+        // 用户必须退出重进才能恢复（实测 0.2.47 一次启动复现）。
+        .manage(hotkey::modifier_only::create_state())
         .manage::<openloaf::SharedOpenLoaf>(std::sync::Arc::new(openloaf::OpenLoafState::new()))
         .setup(|app| {
             // ---- 清理超过保留期的滚动日志 ------------------------------------
@@ -866,18 +871,12 @@ pub fn run() {
             // ~50ms，预热后首次按激活键 mixer.add 就是同步入队，零延迟。
             cue::warm_up();
 
-            // ---- modifier-only state 注册（rdev::listen 暂不启动）----
-            // 负责 Fn / Ctrl+Win / Right Alt 等"按住即触发"绑定——
-            // tauri-plugin-global-shortcut 不接受这种绑定。依赖 rustdesk-org/rdev
-            // fork（见 Cargo.toml）。
-            //
-            // **启动时机**：setup 阶段只创建空 state，让 apply_bindings 能安全
-            // no-op；真正的 rdev::listen 由前端 booted（LoadingScreen 退场、
-            // 主窗口完全可见）后通过 `hotkey_init_listener` invoke 触发。
-            // 这样 macOS 首次访问全局键盘流触发的「Keystroke Receiving」弹框
-            // 不会被随后 show 的主窗口遮挡。
-            let mo_state = hotkey::modifier_only::create_state();
-            app.manage(mo_state);
+            // ---- modifier-only：rdev::listen 真正启动由前端 booted 后通过
+            // `hotkey_init_listener` invoke 触发——macOS 首次访问全局键盘流会弹
+            // 「Keystroke Receiving」授权框，这样能叠在主窗口之上而不被遮挡。
+            // 空 state 已经在 builder.manage 阶段注册（见上方 .manage(create_state())
+            // 调用）：apply_hotkey_config 是 async invoke 会和 setup 并发，延后到这里
+            // manage 来不及。
 
             // ---- macOS：启动后保持 Regular（显示 Dock 图标）。
             // 隐藏到托盘时由 hide_main_window 切到 Accessory，show_main_window 切回。
