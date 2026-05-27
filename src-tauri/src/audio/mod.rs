@@ -62,6 +62,57 @@ const AUDIO_LEVEL_EVENT: &str = "openspeech://audio-level";
 // cpal 运行时发出致命错误（设备拔出 / 被独占 / OS 抢占）时广播到前端：
 // 录音 store 监听后会 cancel 当前会话 + stopMic，避免 ref_count 残留。
 const AUDIO_STREAM_ERROR_EVENT: &str = "openspeech://audio-stream-error";
+// audio::start 起步阶段就失败（device 拿不到 / config 不支持 / build_input_stream / play
+// / ready 超时）—— 调用者已经能从 Result 拿到 raw string，但前端用户感知不到原因，
+// 这里再 emit 一份**结构化**的失败原因，让 UI 弹「麦克风占用 / 缺权限 / 设备拔出」之类
+// 的明确 toast，引导用户查右上角控制中心。
+const MIC_START_FAILED_EVENT: &str = "openspeech://mic-start-failed";
+// 静音兜底：start 成功 + ref_count>0 但 N 秒内从未检测到任何 voice activity → 给 overlay
+// 加一条「似乎没拾到声音」hint。不掐流程——可能用户故意静默 / 设备真没声音，由用户决定。
+const MIC_SILENCE_EVENT: &str = "openspeech://mic-silence";
+// 静音兜底触发阈值：3.0s 内从未检测到 voice activity 就 emit 一次。
+// 取 3s 而非更短：避免 PTT 刚按下、cpal HAL 冷启动 +ASR 第一个 chunk 之间空窗误报。
+const MIC_SILENCE_THRESHOLD_MS: u64 = 3000;
+
+/// 结构化的「麦克风启动失败」原因，给前端按 reason 选择 i18n 文案 + 引导动作。
+#[derive(Clone, Serialize)]
+struct MicStartFailedPayload {
+    /// "no-input-device" | "permission-denied" | "device-busy" | "device-config-unsupported"
+    /// | "device-removed" | "generic"
+    reason: &'static str,
+    /// 原始 error 字符串（含 cpal 内部分类 / HAL 错误码），给开发者排查 / 日志用，
+    /// 不直接展示给终端用户。
+    detail: String,
+}
+
+/// 把 audio::start 失败的 raw error 字符串映射到一个稳定的 reason 枚举值。
+/// 主要看 cpal::BuildStreamError / StreamError 的 Display 输出 + macOS CoreAudio HAL
+/// 错误描述里的关键词，无关键词命中归 generic。
+fn classify_mic_start_error(raw: &str) -> &'static str {
+    let s = raw.to_ascii_lowercase();
+    if s.contains("no input device") {
+        return "no-input-device";
+    }
+    if s.contains("permission") || s.contains("denied") || s.contains("not authorized") {
+        return "permission-denied";
+    }
+    // macOS HAL 上「设备被独占」「busy」「in use」「exclusive」都归一类。
+    if s.contains("busy") || s.contains("in use") || s.contains("exclusive") {
+        return "device-busy";
+    }
+    // 设备拔出 / 切走（USB / Bluetooth 断连）：cpal 在 build 阶段会报 DeviceNotAvailable。
+    if s.contains("devicenotavailable") || s.contains("device not available") {
+        return "device-removed";
+    }
+    if s.contains("default_input_config") || s.contains("stream config") || s.contains("unsupported") {
+        return "device-config-unsupported";
+    }
+    // ready 超时通常说明 cpal HAL 卡在 audio thread 初始化——多半也是被独占 / 驱动异常。
+    if s.contains("not ready within") {
+        return "device-busy";
+    }
+    "generic"
+}
 const TICK_MS: u64 = 50; // 20Hz emit — 配合前端 28 根柱子，整个波形窗口 ≈ 1.4s
 const PEAK_GAIN: f32 = 2.8; // 普通对话音量（-25 dBFS 左右）就推到波形 60%+
 // 噪声门：低于该幅值的窗口直接送 0，避免空调 / 键盘底噪把波形顶起来。
@@ -794,6 +845,9 @@ fn spawn_monitor_thread<R: Runtime>(
     let stream_fatal_tick = stream_fatal.clone();
     // VAD callback 与 emit tick 共享同一时间参考。在 spawn 闭包入口取一次。
     let stream_start = Instant::now();
+    // 静音兜底：本次 stream 生命周期内是否已 emit 过一次 silence 提示——只 emit 一次，
+    // 用户应已收到 toast，再重复 emit 是噪音。本地标志，不跨 stream 共享。
+    let mut silence_emitted = false;
 
     let th = thread::Builder::new()
         .name("openspeech-audio".into())
@@ -1042,6 +1096,20 @@ fn spawn_monitor_thread<R: Runtime>(
                         // 录音活跃期续约 cue ACTIVE_SET_AT_MS，避免长录音（>30s）结束
                         // 时被 stale 守卫误判脏状态、强制 reset 后多播一声 start cue。
                         crate::cue::keepalive_active();
+                        // 静音兜底：stream 起来 >= 阈值时间且 VAD 从未触发过 → emit 一次
+                        // hint。让前端在 overlay 加「似乎没拾到声音」提示。一旦 emit 过就
+                        // 不再 emit；用户后来开始说话也不撤回——提示是「可能性」不是「正在」。
+                        if !silence_emitted
+                            && now_ms >= MIC_SILENCE_THRESHOLD_MS
+                            && last_voice_ms == 0
+                        {
+                            silence_emitted = true;
+                            log::warn!(
+                                "[audio] silence threshold exceeded ({}ms, no VAD activity) → emit silence hint",
+                                now_ms
+                            );
+                            let _ = app.emit(MIC_SILENCE_EVENT, now_ms);
+                        }
                     }
                 }
             }
@@ -1131,6 +1199,9 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
         }
     }
 
+    // spawn_monitor_thread 按值 move 走 app；这里克隆一份留给「起失败 emit toast」
+    // 使用。AppHandle 内部是 Arc，clone 几乎免费。
+    let app_for_emit = app.clone();
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
     let (stop_tx, th) = spawn_monitor_thread(app, device_name.clone(), ready_tx);
 
@@ -1151,6 +1222,15 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
         // 自然结束；这里 join 兜底，避免句柄泄漏）。ref_count 不递增。
         let _ = stop_tx.send(());
         let _ = th.join();
+        // 同时 emit 结构化失败原因给前端 toast，让用户看到「占用 / 没权限 / 拔了」
+        // 之类明确文案，而不是只看到 PTT 哑火。Result 仍照常返回，调用方语义不变。
+        let _ = app_for_emit.emit(
+            MIC_START_FAILED_EVENT,
+            MicStartFailedPayload {
+                reason: classify_mic_start_error(e),
+                detail: e.clone(),
+            },
+        );
         return ready;
     }
 
