@@ -287,3 +287,188 @@ fn build_user_message(input: &DictionaryAgentInput) -> String {
 fn escape_quote(s: &str) -> String {
     s.replace('"', "&quot;")
 }
+
+// ============================================================================
+// 批量抽词：用户粘贴一段任意文本（术语清单 / 文章段落 / 中英对照表），
+// 由 LLM 决定哪些条目值得入字典。和 analyze_dictionary_correction 共用 SaaS
+// 端点和 json_object 协议；输出 `{ items: [...] }`，前端再让用户勾选确认。
+// ============================================================================
+
+const EXTRACT_MAX_TEXT_CHARS: usize = 12_000;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractTermsInput {
+    pub text: String,
+    #[serde(default)]
+    pub dictionary: Vec<DictAgentEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractTermsResult {
+    /// 模型返回的 JSON 文本，前端 JSON.parse 后取 items 列。
+    pub plan: String,
+    pub model: String,
+}
+
+#[tauri::command]
+pub async fn extract_dictionary_terms<R: Runtime>(
+    app: AppHandle<R>,
+    input: ExtractTermsInput,
+) -> Result<ExtractTermsResult, String> {
+    let text = input.text.trim();
+    if text.is_empty() {
+        return Err("extract_terms_empty".to_string());
+    }
+    let text_for_model: String = if text.chars().count() > EXTRACT_MAX_TEXT_CHARS {
+        text.chars().take(EXTRACT_MAX_TEXT_CHARS).collect()
+    } else {
+        text.to_string()
+    };
+    log::info!(
+        "[dict_extract] enter text_chars={} dict_size={}",
+        text_for_model.chars().count(),
+        input.dictionary.len(),
+    );
+
+    let resolved = resolve_saas(&app).await?;
+
+    let system_prompt = build_extract_system_prompt();
+    let user_msg = build_extract_user_message(&text_for_model, &input.dictionary);
+
+    let mut body = json!({
+        "model": resolved.model,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": user_msg },
+        ],
+        "temperature": 0,
+        "enable_thinking": false,
+        "stream": false,
+        "response_format": { "type": "json_object" },
+    });
+    if let Some(vid) = resolved.variant_id.as_ref() {
+        body["variant"] = Value::String(vid.clone());
+    }
+
+    let resp = crate::http::client()
+        .post(&resolved.full_url)
+        .bearer_auth(&resolved.api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("{ERR_HTTP}: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(format!("{ERR_HTTP}: HTTP {status}: {txt}"));
+    }
+
+    let raw_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("{ERR_PARSE}: {e}"))?;
+    log::info!("[dict_extract] response\n{}", raw_text);
+    let parsed: Value =
+        serde_json::from_str(&raw_text).map_err(|e| format!("{ERR_PARSE}: {e}"))?;
+
+    let content = parsed
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| format!("{ERR_EMPTY}: no choices[0].message.content"))?
+        .to_string();
+
+    Ok(ExtractTermsResult {
+        plan: content,
+        model: resolved.model,
+    })
+}
+
+fn build_extract_system_prompt() -> String {
+    r#"<role>
+你是 OpenSpeech 的字典批量入库助手。用户粘贴了一段文本（可能是术语清单、中英对照表、Markdown 列表、文章段落，或一段对话），你的任务是从中提取出"值得作为语音输入偏置词加入用户字典"的术语。这些字典条目会作为 hints 喂给 ASR / LLM，提升用户在语音输入时把"听起来像但实际不是"的同音词识别为正确写法的概率。
+</role>
+
+<reference_tags>
+- <RawText>: 用户原始粘贴的文本，可能含 Markdown / bullet / 中英混排。
+- <CurrentDictionary>: 用户已有的字典条目，每条形如 `term="..." | aliases=[...]`。**已有的 term 不要再提**，否则会被前端去重忽略。aliases 只是参考。
+</reference_tags>
+
+<core_rules>
+1. 收录优先级（由高到低）：
+   a) **专有名词 / 项目名 / 产品名 / 品牌**（如 OpenSpeech、tRPC、Postgres）。
+   b) **人名 / 公司名 / 地名**（含外文音译）。
+   c) **行业术语 / 技术词汇 / 缩写**（如 bilge、CRDT、SPAKE2、舵叶、堵漏毯）。
+   d) 用户明显**特意列出来**的清单条目（即使是常用词，但出现在 bullet / 编号列表 / 表格里），按"用户在意"原则也可收录。
+2. **不要**收录：
+   - 常用日常词（吃 / 喝 / 你好 / 今天 / 我们）。
+   - 通用动词、形容词、副词、介词、连词、量词。
+   - 标点、纯数字、emoji、网址、单字、空白。
+   - <CurrentDictionary> 里已存在的 term（大小写不敏感）。
+3. **term 字段 —— 严格按用户原文里的语言/写法收录**：
+   - 用户原文只有中文，term 用中文。
+   - 用户原文只有英文，term 用英文。
+   - 用户原文是**中英对照**（如 "船首 bow / head"、"备锚 prepare anchor"、"中文释义 + 英文术语"）：**拆成两条独立 item** —— 一条中文 term，一条英文 term。**绝不允许只取英文那一侧**——用户说哪种语言哪种就要被偏置，跨语言放 aliases 即可。
+   - 用户原文是其他外语，term 用该外语。
+   - **不要主动翻译**用户原文没出现的语种（用户没写英文就不要给中文术语配英文 term）。
+4. **aliases 字段**（可选）：
+   - term 是中文时，可填同音字 / 近音词 / 常见错听（如 "bilge"-"毕奇"）。
+   - term 是英文时，可填常见错拼或音译近似中文。
+   - **中英对照拆成的两条之间互填 aliases**：中文条目的 aliases 放对应英文写法（如 term="船首"，aliases=["bow", "head"]），英文条目的 aliases 放对应中文（如 term="bow"，aliases=["船首"]）。这样用户说任一语言都能命中。
+   - 没把握就留空数组。aliases 不允许与 term 字面一致。
+5. **reason 字段**（必填，≤ 50 字）：一句中文说明这个术语**是什么 / 哪个领域 / 为什么值得入字典**。例：`"船舶舱底污水，行业术语"`、`"开源项目名，常被识别成'TR PC'"`。**不要**复述用户原文。
+6. **去重**：同一个 term 只返回一次。`items` 数组按"信息密度优先"排序，最值得用户保留的放前面。
+7. **数量上限**：本次最多返回 100 条（中英对照拆出的两条各占 1 个名额）。超过 100 时只保留最高优先级的 100 条。
+8. **任意文本支持**：
+   - 输入是清单 / 词表（每行 1 条）时：高召回——只要符合规则 1，都可收录。
+   - 输入是连续叙述文本时：低召回——只挑专有名词、术语、项目名、人名、行业关键词，不要把每个名词都入库。
+   - 输入完全没有可入库的术语（如纯口语对话、纯数字、纯日常句）时：返回 `{ "items": [] }`。
+9. 输出**纯 JSON**对象，形如：
+```
+{
+  "items": [
+    { "term": "船首", "aliases": ["bow", "head"], "reason": "船舶部位，船头" },
+    { "term": "bow", "aliases": ["船首"], "reason": "Bow，英文船首术语" },
+    { "term": "舵叶", "aliases": ["rudder blade"], "reason": "船舶操纵部位" },
+    { "term": "bilge", "aliases": ["毕奇", "舱底"], "reason": "船舶舱底污水" }
+  ]
+}
+```
+10. 严禁在 JSON 外输出任何文字、解释、markdown 包裹。直接给 JSON 对象。
+</core_rules>"#.to_string()
+}
+
+fn build_extract_user_message(text: &str, dict: &[DictAgentEntry]) -> String {
+    let dict_block = if dict.is_empty() {
+        "(空)".to_string()
+    } else {
+        dict.iter()
+            .map(|e| {
+                let aliases = if e.aliases.is_empty() {
+                    "[]".to_string()
+                } else {
+                    let parts: Vec<String> = e
+                        .aliases
+                        .iter()
+                        .map(|a| format!("\"{}\"", escape_quote(a)))
+                        .collect();
+                    format!("[{}]", parts.join(", "))
+                };
+                format!(
+                    "- term=\"{}\" | aliases={}",
+                    escape_quote(&e.term),
+                    aliases,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "<RawText>\n{}\n</RawText>\n\n<CurrentDictionary>\n{}\n</CurrentDictionary>",
+        text, dict_block,
+    )
+}

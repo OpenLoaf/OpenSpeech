@@ -1125,6 +1125,7 @@ pub fn run() {
             meetings::meeting_scan_orphans,
             ai_refine::refine_text_via_chat_stream,
             dictionary_agent::analyze_dictionary_correction,
+            dictionary_agent::extract_dictionary_terms,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
             asr::test_provider::dictation_test_provider,
