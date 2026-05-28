@@ -8,7 +8,8 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use tauri::{
-    AppHandle, LogicalPosition, Manager, Monitor, Runtime, WebviewUrl, WebviewWindowBuilder,
+    utils::config::BackgroundThrottlingPolicy, AppHandle, LogicalPosition, Manager, Monitor,
+    Runtime, WebviewUrl, WebviewWindowBuilder,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
@@ -66,6 +67,9 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             .shadow(false)
             .visible(false)
             .transparent(true)
+            // 悬浮条永远是 unfocused，macOS WebKit 默认会 throttle 它的 JS 事件循环，
+            // 导致后台时 overlay 状态机迟迟不更新。强制关掉。
+            .background_throttling(BackgroundThrottlingPolicy::Disabled)
             .title("OpenSpeech Overlay");
 
     #[cfg(target_os = "macos")]
