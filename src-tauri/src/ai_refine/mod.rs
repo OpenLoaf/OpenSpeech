@@ -516,6 +516,16 @@ pub async fn refine_text_via_chat_stream<R: Runtime>(
     app: AppHandle<R>,
     input: RefineChatInput,
 ) -> Result<RefineChatResult, String> {
+    run_refine_core(app, input).await
+}
+
+// refine 核心：构请求 → SSE 消费 → stripper → emit delta/done → 返回结果。
+// 同时供 transcribe_and_refine 在 Rust 内部直接调用（ASR 完成后续接），绕开
+// 主窗失焦时被 WebKit 节流的前端 IPC 往返。
+pub(crate) async fn run_refine_core<R: Runtime>(
+    app: AppHandle<R>,
+    input: RefineChatInput,
+) -> Result<RefineChatResult, String> {
     let task_id = input.task_id.clone();
     let sp_chars = input.system_prompt.chars().count();
     let sp_bytes = input.system_prompt.len();

@@ -43,6 +43,7 @@ mod quick_panel;
 pub mod secrets;
 mod stt;
 mod transcribe;
+mod transcribe_refine;
 mod update_channel;
 
 // 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
@@ -247,6 +248,39 @@ const DEV_LOG_FILE_NAME: &str = "OpenSpeech_dev";
 // 正式版（不带 -）仍走 Info，避免普通用户机器堆几百 MB 噪声日志。
 fn is_debug_log_build() -> bool {
     cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains('-')
+}
+
+// 用户在设置里开了 beta 渠道（即便当前还装着正式版）即视为愿意回收诊断日志 → 开 Debug。
+// 真源 = update_channel.rs 经 app_config_dir 写的 update-channel；log 插件注册时 app handle
+// 尚不可用，只能裸读。路径须用 config 语义（非 resolved_log_dir 的 data 语义：Win=Roaming
+// APPDATA 而非 LOCALAPPDATA、Linux=.config 而非 .local/share），否则读不到 beta 用户的文件。
+fn beta_channel_opted_in() -> bool {
+    const IDENTIFIER: &str = "com.openspeech.app";
+
+    #[cfg(target_os = "macos")]
+    let base = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+        .join("Library/Application Support");
+
+    #[cfg(target_os = "windows")]
+    let base = std::env::var("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
+
+    #[cfg(target_os = "linux")]
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+                .unwrap_or_default()
+        });
+
+    matches!(
+        std::fs::read_to_string(base.join(IDENTIFIER).join("update-channel")),
+        Ok(s) if s.trim() == "beta"
+    )
 }
 
 // debug 构建启动时把上一轮 dev 日志删掉，实现"每次启动覆盖"。
@@ -695,6 +729,44 @@ fn disable_macos_fullscreen(window: &tauri::WebviewWindow) {
     }
 }
 
+// 进程级关闭 App Nap。主窗被前台 app 完全遮挡时，macOS 会 nap 本进程并节流
+// webview 的 JS event loop（timer coalescing），导致「ASR 出结果 → 前端驱动
+// AI refine」的编排卡在 pending，直到一次用户输入才解冻。OpenSpeech 是全局
+// 快捷键驱动、必须随时响应的工具，被 nap 属于根本性错误，全程持有一个
+// user-initiated activity assertion 关掉它。
+//
+// 注意：wry 的 backgroundThrottling 配置走 WKWebView inactiveSchedulingPolicy，
+// 只覆盖 webview「脱离窗口」(not in a window) 的场景，管不到「窗口可见但被遮挡」
+// 这条 App Nap 路径——所以那个配置对本问题无效，这里才是真正的解。
+#[cfg(target_os = "macos")]
+fn disable_app_nap() {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    // NSActivityUserInitiatedAllowingIdleSystemSleep：阻止 App Nap，但允许系统
+    // 在整体 idle 时正常进入睡眠（不霸占整机电源）。
+    const NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP: u64 = 0x00EF_FFFF;
+
+    unsafe {
+        let process_info: *mut Object = msg_send![class!(NSProcessInfo), processInfo];
+        if process_info.is_null() {
+            return;
+        }
+        let reason: *mut Object = msg_send![
+            class!(NSString),
+            stringWithUTF8String: c"OpenSpeech stays responsive to global push-to-talk".as_ptr()
+        ];
+        let token: *mut Object = msg_send![
+            process_info,
+            beginActivityWithOptions: NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP
+            reason: reason
+        ];
+        // retain 让 token 活到进程结束 = activity 永久有效。不存 rust 侧、也不 end。
+        let _: *mut Object = msg_send![token, retain];
+    }
+    log::warn!("[app-nap] disabled via NSProcessInfo activity (UserInitiatedAllowingIdleSystemSleep)");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     truncate_dev_log_on_start();
@@ -711,8 +783,8 @@ pub fn run() {
                 // 默认 UseUtc，终端时间会差一个时区，改本地时区。
                 .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                 // Debug 整体放开 + 把噪声过大的网络栈拽回 Info；正式版维持 Info。
-                // beta 等 prerelease 走 Debug，方便回收用户日志。
-                .level(if is_debug_log_build() {
+                // beta 包 + 开了 beta 渠道开关的正式版用户都走 Debug，方便回收用户日志。
+                .level(if is_debug_log_build() || beta_channel_opted_in() {
                     tauri_plugin_log::log::LevelFilter::Debug
                 } else {
                     tauri_plugin_log::log::LevelFilter::Info
@@ -805,6 +877,10 @@ pub fn run() {
         .manage(hotkey::modifier_only::create_state())
         .manage::<openloaf::SharedOpenLoaf>(std::sync::Arc::new(openloaf::OpenLoafState::new()))
         .setup(|app| {
+            // ---- 禁用 macOS App Nap（必须尽早）-------------------------------
+            #[cfg(target_os = "macos")]
+            disable_app_nap();
+
             // ---- 清理超过保留期的滚动日志 ------------------------------------
             purge_old_log_files();
 
@@ -1128,6 +1204,7 @@ pub fn run() {
             dictionary_agent::extract_dictionary_terms,
             transcribe::transcribe_recording_file,
             transcribe::transcribe_long_audio_url,
+            transcribe_refine::transcribe_and_refine,
             asr::test_provider::dictation_test_provider,
             inject::inject_paste,
             inject::inject_commit_ime,
