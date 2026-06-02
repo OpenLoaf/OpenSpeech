@@ -1207,7 +1207,6 @@ pub fn run() {
             transcribe_refine::transcribe_and_refine,
             asr::test_provider::dictation_test_provider,
             inject::inject_paste,
-            inject::inject_commit_ime,
             inject::inject_type,
             permissions::permission_check_microphone,
             permissions::permission_check_accessibility,
