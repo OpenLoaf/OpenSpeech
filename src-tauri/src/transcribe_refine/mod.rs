@@ -56,7 +56,12 @@ pub async fn transcribe_and_refine<R: Runtime>(
     )
     .await;
     let (raw_text, asr_variant, provider_kind, credits_asr) = match asr {
-        Ok(r) => (r.text, r.variant, r.provider_kind, r.credits_consumed),
+        Ok(r) => (
+            crate::text_normalize::normalize_asr_punctuation(&r.text),
+            r.variant,
+            r.provider_kind,
+            r.credits_consumed,
+        ),
         Err(e) => {
             log::warn!("[transcribe_and_refine] ASR failed: {e}");
             return Ok(TranscribeAndRefineResult {

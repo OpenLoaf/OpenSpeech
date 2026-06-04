@@ -42,6 +42,7 @@ mod permissions;
 mod quick_panel;
 pub mod secrets;
 mod stt;
+mod text_normalize;
 mod transcribe;
 mod transcribe_refine;
 mod update_channel;

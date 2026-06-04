@@ -607,7 +607,7 @@ fn merge_segments(map: &BTreeMap<i64, String>) -> String {
     for v in map.values() {
         out.push_str(v);
     }
-    out
+    crate::text_normalize::normalize_asr_punctuation(&out)
 }
 
 fn handle_event<R: Runtime>(
@@ -647,7 +647,10 @@ fn handle_event<R: Runtime>(
             } else {
                 text
             };
-            let _ = app.emit(EVENT_PARTIAL, combined);
+            let _ = app.emit(
+                EVENT_PARTIAL,
+                crate::text_normalize::normalize_asr_punctuation(&combined),
+            );
         }
         RealtimeBackendEvent::Final { sentence_id, text } => {
             // 累积，不覆盖：按 sentenceId 索引存，避免同 id 的重复 Final 把内容写两次，
