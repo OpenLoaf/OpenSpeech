@@ -16,9 +16,6 @@ use tauri::{
 };
 use tauri_plugin_store::StoreExt;
 
-#[cfg(target_os = "macos")]
-use tauri::ActivationPolicy;
-
 mod active_app;
 mod ai_refine;
 pub mod asr;
@@ -50,6 +47,7 @@ mod text_normalize;
 mod transcribe;
 mod transcribe_refine;
 mod update_channel;
+mod window;
 
 use events::*;
 use logging::{
@@ -58,6 +56,11 @@ use logging::{
 };
 #[cfg(target_os = "macos")]
 use macos_native::{activate_macos_app, disable_app_nap, disable_macos_fullscreen};
+// show_main_window / toggle_main_window 经此 re-export 保持 crate::show_main_window
+// 与 crate::toggle_main_window 路径不变（openloaf/callback、hotkey 跨模块引用）。
+pub(crate) use window::{show_main_window, toggle_main_window};
+#[cfg(target_os = "macos")]
+use window::apply_dock_icon_policy;
 
 // 托盘菜单文案：Rust 不嵌 i18n，文案完全由前端按当前语言推过来。bootPromise 完成后
 // 前端 syncI18nFromSettings 会调用 update_tray_labels 一次；之后切语言再推。空槽位
@@ -120,106 +123,11 @@ fn update_tray_labels(app: tauri::AppHandle, labels: TrayLabels) {
     rebuild_tray_menu(&app);
 }
 
-#[tauri::command]
-fn hide_to_tray(app: tauri::AppHandle) {
-    hide_main_window(&app);
-}
-
-#[tauri::command]
-fn show_main_window_cmd(app: tauri::AppHandle) {
-    show_main_window(&app);
-}
-
 // 前端改了 inputDevice（或其他需要体现在托盘菜单的设置）后调用一次，
 // Rust 重读 settings.json 并重建菜单，使"选择麦克风"子菜单的 ✓ 实时跟手。
 #[tauri::command]
 fn tray_refresh(app: tauri::AppHandle) {
     rebuild_tray_menu(&app);
-}
-
-// 主窗口可见时把进程切回 Regular（显示 Dock 图标 + 出现在 Cmd+Tab）。
-// 与 hide_main_window 切 Accessory 配对：托盘隐藏期间 Dock 图标消失。
-#[cfg(target_os = "macos")]
-fn apply_dock_icon_policy<R: Runtime>(app: &tauri::AppHandle<R>) {
-    let _ = app.set_activation_policy(ActivationPolicy::Regular);
-}
-
-fn hide_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-    // macOS：切换到 Accessory 让 Dock 图标消失，应用变为"仅状态栏"。
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.set_activation_policy(ActivationPolicy::Accessory);
-    }
-    // 主窗隐藏 = 用户明确想暂离 UI，audio 也得让位。否则 ref_count 上一轮漏减（webview
-    // reload / PTT 被打断 / stt 错误路径未平衡）残留的 stream 会一直把 macOS 状态栏的
-    // 麦克风指示灯钉亮，用户体感「OpenSpeech 没关麦克风」。
-    // 用 force_stop 而不是 stop()——后者要求 ref_count 已经 0，但出现这种现象的前提
-    // 恰恰就是 ref_count 没被减到 0。trade-off：极少数「PTT 录音中主窗被主动 hide」
-    // 场景会被掐——但 PTT 期间用户在按键 + 看 overlay，不会同时主动收主窗，实际近 0。
-    audio::force_stop();
-}
-
-/// 全局 toggle：可见 + 已聚焦 → 隐藏；其它一律 show + focus。
-/// 拆出来给 ShowMainWindow hotkey 用——单一入口避免和 show_main_window
-/// / hide_main_window 各自的竞态走两套路径。
-#[track_caller]
-pub(crate) fn toggle_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
-    let caller = std::panic::Location::caller();
-    log::debug!(
-        "[main_window] toggle_main_window called from {}:{}",
-        caller.file(),
-        caller.line()
-    );
-    let Some(window) = app.get_webview_window("main") else {
-        show_main_window(app);
-        return;
-    };
-    let visible = window.is_visible().unwrap_or(false);
-    let focused = window.is_focused().unwrap_or(false);
-    if visible && focused {
-        hide_main_window(app);
-    } else {
-        show_main_window(app);
-    }
-}
-
-#[track_caller]
-pub(crate) fn show_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
-    let caller = std::panic::Location::caller();
-    log::debug!(
-        "[main_window] show_main_window called from {}:{}",
-        caller.file(),
-        caller.line()
-    );
-    // macOS：hide_main_window 隐藏到托盘时切到了 Accessory，这里再切回 Regular。
-    // 幂等检查（visible+focused+!minimized 短路）之前先 apply：dock 图标状态
-    // 独立于窗口可见性，跳过 set_focus 不代表跳过 dock policy 同步。
-    #[cfg(target_os = "macos")]
-    {
-        apply_dock_icon_policy(app);
-    }
-    if let Some(window) = app.get_webview_window("main") {
-        let visible = window.is_visible().unwrap_or(false);
-        let focused = window.is_focused().unwrap_or(false);
-        let minimized = window.is_minimized().unwrap_or(false);
-        log::debug!(
-            "[main_window] show_main_window pre-state visible={visible} focused={focused} minimized={minimized}"
-        );
-        // 幂等短路：窗口已经在前台 + 已聚焦 + 未最小化 → 这三个 API 调下去都是
-        // 状态不变的 no-op，但 set_focus 在 Windows 上即便对已聚焦窗口也会触发
-        // foreground 抢占副作用（任务栏图标闪烁、SetForegroundWindow 重新激活）。
-        // 未登录 gate 在 PTT cycle 期间会高频调本函数，跳过抢焦点是核心修复。
-        if visible && focused && !minimized {
-            log::debug!("[main_window] show_main_window already foreground, skip");
-            return;
-        }
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
 }
 
 // 从 settings.json (tauri-plugin-store) 读当前选中的麦克风名。
@@ -689,11 +597,11 @@ pub fn run() {
             commands::exit_app,
             commands::app_emergency_reset,
             commands::relaunch_app,
-            hide_to_tray,
+            window::hide_to_tray,
             commands::get_active_window_info_cmd,
             focus_check::focus_is_editable_cmd,
             ime::active_ime_id_cmd,
-            show_main_window_cmd,
+            window::show_main_window_cmd,
             tray_refresh,
             update_tray_labels,
             commands::open_network_settings,
