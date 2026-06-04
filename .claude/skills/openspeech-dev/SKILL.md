@@ -108,7 +108,8 @@ src/                            前端源码（私仓 OpenSpeech-Frontend，公�
                                 openspeech-frontend skill 取详细约定）
 src-tauri/
 ├── src/
-│   ├── lib.rs                  tauri::Builder + 插件注册 + setup
+│   ├── lib.rs                  tauri::Builder + 插件注册 + setup（纯装配壳，业务已外溢）
+│   ├── {events,logging,macos_native,commands,window,tray}.rs  lib.rs 装配辅助（事件常量/日志生命周期/objc/零散命令/窗口显隐/托盘菜单）
 │   ├── audio/                  cpal 采集 + WAV 落盘 + PCM16 喂 stt
 │   ├── stt/                    OpenLoaf SaaS realtime ASR worker
 │   ├── hotkey/                 combo / modifierOnly / doubleTap 三路编排
