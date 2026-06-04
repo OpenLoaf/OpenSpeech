@@ -15,7 +15,7 @@
 | error | 失败 / 异常原因（人话，已 i18n）。`failed` 时**必有**值；`success` 时也可能有值——AI 整理 / 翻译 phase2 等"主流程已成功但有副作用错误"会写一条备注，UI 用黄色 NOTE 标出。`cancelled` 始终为 NULL。 |
 | duration_ms | 录音时长 |
 | created_at | Unix 时间戳（毫秒） |
-| target_app | 注入目标应用的可识别名称（如 "VSCode"、"Chrome"）；若无法获取则为空 |
+| target_app | 文字**实际落点**应用的可识别名称（如 "VSCode"、"Chrome"）。成功注入路径取**松手瞬间**的前台 app（用户在 A 起录、切到 B 落字时记 B）；cancelled / 失败 / debug 等无注入路径回退到录音起点 app；若无法获取则为空 |
 | audio_path | 录音文件的**相对路径**（相对 `app_data_dir`），新版形如 `recordings/<yyyy-MM-dd>/<id>.ogg`，迁移前老记录可能仍是 `recordings/<id>.{ogg,wav}`。未保存音频的记录（如 `cancelled`、或"关闭音频保存"设置开启时）该字段为 NULL |
 | asr_source | 实际走的 ASR 通道：`saas-realtime` / `saas-rest` / `byo`。schema v3 之前的老记录为 NULL |
 | ai_model | AI 优化使用的模型预格式化展示串（如 "OpenLoaf SaaS" / "{provider name} · {model}"）。未启用 / 未尝试 = NULL |
@@ -25,7 +25,7 @@
 | debug_payload | DEV 构建下捕获的 LLM 请求快照（URL / model / body 的 pretty JSON 字符串；refine + 翻译 phase2 累积成 JSON 数组）。仅在 `import.meta.env.DEV` 路径写入；正式版恒为 NULL。复制 Debug 信息按钮直接读这一列，不再实时拼接。schema v10 之前的老记录为 NULL |
 | text_edited | 用户在历史详情里手动改写后的最终文本；NULL = 没改过。**与 `text` / `refined_text` 并存不互覆盖**：原始 ASR 与原 refine 结果作为 diff 基线保留下来，便于后续异步词典分析任务比对。schema v11 之前的老记录为 NULL |
 | text_edited_at | 上次手动编辑时间戳（ms）。后续异步 AI 词典分析任务挑"近期编辑"喂模型时按这列排序。NULL = 未编辑过 |
-| focus_title | 录音瞬间的前台窗口标题（如 "main.rs — vscode"）。与 `target_app` 同生命周期采集；拼到 ConversationHistory 段每条历史里给模型做窗口/任务级偏置。schema v12 之前的老记录、retry、拿不到 title 时为 NULL |
+| focus_title | **落点**前台窗口标题（如 "main.rs — vscode"），与 `target_app` 同源（成功路径取松手瞬间，无注入路径回退录音起点）；拼到 ConversationHistory 段每条历史里给模型做窗口/任务级偏置。schema v12 之前的老记录、retry、拿不到 title 时为 NULL |
 
 **不保存**：模型请求/响应的完整内容（仅保留最终 `text`）。
 
