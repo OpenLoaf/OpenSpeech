@@ -73,6 +73,14 @@
 
 ---
 
+## FSM 复位禁用可节流 timer（栽过坑，2026-06-04）
+
+`recording.ts` 的 FSM `transcribing/injecting → idle` 复位**绝不能**靠 `window.setTimeout`。听写期间主窗是隐藏 webview，其 timer 会被 Chromium/WebView2 background timer throttling 节流甚至冻结（hidden-page），延迟可达数十秒乃至永不 fire。旧版 toggle-off（`setTimeout(...,300)`）与 `simulateFinalize`（`setTimeout(...,800)`）都把唯一的回 idle 出口挂在这种 timer 上 → 0.2.49 Windows "一直在转录中"：finalize 全部微任务（tail/paste/hint）正常跑完，唯独那帧 idle timer 不 fire，FSM 永久卡 injecting、PTT 被 "非 idle 一律 IGNORED" 守卫全吞、只能重启。
+
+规约：复位走 `finalize().then()` 的**微任务里立即 set idle**（微任务不被节流）+ `.catch` 兜 reject；守卫必须含 `injecting`（onChunk 流式首段会把 transcribing→injecting）；视觉收尾停顿交给可见的 overlay 窗口自己的淡出，不要塞回主窗 timer。回归测试：`stores/recording.stuck-injecting.repro.test.ts`（变体 C/D 在"timer 永不 fire"下断言仍回 idle）。
+
+---
+
 ## 隐私边界（呼应 `docs/privacy.md`）
 
 - 录音仅落盘本机：`app_data_dir/recordings/<id>.wav`。
