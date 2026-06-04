@@ -27,6 +27,7 @@ mod audio;
 mod cue;
 mod db;
 mod dictionary_agent;
+mod events;
 mod focus_check;
 mod hotkey;
 mod http;
@@ -47,23 +48,7 @@ mod transcribe;
 mod transcribe_refine;
 mod update_channel;
 
-// 前端订阅此事件以决定"关闭到后台 / 退出 / 弹对话框"，见 Layout.tsx。
-// close-requested: 关闭当前窗口的请求（红叉 / Cmd+W）。Onboarding 阶段会忽略，
-// 避免误触关闭引导；主界面按 closeBehavior 偏好走（HIDE/QUIT/PROMPT）。
-const CLOSE_REQUESTED_EVENT: &str = "openspeech://close-requested";
-// quit-requested: 用户明确退出应用的请求（Cmd+Q）。Onboarding 与主界面都直接退出，
-// 不弹"关闭还是隐藏"对话框——Cmd+Q 的语义就是退出。
-#[cfg(target_os = "macos")]
-const QUIT_REQUESTED_EVENT: &str = "openspeech://quit-requested";
-// 托盘菜单事件：前端在 Layout.tsx 订阅，负责唤出主窗口 + Dialog/Navigate。
-const TRAY_OPEN_HOME_EVENT: &str = "openspeech://tray-open-home";
-const TRAY_OPEN_SETTINGS_EVENT: &str = "openspeech://tray-open-settings";
-const TRAY_OPEN_DICTIONARY_EVENT: &str = "openspeech://tray-open-dictionary";
-const TRAY_OPEN_TOOLBOX_EVENT: &str = "openspeech://tray-open-toolbox";
-const TRAY_OPEN_HISTORY_EVENT: &str = "openspeech://tray-open-history";
-const TRAY_OPEN_FEEDBACK_EVENT: &str = "openspeech://tray-open-feedback";
-const TRAY_CHECK_UPDATE_EVENT: &str = "openspeech://tray-check-update";
-const TRAY_SELECT_MIC_EVENT: &str = "openspeech://tray-select-mic";
+use events::*;
 
 // 托盘菜单文案：Rust 不嵌 i18n，文案完全由前端按当前语言推过来。bootPromise 完成后
 // 前端 syncI18nFromSettings 会调用 update_tray_labels 一次；之后切语言再推。空槽位
