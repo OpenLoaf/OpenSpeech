@@ -5,16 +5,13 @@
 // 必须 crate 级 inner attribute 才生效。upstream 不再维护，无法通过升级解决。
 #![allow(unexpected_cfgs)]
 
-use std::sync::Mutex;
 use tauri::{
-    Emitter, LogicalSize, Manager, Runtime, WindowEvent,
-    menu::{
-        CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem,
-        SubmenuBuilder,
-    },
+    Emitter, LogicalSize, Manager, WindowEvent,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
-use tauri_plugin_store::StoreExt;
+// 菜单构建器现仅 macOS App Menu 使用（托盘菜单已搬入 tray.rs）。
+#[cfg(target_os = "macos")]
+use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 
 mod active_app;
 mod ai_refine;
@@ -46,6 +43,7 @@ mod stt;
 mod text_normalize;
 mod transcribe;
 mod transcribe_refine;
+mod tray;
 mod update_channel;
 mod window;
 
@@ -61,175 +59,7 @@ use macos_native::{activate_macos_app, disable_app_nap, disable_macos_fullscreen
 pub(crate) use window::{show_main_window, toggle_main_window};
 #[cfg(target_os = "macos")]
 use window::apply_dock_icon_policy;
-
-// 托盘菜单文案：Rust 不嵌 i18n，文案完全由前端按当前语言推过来。bootPromise 完成后
-// 前端 syncI18nFromSettings 会调用 update_tray_labels 一次；之后切语言再推。空槽位
-// 用英文兜底（首次启动 / 前端未来得及推）。
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct TrayLabels {
-    pub feedback: String,
-    pub open_home: String,
-    /// `show_main_window` 当前 binding 的 muda accelerator 字符串（如 "CmdOrCtrl+Shift+O"）。
-    /// 空字符串 = 不显示快捷键。前端 i18n-sync 在 binding 变动 / 切语言时一起 push。
-    #[serde(default)]
-    pub open_home_accel: String,
-    pub open_toolbox: String,
-    pub open_history: String,
-    pub open_settings: String,
-    pub mic_submenu: String,
-    pub auto_detect: String,
-    // "Auto-detect ({name})" 模板里的前缀，用于显示当前默认设备名。
-    pub auto_detect_with_name: String,
-    pub open_dictionary: String,
-    pub check_update: String,
-    pub quit: String,
-}
-
-impl Default for TrayLabels {
-    fn default() -> Self {
-        Self {
-            feedback: "Feedback".into(),
-            open_home: "Open home".into(),
-            open_home_accel: String::new(),
-            open_toolbox: "AI Tools".into(),
-            open_history: "History".into(),
-            open_settings: "Settings…".into(),
-            mic_submenu: "Microphone".into(),
-            auto_detect: "Auto-detect".into(),
-            auto_detect_with_name: "Auto-detect ({{name}})".into(),
-            open_dictionary: "Dictionary".into(),
-            check_update: "Check for updates".into(),
-            quit: "Quit OpenSpeech".into(),
-        }
-    }
-}
-
-static TRAY_LABELS: Mutex<Option<TrayLabels>> = Mutex::new(None);
-
-fn current_tray_labels() -> TrayLabels {
-    TRAY_LABELS
-        .lock()
-        .ok()
-        .and_then(|g| g.clone())
-        .unwrap_or_default()
-}
-
-#[tauri::command]
-fn update_tray_labels(app: tauri::AppHandle, labels: TrayLabels) {
-    if let Ok(mut g) = TRAY_LABELS.lock() {
-        *g = Some(labels);
-    }
-    rebuild_tray_menu(&app);
-}
-
-// 前端改了 inputDevice（或其他需要体现在托盘菜单的设置）后调用一次，
-// Rust 重读 settings.json 并重建菜单，使"选择麦克风"子菜单的 ✓ 实时跟手。
-#[tauri::command]
-fn tray_refresh(app: tauri::AppHandle) {
-    rebuild_tray_menu(&app);
-}
-
-// 从 settings.json (tauri-plugin-store) 读当前选中的麦克风名。
-// 空串 / 字段缺失 ⇒ None，代表 "Auto-detect（系统默认设备）"。
-fn read_input_device_from_store<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<String> {
-    let s = app.store("settings.json").ok()?;
-    let root = s.get("root")?;
-    let general = root.get("general")?;
-    let dev = general.get("inputDevice")?.as_str()?.to_string();
-    (!dev.is_empty()).then_some(dev)
-}
-
-// 构造托盘右键菜单。每次想刷新（设备插拔 / 用户切换输入设备）都走 rebuild_tray_menu。
-// 结构参考 Typeless 托盘：反馈 / 打开主页 / 设置 / 选择麦克风 ▸ / 将词汇添加到词典 /
-// 版本 x.y.z（禁用） / 检查更新 / 退出。
-fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let devices = audio::audio_list_input_devices();
-    let current = read_input_device_from_store(app);
-
-    let labels = current_tray_labels();
-
-    let feedback = MenuItemBuilder::with_id("tray::feedback", &labels.feedback).build(app)?;
-    let mut home_builder = MenuItemBuilder::with_id("tray::open_home", &labels.open_home);
-    if !labels.open_home_accel.is_empty() {
-        home_builder = home_builder.accelerator(&labels.open_home_accel);
-    }
-    let home = home_builder.build(app)?;
-    let toolbox =
-        MenuItemBuilder::with_id("tray::open_toolbox", &labels.open_toolbox).build(app)?;
-    let history =
-        MenuItemBuilder::with_id("tray::open_history", &labels.open_history).build(app)?;
-    let settings = MenuItemBuilder::with_id("tray::open_settings", &labels.open_settings)
-        .accelerator("CmdOrCtrl+,")
-        .build(app)?;
-
-    // Auto-detect 项附系统默认设备名做提示，模板 "Auto-detect ({{name}})" 由前端按当前语言提供。
-    let auto_label = match devices
-        .iter()
-        .find(|d| d.is_default)
-        .map(|d| d.name.clone())
-    {
-        Some(n) => labels.auto_detect_with_name.replace("{{name}}", &n),
-        None => labels.auto_detect.clone(),
-    };
-    let auto_item = CheckMenuItemBuilder::with_id("tray::mic::__auto__", auto_label)
-        .checked(current.is_none())
-        .build(app)?;
-
-    let mut mic_items: Vec<tauri::menu::CheckMenuItem<R>> = Vec::new();
-    for d in &devices {
-        let id = format!("tray::mic::{}", d.name);
-        let checked = current.as_deref() == Some(d.name.as_str());
-        let item = CheckMenuItemBuilder::with_id(id, d.name.clone())
-            .checked(checked)
-            .build(app)?;
-        mic_items.push(item);
-    }
-
-    let mut mic_builder = SubmenuBuilder::new(app, &labels.mic_submenu).item(&auto_item);
-    if !mic_items.is_empty() {
-        mic_builder = mic_builder.item(&PredefinedMenuItem::separator(app)?);
-    }
-    for it in &mic_items {
-        mic_builder = mic_builder.item(it);
-    }
-    let mic_submenu = mic_builder.build()?;
-
-    let dict =
-        MenuItemBuilder::with_id("tray::open_dictionary", &labels.open_dictionary).build(app)?;
-    let check_update =
-        MenuItemBuilder::with_id("tray::check_update", &labels.check_update).build(app)?;
-    let quit = MenuItemBuilder::with_id("tray::quit", &labels.quit)
-        .accelerator("CmdOrCtrl+Q")
-        .build(app)?;
-
-    MenuBuilder::new(app)
-        .item(&home)
-        .item(&toolbox)
-        .item(&history)
-        .item(&dict)
-        .separator()
-        .item(&settings)
-        .item(&mic_submenu)
-        .separator()
-        .item(&feedback)
-        .item(&check_update)
-        .separator()
-        .item(&quit)
-        .build()
-}
-
-fn rebuild_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) {
-    let Some(tray) = app.tray_by_id("main") else {
-        return;
-    };
-    match build_tray_menu(app) {
-        Ok(menu) => {
-            let _ = tray.set_menu(Some(menu));
-        }
-        Err(e) => log::warn!("[tray] rebuild menu failed: {e:?}"),
-    }
-}
+use tray::build_tray_menu;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -602,8 +432,8 @@ pub fn run() {
             focus_check::focus_is_editable_cmd,
             ime::active_ime_id_cmd,
             window::show_main_window_cmd,
-            tray_refresh,
-            update_tray_labels,
+            tray::tray_refresh,
+            tray::update_tray_labels,
             commands::open_network_settings,
             logging::open_log_dir,
             logging::read_recent_log_tail,
