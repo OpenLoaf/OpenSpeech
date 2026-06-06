@@ -38,6 +38,24 @@ fn meeting_blocked_set() -> &'static Mutex<HashSet<BindingId>> {
     SET.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// 串行化所有改动 OS 快捷键注册的临界区（apply_bindings / pause / resume /
+/// esc_capture）。
+///
+/// 为什么需要：这些函数刻意**不持** `HotkeyState.active` 锁跨过 plugin.register/
+/// unregister（避免与 handler 抢锁死锁），但因此对 global-shortcut 全局 manager 与
+/// `state.active` 的「读快照→改 OS→写回」整段不是原子的。前端快速连发 apply_hotkey_config
+/// 或录音期 esc_capture 与 apply 交错时会竞态：线程 A unregister 后线程 B 抢注，A 再注册
+/// 报 "already registered"，retry 也被抢，最终 OS 仍留注册而 `state.active` 被写空——此后
+/// handler 查不到 binding、apply 又只反注册空表里的项，永久卡死，只能重启进程。
+///
+/// 这把锁与 `state.active` 数据锁是**两把不同的锁**：handler 只取 `state.active`，从不取
+/// 本锁，所以不会重新引入当年那个死锁。互调链（set_hotkey_recording → pause/resume）里
+/// 本锁只在被调函数内部获取，无重入。
+fn hotkey_op_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 /// 录制中按下听写/翻译/AskAI → emit 提示并返回 true，由调用方 return 跳过 overlay/cue/HOTKEY_EVENT。
 /// release 阶段只判 set 再吞掉，不重复 emit toast。
 pub fn maybe_block_for_meeting<R: Runtime>(
@@ -233,6 +251,11 @@ pub fn apply_bindings<R: Runtime>(
     app: &AppHandle<R>,
     payload: &HotkeyConfigPayload,
 ) -> Result<(), String> {
+    // 串行化整段「读 active 快照 → 改 OS 注册 → 写回 active」，杜绝并发 apply /
+    // esc_capture 交错导致的注册泄漏 + active 写空（见 hotkey_op_lock 注释）。
+    let _op = hotkey_op_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     log::warn!(
         "[hotkey] apply_bindings: {} entries",
         payload.bindings.len()
@@ -520,6 +543,9 @@ pub fn hotkey_init_listener<R: Runtime>(app: AppHandle<R>) {
 /// 时原听写快捷键同时被系统触发。`HotkeyState.active` 保留不动，作为"目标快照"
 /// 供 `resume_combos` 恢复。
 fn pause_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let _op = hotkey_op_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let state = app
         .try_state::<SharedHotkeyState>()
         .ok_or_else(|| "HotkeyState missing".to_string())?;
@@ -541,6 +567,9 @@ fn pause_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 }
 
 fn resume_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let _op = hotkey_op_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let state = app
         .try_state::<SharedHotkeyState>()
         .ok_or_else(|| "HotkeyState missing".to_string())?;
@@ -597,6 +626,9 @@ fn esc_shortcut() -> Shortcut {
 
 #[tauri::command]
 pub fn esc_capture_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let _op = hotkey_op_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let plugin = app.global_shortcut();
     let sc = esc_shortcut();
     if plugin.is_registered(sc) {
@@ -619,6 +651,9 @@ pub fn esc_capture_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn esc_capture_stop<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let _op = hotkey_op_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let plugin = app.global_shortcut();
     let sc = esc_shortcut();
     if !plugin.is_registered(sc) {
