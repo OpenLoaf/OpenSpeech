@@ -73,7 +73,12 @@ pub fn maybe_block_for_meeting<R: Runtime>(
         }
         return false;
     }
-    if !crate::meetings::is_capturing() {
+    let capturing = crate::meetings::is_capturing();
+    log::warn!(
+        "[hotkey] meeting-block check id={id:?} capturing={capturing} has_active={}",
+        crate::meetings::has_active()
+    );
+    if !capturing {
         return false;
     }
     if let Ok(mut s) = meeting_blocked_set().lock() {

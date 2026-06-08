@@ -112,7 +112,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             let url = format!(
                 "{}/chat/completions",
-                base.trim_end_matches('/').trim_end_matches("/chat/completions")
+                base.trim_end_matches('/')
+                    .trim_end_matches("/chat/completions")
             );
             eprintln!("[runner] mode=custom base_url={base} model={model}");
             Resolved {
@@ -143,13 +144,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let variant_id = match args.variant {
                 Some(v) => v,
-                None => tokio::task::spawn_blocking({
-                    let client = client.clone();
-                    move || client.ai().fast_chat_variant()
-                })
-                .await??
-                .ok_or("no fast_chat_variant — server returned None")?
-                .id,
+                None => {
+                    tokio::task::spawn_blocking({
+                        let client = client.clone();
+                        move || client.ai().fast_chat_variant()
+                    })
+                    .await??
+                    .ok_or("no fast_chat_variant — server returned None")?
+                    .id
+                }
             };
 
             eprintln!("[runner] mode=saas base_url={}", sess.base_url);
@@ -226,7 +229,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(nl) = buf.find('\n') else { break };
             let line = buf[..nl].trim_end_matches('\r').to_string();
             buf.drain(..=nl);
-            let Some(rest) = line.strip_prefix("data:") else { continue };
+            let Some(rest) = line.strip_prefix("data:") else {
+                continue;
+            };
             let payload = rest.trim();
             if payload.is_empty() || payload == "[DONE]" {
                 continue;

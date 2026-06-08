@@ -17,11 +17,7 @@ use std::os::raw::c_void;
 #[link(name = "System", kind = "dylib")]
 unsafe extern "C" {
     fn pthread_main_np() -> i32;
-    fn dispatch_sync_f(
-        queue: *mut c_void,
-        context: *mut c_void,
-        work: extern "C" fn(*mut c_void),
-    );
+    fn dispatch_sync_f(queue: *mut c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
     static _dispatch_main_q: c_void;
 }
 

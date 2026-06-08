@@ -388,9 +388,7 @@ impl TencentHttp for ReqwestHttp {
             return Err(TencentFileError::RateLimited);
         }
         if !status.is_success() {
-            return Err(TencentFileError::Network(format!(
-                "HTTP {status}: {text}"
-            )));
+            return Err(TencentFileError::Network(format!("HTTP {status}: {text}")));
         }
         Ok(text)
     }
@@ -477,9 +475,9 @@ pub async fn submit_create_task(
     if let Some(err) = resp.response.error {
         return Err(classify_api_error(&err.code, &err.message));
     }
-    let data = resp.response.data.ok_or_else(|| TencentFileError::Network(
-        "CreateRecTask: response missing both Data and Error".into(),
-    ))?;
+    let data = resp.response.data.ok_or_else(|| {
+        TencentFileError::Network("CreateRecTask: response missing both Data and Error".into())
+    })?;
     Ok(data.task_id)
 }
 
@@ -563,14 +561,18 @@ mod tests {
     #[test]
     fn create_request_url_body_shape() {
         // 文档示例 1（按 URL）
-        let req = CreateRecTaskRequest::new_url("http://test.cos.ap-guangzhou.myqcloud.com/test.wav")
-            .engine("16k_zh");
+        let req =
+            CreateRecTaskRequest::new_url("http://test.cos.ap-guangzhou.myqcloud.com/test.wav")
+                .engine("16k_zh");
         let body: Value = serde_json::from_str(&req.to_json()).unwrap();
         assert_eq!(body["EngineModelType"], "16k_zh");
         assert_eq!(body["ChannelNum"], 1);
         assert_eq!(body["ResTextFormat"], 0);
         assert_eq!(body["SourceType"], 0);
-        assert_eq!(body["Url"], "http://test.cos.ap-guangzhou.myqcloud.com/test.wav");
+        assert_eq!(
+            body["Url"],
+            "http://test.cos.ap-guangzhou.myqcloud.com/test.wav"
+        );
         // URL 模式不能带 Data / DataLen
         assert!(body.get("Data").is_none());
         assert!(body.get("DataLen").is_none());
@@ -597,7 +599,10 @@ mod tests {
             }
         }"#;
         let resp: CreateRecTaskResponse = serde_json::from_str(raw).unwrap();
-        assert_eq!(resp.response.request_id, "3c140219-cfe9-470e-b241-907877d6fb03");
+        assert_eq!(
+            resp.response.request_id,
+            "3c140219-cfe9-470e-b241-907877d6fb03"
+        );
         assert_eq!(resp.response.data.unwrap().task_id, 1393265);
         assert!(resp.response.error.is_none());
     }
@@ -660,10 +665,16 @@ mod tests {
         let resp: DescribeTaskStatusResponse = serde_json::from_str(raw).unwrap();
         let data = resp.response.data.unwrap();
         assert_eq!(data.status, 2);
-        assert_eq!(TaskStatus::from_code(data.status), Some(TaskStatus::Success));
+        assert_eq!(
+            TaskStatus::from_code(data.status),
+            Some(TaskStatus::Success)
+        );
         assert_eq!(data.audio_duration, 2.38);
         assert_eq!(data.result_detail.len(), 1);
-        assert_eq!(merge_result_detail(&data.result_detail), "腾讯云语音识别欢迎您。");
+        assert_eq!(
+            merge_result_detail(&data.result_detail),
+            "腾讯云语音识别欢迎您。"
+        );
     }
 
     #[test]
@@ -775,9 +786,13 @@ mod tests {
 
     #[tokio::test]
     async fn submit_create_task_happy_path() {
-        let http = MockHttp::new(vec![Ok(r#"{"Response":{"RequestId":"rid","Data":{"TaskId":777}}}"#.into())]);
+        let http = MockHttp::new(vec![Ok(
+            r#"{"Response":{"RequestId":"rid","Data":{"TaskId":777}}}"#.into(),
+        )]);
         let req = CreateRecTaskRequest::new_local("aGVsbG8=", 5);
-        let task_id = submit_create_task(&http, "sid", "skey", None, &req).await.unwrap();
+        let task_id = submit_create_task(&http, "sid", "skey", None, &req)
+            .await
+            .unwrap();
         assert_eq!(task_id, 777);
         assert_eq!(http.captured_actions.lock().unwrap()[0], ACTION_CREATE);
     }
@@ -786,8 +801,13 @@ mod tests {
     async fn submit_create_task_auth_failure_maps_to_unauthenticated() {
         let http = MockHttp::new(vec![Ok(r#"{"Response":{"RequestId":"rid","Error":{"Code":"AuthFailure.SignatureFailure","Message":"sig bad"}}}"#.into())]);
         let req = CreateRecTaskRequest::new_local("aGVsbG8=", 5);
-        let err = submit_create_task(&http, "sid", "skey", None, &req).await.unwrap_err();
-        assert!(matches!(err, TencentFileError::Unauthenticated(_)), "got {err:?}");
+        let err = submit_create_task(&http, "sid", "skey", None, &req)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, TencentFileError::Unauthenticated(_)),
+            "got {err:?}"
+        );
         assert_eq!(err.code(), "tencent_unauthenticated");
     }
 
@@ -795,7 +815,9 @@ mod tests {
     async fn submit_create_task_rate_limit_maps() {
         let http = MockHttp::new(vec![Ok(r#"{"Response":{"RequestId":"rid","Error":{"Code":"RequestLimitExceeded","Message":"qps"}}}"#.into())]);
         let req = CreateRecTaskRequest::new_local("aGVsbG8=", 5);
-        let err = submit_create_task(&http, "sid", "skey", None, &req).await.unwrap_err();
+        let err = submit_create_task(&http, "sid", "skey", None, &req)
+            .await
+            .unwrap_err();
         assert!(matches!(err, TencentFileError::RateLimited));
     }
 
@@ -804,7 +826,9 @@ mod tests {
         // 超过 5MB：不发请求就直接返错
         let http = MockHttp::new(vec![]);
         let req = CreateRecTaskRequest::new_local("ignored", TENCENT_FILE_MAX_BYTES + 1);
-        let err = submit_create_task(&http, "sid", "skey", None, &req).await.unwrap_err();
+        let err = submit_create_task(&http, "sid", "skey", None, &req)
+            .await
+            .unwrap_err();
         assert!(matches!(err, TencentFileError::FileTooLarge { .. }));
         assert_eq!(err.code(), "file_too_large_for_tencent_byok");
         // mock 没被调到
@@ -815,7 +839,9 @@ mod tests {
     async fn submit_create_task_network_error_propagates() {
         let http = MockHttp::new(vec![Err(TencentFileError::Network("dns fail".into()))]);
         let req = CreateRecTaskRequest::new_local("aGVsbG8=", 5);
-        let err = submit_create_task(&http, "sid", "skey", None, &req).await.unwrap_err();
+        let err = submit_create_task(&http, "sid", "skey", None, &req)
+            .await
+            .unwrap_err();
         assert!(matches!(err, TencentFileError::Network(_)));
         assert_eq!(err.code(), "tencent_network_error");
     }
@@ -825,7 +851,11 @@ mod tests {
         let waiting = r#"{"Response":{"RequestId":"r1","Data":{"TaskId":1,"Status":0,"StatusStr":"waiting","AudioDuration":0,"Result":"","ErrorMsg":"","ResultDetail":[]}}}"#;
         let doing = r#"{"Response":{"RequestId":"r2","Data":{"TaskId":1,"Status":1,"StatusStr":"doing","AudioDuration":0,"Result":"","ErrorMsg":"","ResultDetail":[]}}}"#;
         let success = r#"{"Response":{"RequestId":"r3","Data":{"TaskId":1,"Status":2,"StatusStr":"success","AudioDuration":2.38,"Result":"[0:0.020,0:2.380]  腾讯云语音识别欢迎您。\n","ResultDetail":[{"FinalSentence":"腾讯云语音识别欢迎您。","SliceSentence":"","StartMs":20,"EndMs":2380,"SpeakerId":0}],"ErrorMsg":""}}}"#;
-        let http = MockHttp::new(vec![Ok(waiting.into()), Ok(doing.into()), Ok(success.into())]);
+        let http = MockHttp::new(vec![
+            Ok(waiting.into()),
+            Ok(doing.into()),
+            Ok(success.into()),
+        ]);
         let resp = poll_until_terminal(
             &http,
             &ZeroSleeper,
@@ -840,7 +870,10 @@ mod tests {
         .unwrap();
         let data = resp.response.data.unwrap();
         assert_eq!(data.status, 2);
-        assert_eq!(merge_result_detail(&data.result_detail), "腾讯云语音识别欢迎您。");
+        assert_eq!(
+            merge_result_detail(&data.result_detail),
+            "腾讯云语音识别欢迎您。"
+        );
         // 三次轮询全打到 mock
         assert_eq!(http.captured_actions.lock().unwrap().len(), 3);
     }
@@ -873,7 +906,11 @@ mod tests {
     async fn poll_deadline_returns_timeout() {
         // 一直返 waiting，deadline 过去就 Timeout
         let waiting = r#"{"Response":{"RequestId":"r","Data":{"TaskId":1,"Status":0,"StatusStr":"waiting","AudioDuration":0,"Result":"","ErrorMsg":"","ResultDetail":[]}}}"#;
-        let http = MockHttp::new(vec![Ok(waiting.into()), Ok(waiting.into()), Ok(waiting.into())]);
+        let http = MockHttp::new(vec![
+            Ok(waiting.into()),
+            Ok(waiting.into()),
+            Ok(waiting.into()),
+        ]);
         let already_past = Instant::now()
             .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);

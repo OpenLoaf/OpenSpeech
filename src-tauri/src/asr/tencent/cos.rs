@@ -134,7 +134,9 @@ impl CosClient {
         match status.as_u16() {
             401 => Err(CosError::Unauthenticated(format!("HTTP {status}: {body}"))),
             403 => Err(CosError::Forbidden(format!("HTTP {status}: {body}"))),
-            s if (400..500).contains(&s) => Err(CosError::Forbidden(format!("HTTP {status}: {body}"))),
+            s if (400..500).contains(&s) => {
+                Err(CosError::Forbidden(format!("HTTP {status}: {body}")))
+            }
             _ => Err(CosError::Unknown(format!("HTTP {status}: {body}"))),
         }
     }
@@ -421,17 +423,30 @@ mod tests {
     #[test]
     fn cos_signature_deterministic() {
         let mut headers: BTreeMap<&str, String> = BTreeMap::new();
-        headers.insert("host", "examplebucket-1250000000.cos.ap-beijing.myqcloud.com".into());
+        headers.insert(
+            "host",
+            "examplebucket-1250000000.cos.ap-beijing.myqcloud.com".into(),
+        );
         headers.insert("content-type", "audio/wav".into());
         headers.insert("content-length", "1024".into());
         let params: BTreeMap<&str, String> = BTreeMap::new();
 
         let key_time = "1700000000;1700003600";
         let sig1 = compute_signature_components(
-            "put", "/recordings/abc.wav", &headers, &params, key_time, "test_secret_key",
+            "put",
+            "/recordings/abc.wav",
+            &headers,
+            &params,
+            key_time,
+            "test_secret_key",
         );
         let sig2 = compute_signature_components(
-            "put", "/recordings/abc.wav", &headers, &params, key_time, "test_secret_key",
+            "put",
+            "/recordings/abc.wav",
+            &headers,
+            &params,
+            key_time,
+            "test_secret_key",
         );
         assert_eq!(sig1.signature, sig2.signature);
         // hex 40 字节
@@ -448,7 +463,10 @@ mod tests {
     #[test]
     fn build_authorization_has_all_six_q_fields() {
         let mut headers: BTreeMap<&str, String> = BTreeMap::new();
-        headers.insert("host", "examplebucket-1250000000.cos.ap-beijing.myqcloud.com".into());
+        headers.insert(
+            "host",
+            "examplebucket-1250000000.cos.ap-beijing.myqcloud.com".into(),
+        );
         let params: BTreeMap<&str, String> = BTreeMap::new();
         let auth = build_authorization(
             "get",
@@ -470,13 +488,8 @@ mod tests {
 
     #[test]
     fn presigned_get_url_format() {
-        let cli = CosClient::new(
-            "ap-shanghai",
-            "myaudio-1234567890",
-            "AKID_TEST",
-            "test_key",
-        )
-        .unwrap();
+        let cli =
+            CosClient::new("ap-shanghai", "myaudio-1234567890", "AKID_TEST", "test_key").unwrap();
         let url = cli.presigned_get_url("recordings/x.wav", 3600).unwrap();
         // 必须是 https 公网 host
         assert!(url.starts_with("https://myaudio-1234567890.cos.ap-shanghai.myqcloud.com/"));
@@ -494,7 +507,10 @@ mod tests {
             CosError::Unauthenticated("x".into()).code(),
             "tencent_cos_unauthenticated"
         );
-        assert_eq!(CosError::Forbidden("x".into()).code(), "tencent_cos_forbidden");
+        assert_eq!(
+            CosError::Forbidden("x".into()).code(),
+            "tencent_cos_forbidden"
+        );
         assert_eq!(CosError::Network("x".into()).code(), "tencent_cos_network");
         assert_eq!(CosError::Unknown("x".into()).code(), "tencent_cos_unknown");
     }

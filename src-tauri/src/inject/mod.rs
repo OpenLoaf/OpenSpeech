@@ -75,12 +75,7 @@ mod ime_bypass {
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
         fn CFRelease(cf: CFTypeRef);
-        fn CFStringGetCString(
-            s: CFStringRef,
-            buf: *mut c_char,
-            buflen: i64,
-            encoding: u32,
-        ) -> u8;
+        fn CFStringGetCString(s: CFStringRef, buf: *mut c_char, buflen: i64, encoding: u32) -> u8;
     }
 
     fn cfstring_to_string(s: CFStringRef) -> Option<String> {
@@ -134,41 +129,39 @@ mod ime_bypass {
         pub fn enter() -> Option<Self> {
             // 把 copy current → 判定 bypass → copy ascii → select ascii 整段在
             // 主线程里跑完，返回 (prev_ref as usize, prev_id, ascii_id)。
-            let result: Option<(usize, String, String)> =
-                crate::mac_main_thread::run_sync(|| {
-                    let prev = unsafe { TISCopyCurrentKeyboardInputSource() };
-                    if prev.is_null() {
-                        return None;
-                    }
-                    let Some(prev_id) = input_source_id(prev) else {
-                        unsafe { CFRelease(prev) };
-                        return None;
-                    };
-                    if !should_bypass(&prev_id) {
-                        unsafe { CFRelease(prev) };
-                        return None;
-                    }
-                    let ascii = unsafe { TISCopyCurrentASCIICapableKeyboardLayoutInputSource() };
-                    if ascii.is_null() {
-                        log::warn!(
-                            "[inject] ime bypass: TISCopyCurrentASCIICapableKeyboardLayoutInputSource returned null"
-                        );
-                        unsafe { CFRelease(prev) };
-                        return None;
-                    }
-                    let ascii_id =
-                        input_source_id(ascii).unwrap_or_else(|| "<unknown>".into());
-                    let status = unsafe { TISSelectInputSource(ascii) };
-                    unsafe { CFRelease(ascii) };
-                    if status != 0 {
-                        log::warn!(
-                            "[inject] ime bypass: TISSelectInputSource(ascii) status={status} prev={prev_id}"
-                        );
-                        unsafe { CFRelease(prev) };
-                        return None;
-                    }
-                    Some((prev as usize, prev_id, ascii_id))
-                });
+            let result: Option<(usize, String, String)> = crate::mac_main_thread::run_sync(|| {
+                let prev = unsafe { TISCopyCurrentKeyboardInputSource() };
+                if prev.is_null() {
+                    return None;
+                }
+                let Some(prev_id) = input_source_id(prev) else {
+                    unsafe { CFRelease(prev) };
+                    return None;
+                };
+                if !should_bypass(&prev_id) {
+                    unsafe { CFRelease(prev) };
+                    return None;
+                }
+                let ascii = unsafe { TISCopyCurrentASCIICapableKeyboardLayoutInputSource() };
+                if ascii.is_null() {
+                    log::warn!(
+                        "[inject] ime bypass: TISCopyCurrentASCIICapableKeyboardLayoutInputSource returned null"
+                    );
+                    unsafe { CFRelease(prev) };
+                    return None;
+                }
+                let ascii_id = input_source_id(ascii).unwrap_or_else(|| "<unknown>".into());
+                let status = unsafe { TISSelectInputSource(ascii) };
+                unsafe { CFRelease(ascii) };
+                if status != 0 {
+                    log::warn!(
+                        "[inject] ime bypass: TISSelectInputSource(ascii) status={status} prev={prev_id}"
+                    );
+                    unsafe { CFRelease(prev) };
+                    return None;
+                }
+                Some((prev as usize, prev_id, ascii_id))
+            });
 
             let (prev_addr, prev_id, ascii_id) = result?;
             // sleep 留在 caller 线程（worker），不阻塞主线程 / UI。
@@ -337,12 +330,14 @@ pub fn inject_paste() -> Result<(), String> {
         log::error!("[inject] paste modifier press failed: {e}");
         e.to_string()
     })?;
-    enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| {
-        log::error!("[inject] paste 'v' click failed: {e}");
-        // 修饰键已经按下，直接 return 会留下卡住的 Ctrl/Cmd——尽力释放再回报错。
-        let _ = enigo.key(modifier, Direction::Release);
-        e.to_string()
-    })?;
+    enigo
+        .key(Key::Unicode('v'), Direction::Click)
+        .map_err(|e| {
+            log::error!("[inject] paste 'v' click failed: {e}");
+            // 修饰键已经按下，直接 return 会留下卡住的 Ctrl/Cmd——尽力释放再回报错。
+            let _ = enigo.key(modifier, Direction::Release);
+            e.to_string()
+        })?;
     enigo.key(modifier, Direction::Release).map_err(|e| {
         log::error!("[inject] paste modifier release failed: {e}");
         e.to_string()

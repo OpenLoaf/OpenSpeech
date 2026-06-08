@@ -246,8 +246,7 @@ fn yield_to_previous_app<R: Runtime>(_window: &tauri::WebviewWindow<R>) {
     unsafe {
         let cls: *mut objc::runtime::Class =
             class!(NSRunningApplication) as *const _ as *mut objc::runtime::Class;
-        let app: *mut Object =
-            msg_send![cls, runningApplicationWithProcessIdentifier: pid];
+        let app: *mut Object = msg_send![cls, runningApplicationWithProcessIdentifier: pid];
         if app.is_null() {
             log::warn!("[quick-panel] yield: prev app pid={pid} no longer running");
             // fallback：deactivate 自己，AppKit 自己挑 next frontmost
@@ -310,7 +309,7 @@ fn record_prev_frontmost_app() {
 /// 之下（**不能**挂在 wry 的 NSWindow class 下），否则会撞 wry 内部 KVO 链。
 #[cfg(target_os = "macos")]
 fn promote_to_panel<R: Runtime>(window: &tauri::WebviewWindow<R>) {
-    use objc::runtime::{Class, Imp, Object, Sel, BOOL, NO, YES};
+    use objc::runtime::{BOOL, Class, Imp, NO, Object, Sel, YES};
     use objc::{class, msg_send, sel, sel_impl};
     use std::os::raw::c_char;
     use std::sync::OnceLock;
@@ -323,12 +322,7 @@ fn promote_to_panel<R: Runtime>(window: &tauri::WebviewWindow<R>) {
             extra: usize,
         ) -> *mut Class;
         fn objc_registerClassPair(cls: *mut Class);
-        fn class_addMethod(
-            cls: *mut Class,
-            name: Sel,
-            imp: Imp,
-            types: *const c_char,
-        ) -> BOOL;
+        fn class_addMethod(cls: *mut Class, name: Sel, imp: Imp, types: *const c_char) -> BOOL;
     }
 
     extern "C" fn can_become_key_window(_: &Object, _: Sel) -> BOOL {
@@ -399,10 +393,7 @@ fn promote_to_panel<R: Runtime>(window: &tauri::WebviewWindow<R>) {
 }
 
 #[tauri::command]
-pub fn quick_panel_show<R: Runtime>(
-    app: AppHandle<R>,
-    payload: ShowPayload,
-) -> Result<(), String> {
+pub fn quick_panel_show<R: Runtime>(app: AppHandle<R>, payload: ShowPayload) -> Result<(), String> {
     show(&app, &payload.mode).map_err(|e| e.to_string())
 }
 

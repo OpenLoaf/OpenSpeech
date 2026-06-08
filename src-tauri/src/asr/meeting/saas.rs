@@ -25,9 +25,8 @@ const LOG_TARGET: &str = "openspeech::asr::meeting::saas";
 
 /// 16k_zh_en_speaker 大模型自带中英 + 多方言识别 + 说话人分离。
 /// language 字段不传给上游——只用于前端 UI 校验。
-pub const SUPPORTED_LANGUAGES: &[&str] = &[
-    "zh", "en", "yue", "sc", "sx", "hn", "sh", "xn", "hb", "ah",
-];
+pub const SUPPORTED_LANGUAGES: &[&str] =
+    &["zh", "en", "yue", "sc", "sx", "hn", "sh", "xn", "hb", "ah"];
 
 pub struct SaasMeetingProvider {
     client: SaaSClient,
@@ -227,7 +226,12 @@ fn map_event(ev: RealtimeEvent) -> MeetingEvent {
             })
         }
         // Closed 是 SaaS 流的正常终止（finish 后服务端回 Closed）——映射为 EndOfStream。
-        RealtimeEvent::Closed { reason, total_seconds, total_credits, .. } => {
+        RealtimeEvent::Closed {
+            reason,
+            total_seconds,
+            total_credits,
+            ..
+        } => {
             log::info!(
                 target: LOG_TARGET,
                 "[closed] reason={reason} total_seconds={total_seconds:?} total_credits={total_credits:?}"
@@ -242,7 +246,11 @@ fn map_event(ev: RealtimeEvent) -> MeetingEvent {
             }
         }
         // Credits 帧不影响识别流程，按 Idle 吞掉（前端不展示 SaaS 余额变化）。
-        RealtimeEvent::Credits { consumed_seconds, remaining_credits, .. } => {
+        RealtimeEvent::Credits {
+            consumed_seconds,
+            remaining_credits,
+            ..
+        } => {
             log::debug!(
                 target: LOG_TARGET,
                 "[credits] consumed_seconds={consumed_seconds:?} remaining={remaining_credits:?}"
@@ -346,7 +354,10 @@ mod tests {
         let s = serde_json::to_string(&p).unwrap();
         // 防止以后 SDK 加 rename_all 改驼峰、或者把枚举别名改了，把腾讯那边
         // engine 名拼错——服务端默认会 fallback 到 16k_zh，没有诊断结果。
-        assert!(s.contains("\"engine_model_type\":\"16k_zh_en_speaker\""), "params={s}");
+        assert!(
+            s.contains("\"engine_model_type\":\"16k_zh_en_speaker\""),
+            "params={s}"
+        );
         assert!(s.contains("\"voice_format\":1"));
         assert!(s.contains("\"needvad\":1"));
     }

@@ -95,10 +95,7 @@ async fn test_tencent(
     secret_key: &str,
     cos_bucket: Option<&str>,
 ) -> DictationTestResult {
-    if app_id.trim().is_empty()
-        || secret_id.trim().is_empty()
-        || secret_key.trim().is_empty()
-    {
+    if app_id.trim().is_empty() || secret_id.trim().is_empty() || secret_key.trim().is_empty() {
         return DictationTestResult {
             ok: false,
             code: ERR_MISSING.into(),

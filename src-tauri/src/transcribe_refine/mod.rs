@@ -124,7 +124,10 @@ pub async fn transcribe_and_refine<R: Runtime>(
     log::info!(
         "[transcribe_and_refine] done raw_len={} refined={} clipboard_written={} credits_asr={} credits_refine={}",
         raw_text.chars().count(),
-        refined_text.as_ref().map(|s| s.chars().count()).unwrap_or(0),
+        refined_text
+            .as_ref()
+            .map(|s| s.chars().count())
+            .unwrap_or(0),
         clipboard_written,
         credits_asr,
         credits_refine,

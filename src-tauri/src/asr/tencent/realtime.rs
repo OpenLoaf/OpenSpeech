@@ -114,17 +114,17 @@ impl std::error::Error for ParseError {}
 #[allow(dead_code)] // backends/tencent.rs 目前自己 match code；该 helper 是官方错误码全量对照表
 pub fn classify_error_code(code: i32) -> &'static str {
     match code {
-        4002 => "unauthenticated",                // 鉴权失败（SecretId / 签名错）
-        4003 => "service_not_enabled",            // AppID 服务未开通
+        4002 => "unauthenticated",     // 鉴权失败（SecretId / 签名错）
+        4003 => "service_not_enabled", // AppID 服务未开通
         4004 | 4005 | 4007 => "insufficient_credits", // 资源耗尽 / 欠费 / 资源包不足
-        4006 => "rate_limited",                   // 并发超限
-        4000 => "rate_limited",                   // 发送过快（语义上是节流）
-        4001 => "invalid_params",                 // 参数不合法
-        4008 => "idle_timeout",                   // 客户端 15s 未发数据
-        4009 => "client_disconnected",            // 客户端主动断
-        4010 => "invalid_message",                // 未知文本消息
-        5000 | 5001 | 5002 => "transient",        // 偶发服务端错，建议重试
-        6001 => "region_blocked",                 // 境外/境内调用错
+        4006 => "rate_limited",        // 并发超限
+        4000 => "rate_limited",        // 发送过快（语义上是节流）
+        4001 => "invalid_params",      // 参数不合法
+        4008 => "idle_timeout",        // 客户端 15s 未发数据
+        4009 => "client_disconnected", // 客户端主动断
+        4010 => "invalid_message",     // 未知文本消息
+        5000 | 5001 | 5002 => "transient", // 偶发服务端错，建议重试
+        6001 => "region_blocked",      // 境外/境内调用错
         _ => "unknown",
     }
 }
@@ -215,13 +215,19 @@ mod tests {
         let raw = r#"{"code":0}"#;
         let ev = parse_frame(raw).unwrap();
         // 没 result + 没 final → 当作 Ready（voice_id 为空）
-        assert_eq!(ev, TencentEvent::Ready { voice_id: "".into() });
+        assert_eq!(
+            ev,
+            TencentEvent::Ready {
+                voice_id: "".into()
+            }
+        );
     }
 
     #[test]
     fn parse_unknown_slice_type_is_error() {
         // 防御性：未来腾讯加新 slice_type 时不要静默丢
-        let raw = r#"{"code":0,"voice_id":"v","result":{"slice_type":9,"index":0,"voice_text_str":""}}"#;
+        let raw =
+            r#"{"code":0,"voice_id":"v","result":{"slice_type":9,"index":0,"voice_text_str":""}}"#;
         let r = parse_frame(raw);
         assert!(matches!(r, Err(ParseError::UnknownSliceType(9))));
     }
@@ -235,11 +241,14 @@ mod tests {
     #[test]
     fn classify_error_code_covers_all_documented() {
         // 文档"错误码"表里的每一个码都必须有映射，不能落到 "unknown"
-        let codes = [4000, 4001, 4002, 4003, 4004, 4005, 4006, 4007, 4008, 4009, 4010,
-                     5000, 5001, 5002, 6001];
+        let codes = [
+            4000, 4001, 4002, 4003, 4004, 4005, 4006, 4007, 4008, 4009, 4010, 5000, 5001, 5002,
+            6001,
+        ];
         for c in codes {
             assert_ne!(
-                classify_error_code(c), "unknown",
+                classify_error_code(c),
+                "unknown",
                 "documented error code {c} must be classified"
             );
         }

@@ -56,10 +56,10 @@ use logging::{
 use macos_native::{activate_macos_app, disable_app_nap, disable_macos_fullscreen};
 // show_main_window / toggle_main_window 经此 re-export 保持 crate::show_main_window
 // 与 crate::toggle_main_window 路径不变（openloaf/callback、hotkey 跨模块引用）。
-pub(crate) use window::{show_main_window, toggle_main_window};
+use tray::build_tray_menu;
 #[cfg(target_os = "macos")]
 use window::apply_dock_icon_policy;
-use tray::build_tray_menu;
+pub(crate) use window::{show_main_window, toggle_main_window};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -67,6 +67,11 @@ pub fn run() {
     archive_log_on_version_change();
 
     let builder = tauri::Builder::default()
+        // 单实例守卫：必须第一个注册才能在窗口创建前拦截。第二个实例启动会被掐掉，
+        // 其入参通过此回调转发给已运行实例，这里把主窗拉到前台让用户感知到。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -100,8 +105,14 @@ pub fn run() {
                 // symphonia probe 每次 decode WAV 都会刷 "found a possible format marker" /
                 // "found the format marker"，跟启动音 / 提示音播放频率成正比。Info 关掉。
                 .level_for("symphonia_core", tauri_plugin_log::log::LevelFilter::Info)
-                .level_for("symphonia_bundle_mp3", tauri_plugin_log::log::LevelFilter::Info)
-                .level_for("symphonia_format_wav", tauri_plugin_log::log::LevelFilter::Info)
+                .level_for(
+                    "symphonia_bundle_mp3",
+                    tauri_plugin_log::log::LevelFilter::Info,
+                )
+                .level_for(
+                    "symphonia_format_wav",
+                    tauri_plugin_log::log::LevelFilter::Info,
+                )
                 // tao 的 NewEvents/RedrawEventsCleared/MainEventsCleared 在 Windows 下偶发刷屏。
                 .level_for("tao", tauri_plugin_log::log::LevelFilter::Info)
                 .target(tauri_plugin_log::Target::new(
@@ -488,6 +499,7 @@ pub fn run() {
             meetings::meeting_transcript_write,
             meetings::meeting_transcript_load,
             meetings::meeting_transcript_delete,
+            meetings::meeting_translation_append,
             meetings::meeting_export_markdown,
             meetings::meeting_summary_write,
             meetings::meeting_summary_load,

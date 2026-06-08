@@ -181,7 +181,9 @@ impl TencentRealtimeSession {
 
     /// 通知服务端音频已发完（`{"type":"end"}`）。后续会拿到 final 段 + EndOfStream。
     pub fn finish(&self) -> Result<(), &'static str> {
-        self.outbox.send(Outbound::End).map_err(|_| "session closed")
+        self.outbox
+            .send(Outbound::End)
+            .map_err(|_| "session closed")
     }
 
     /// 等服务端的下一个事件，最多等 `dur`。
@@ -274,10 +276,8 @@ fn run_worker(
                 log::debug!(target: WS_LOG_TARGET, "[ws-in] tencent text: {s}");
                 match realtime::parse_frame(&s) {
                     Ok(ev) => {
-                        let terminal = matches!(
-                            ev,
-                            TencentEvent::Error { .. } | TencentEvent::EndOfStream
-                        );
+                        let terminal =
+                            matches!(ev, TencentEvent::Error { .. } | TencentEvent::EndOfStream);
                         if inbox_tx.send(SessionEvent::Frame(ev)).is_err() {
                             return;
                         }
@@ -372,7 +372,8 @@ mod tests {
     fn end_message_roundtrips_with_server_final() {
         let outbound = Message::Text("{\"type\":\"end\"}".into());
         // 客户端"end"是单向的——服务端不回它，但回 final=1。
-        let server_reply = r#"{"code":0,"message":"success","voice_id":"v","message_id":"v_n","final":1}"#;
+        let server_reply =
+            r#"{"code":0,"message":"success","voice_id":"v","message_id":"v_n","final":1}"#;
         let ev = realtime::parse_frame(server_reply).expect("parse");
         assert_eq!(ev, TencentEvent::EndOfStream);
         // 防止 outbound 被优化掉（保留 Message 类型导入意义）

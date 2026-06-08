@@ -9,9 +9,7 @@
 
 use std::time::Duration;
 
-use crate::asr::aliyun::realtime_session::{
-    AliyunEvent, AliyunRealtimeSession, SessionEvent,
-};
+use crate::asr::aliyun::realtime_session::{AliyunEvent, AliyunRealtimeSession, SessionEvent};
 use crate::asr::realtime_backend::{RealtimeAsrBackend, RealtimeBackendEvent};
 
 pub struct AliyunRealtimeBackend {
@@ -50,7 +48,10 @@ fn map_aliyun_frame(ev: AliyunEvent) -> RealtimeBackendEvent {
             sentence_id: hash_item_id(&item_id),
             text,
         },
-        AliyunEvent::Final { item_id, transcript } => RealtimeBackendEvent::Final {
+        AliyunEvent::Final {
+            item_id,
+            transcript,
+        } => RealtimeBackendEvent::Final {
             sentence_id: hash_item_id(&item_id),
             text: transcript,
         },

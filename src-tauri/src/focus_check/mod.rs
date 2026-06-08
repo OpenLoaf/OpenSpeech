@@ -74,9 +74,8 @@ mod imp {
 
     fn cfstr(s: &str) -> Option<CFStringRef> {
         let c = CString::new(s).ok()?;
-        let r = unsafe {
-            CFStringCreateWithCString(ptr::null(), c.as_ptr(), KCF_STRING_ENCODING_UTF8)
-        };
+        let r =
+            unsafe { CFStringCreateWithCString(ptr::null(), c.as_ptr(), KCF_STRING_ENCODING_UTF8) };
         if r.is_null() { None } else { Some(r) }
     }
 

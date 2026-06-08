@@ -47,10 +47,9 @@ fn map_saas_event(ev: RealtimeEvent) -> RealtimeBackendEvent {
         RealtimeEvent::Ready { session_id, .. } => RealtimeBackendEvent::Ready {
             session_id: Some(session_id),
         },
-        RealtimeEvent::Partial { sentence_id, text, .. } => RealtimeBackendEvent::Partial {
-            sentence_id,
-            text,
-        },
+        RealtimeEvent::Partial {
+            sentence_id, text, ..
+        } => RealtimeBackendEvent::Partial { sentence_id, text },
         RealtimeEvent::Final {
             sentence_id, text, ..
         } => RealtimeBackendEvent::Final { sentence_id, text },
@@ -68,4 +67,3 @@ fn map_saas_event(ev: RealtimeEvent) -> RealtimeBackendEvent {
         RealtimeEvent::Error { code, message } => RealtimeBackendEvent::Error { code, message },
     }
 }
-

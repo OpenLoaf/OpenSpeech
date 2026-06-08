@@ -48,7 +48,10 @@ impl std::fmt::Display for OssUploadError {
         match self {
             OssUploadError::Unauthenticated(m) => write!(f, "aliyun_unauthenticated: {m}"),
             OssUploadError::PolicyExpired => write!(f, "aliyun_policy_expired"),
-            OssUploadError::FileTooLarge { actual_bytes, max_bytes } => {
+            OssUploadError::FileTooLarge {
+                actual_bytes,
+                max_bytes,
+            } => {
                 write!(f, "aliyun_file_too_large: {actual_bytes} > {max_bytes}")
             }
             OssUploadError::Network(m) => write!(f, "aliyun_network_error: {m}"),
@@ -112,7 +115,11 @@ impl UploadPolicy {
 
     /// 单文件 byte 上限（policy 没给的话兜 100MB）。
     pub fn max_bytes(&self) -> u64 {
-        let mb = if self.max_file_size_mb == 0 { 100 } else { self.max_file_size_mb };
+        let mb = if self.max_file_size_mb == 0 {
+            100
+        } else {
+            self.max_file_size_mb
+        };
         mb.saturating_mul(1024 * 1024)
     }
 }
@@ -132,11 +139,7 @@ pub fn build_ordered_multipart(
     file_name: &str,
     bytes: Vec<u8>,
 ) -> OrderedMultipart {
-    let key = format!(
-        "{}/{}",
-        policy.upload_dir.trim_end_matches('/'),
-        file_name
-    );
+    let key = format!("{}/{}", policy.upload_dir.trim_end_matches('/'), file_name);
     let fields = vec![
         ("OSSAccessKeyId".into(), policy.oss_access_key_id.clone()),
         ("Signature".into(), policy.signature.clone()),
@@ -314,7 +317,10 @@ mod tests {
         assert_eq!(env.data.policy, "POLICY_B64");
         assert_eq!(env.data.signature, "SIG_B64");
         assert_eq!(env.data.upload_dir, "tmp/abc");
-        assert_eq!(env.data.upload_host, "https://dashscope-instant.oss-cn-beijing.aliyuncs.com");
+        assert_eq!(
+            env.data.upload_host,
+            "https://dashscope-instant.oss-cn-beijing.aliyuncs.com"
+        );
         assert_eq!(env.data.oss_access_key_id, "OSS_AK");
         assert_eq!(env.data.x_oss_object_acl, "private");
         assert_eq!(env.data.x_oss_forbid_overwrite, "true");
@@ -324,14 +330,18 @@ mod tests {
     #[test]
     fn bucket_inferred_from_upload_host() {
         let env: UploadPolicyEnvelope = serde_json::from_str(sample_policy_json()).unwrap();
-        assert_eq!(env.data.bucket_from_upload_host().as_deref(), Some("dashscope-instant"));
+        assert_eq!(
+            env.data.bucket_from_upload_host().as_deref(),
+            Some("dashscope-instant")
+        );
     }
 
     #[test]
     fn max_bytes_falls_back_to_100mb_when_missing() {
-        let mut p: UploadPolicy = serde_json::from_str::<UploadPolicyEnvelope>(sample_policy_json())
-            .unwrap()
-            .data;
+        let mut p: UploadPolicy =
+            serde_json::from_str::<UploadPolicyEnvelope>(sample_policy_json())
+                .unwrap()
+                .data;
         p.max_file_size_mb = 0;
         assert_eq!(p.max_bytes(), 100 * 1024 * 1024);
     }
@@ -394,10 +404,7 @@ mod tests {
         // 不再走 upload_host。byok_e2e.rs 有真实数据回归。
         let url =
             oss_url_for(&env.data, "dashscope-instant/uid/2026-05-04/uuid/audio.wav").unwrap();
-        assert_eq!(
-            url,
-            "oss://dashscope-instant/uid/2026-05-04/uuid/audio.wav"
-        );
+        assert_eq!(url, "oss://dashscope-instant/uid/2026-05-04/uuid/audio.wav");
     }
 
     #[test]
@@ -409,9 +416,10 @@ mod tests {
 
     #[test]
     fn upload_dir_with_trailing_slash_does_not_double_up() {
-        let mut p: UploadPolicy = serde_json::from_str::<UploadPolicyEnvelope>(sample_policy_json())
-            .unwrap()
-            .data;
+        let mut p: UploadPolicy =
+            serde_json::from_str::<UploadPolicyEnvelope>(sample_policy_json())
+                .unwrap()
+                .data;
         p.upload_dir = "tmp/abc/".into();
         let m = build_ordered_multipart(&p, "x.wav", vec![]);
         assert_eq!(m.key, "tmp/abc/x.wav");
@@ -419,14 +427,33 @@ mod tests {
 
     #[test]
     fn error_codes_are_stable_for_humanize() {
-        assert_eq!(OssUploadError::Unauthenticated("x".into()).code(), "aliyun_unauthenticated");
-        assert_eq!(OssUploadError::PolicyExpired.code(), "aliyun_policy_expired");
         assert_eq!(
-            OssUploadError::FileTooLarge { actual_bytes: 1, max_bytes: 0 }.code(),
+            OssUploadError::Unauthenticated("x".into()).code(),
+            "aliyun_unauthenticated"
+        );
+        assert_eq!(
+            OssUploadError::PolicyExpired.code(),
+            "aliyun_policy_expired"
+        );
+        assert_eq!(
+            OssUploadError::FileTooLarge {
+                actual_bytes: 1,
+                max_bytes: 0
+            }
+            .code(),
             "aliyun_file_too_large"
         );
-        assert_eq!(OssUploadError::Network("x".into()).code(), "aliyun_network_error");
-        assert_eq!(OssUploadError::Upload("x".into()).code(), "aliyun_upload_failed");
-        assert_eq!(OssUploadError::Decode("x".into()).code(), "aliyun_upload_failed");
+        assert_eq!(
+            OssUploadError::Network("x".into()).code(),
+            "aliyun_network_error"
+        );
+        assert_eq!(
+            OssUploadError::Upload("x".into()).code(),
+            "aliyun_upload_failed"
+        );
+        assert_eq!(
+            OssUploadError::Decode("x".into()).code(),
+            "aliyun_upload_failed"
+        );
     }
 }

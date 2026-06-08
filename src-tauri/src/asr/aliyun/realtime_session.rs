@@ -125,21 +125,19 @@ impl AliyunRealtimeSession {
         let headers = request.headers_mut();
         headers.insert(
             "Authorization",
-            format!("Bearer {}", params.api_key)
-                .parse()
-                .map_err(|e: tungstenite::http::header::InvalidHeaderValue| {
-                    ConnectError::Url(e.to_string())
-                })?,
+            format!("Bearer {}", params.api_key).parse().map_err(
+                |e: tungstenite::http::header::InvalidHeaderValue| ConnectError::Url(e.to_string()),
+            )?,
         );
         // OpenAI Realtime 协议惯例：DashScope 实测忽略这个 header 也能连，
         // 加上一来兜住未来变更，二来与 OpenAI Realtime 风格保持一致。
         headers.insert(
             "OpenAI-Beta",
-            "realtime=v1".parse().map_err(
-                |e: tungstenite::http::header::InvalidHeaderValue| {
+            "realtime=v1"
+                .parse()
+                .map_err(|e: tungstenite::http::header::InvalidHeaderValue| {
                     ConnectError::Url(e.to_string())
-                },
-            )?,
+                })?,
         );
         // 部分 tungstenite 版本要求显式 Sec-WebSocket-Key —— into_client_request 已生成，
         // 但保险起见若缺失再补一遍。
@@ -185,11 +183,8 @@ impl AliyunRealtimeSession {
         let (inbox_tx, inbox_rx) = mpsc::channel::<SessionEvent>();
 
         // 第一帧 session.update：协议要求先发 session.update 再发 audio。
-        let session_update = build_session_update(
-            params.language,
-            params.sample_rate,
-            params.use_server_vad,
-        );
+        let session_update =
+            build_session_update(params.language, params.sample_rate, params.use_server_vad);
         outbox_tx
             .send(Outbound::AppendText(session_update))
             .map_err(|_| ConnectError::Network("internal channel closed".into()))?;
@@ -218,7 +213,9 @@ impl AliyunRealtimeSession {
     }
 
     pub fn finish(&self) -> Result<(), &'static str> {
-        self.outbox.send(Outbound::Finish).map_err(|_| "session closed")
+        self.outbox
+            .send(Outbound::Finish)
+            .map_err(|_| "session closed")
     }
 
     pub fn next_event_timeout(&self, dur: Duration) -> Option<SessionEvent> {
@@ -339,10 +336,8 @@ fn run_worker(
                 log::debug!(target: WS_LOG_TARGET, "[ws-in] aliyun text: {s}");
                 match parse_frame(&s) {
                     Ok(Some(ev)) => {
-                        let terminal = matches!(
-                            ev,
-                            AliyunEvent::EndOfStream | AliyunEvent::Error { .. }
-                        );
+                        let terminal =
+                            matches!(ev, AliyunEvent::EndOfStream | AliyunEvent::Error { .. });
                         if inbox_tx.send(SessionEvent::Frame(ev)).is_err() {
                             return;
                         }
@@ -470,10 +465,7 @@ pub fn parse_frame(raw: &str) -> Result<Option<AliyunEvent>, ParseError> {
                     e.code.or(e.ty).unwrap_or_default(),
                     e.message.unwrap_or_default(),
                 ),
-                None => (
-                    f.code.unwrap_or_default(),
-                    f.message.unwrap_or_default(),
-                ),
+                None => (f.code.unwrap_or_default(), f.message.unwrap_or_default()),
             };
             Ok(Some(AliyunEvent::Error { code, message }))
         }
@@ -606,7 +598,10 @@ mod tests {
         let s = build_session_update("auto", 16000, false);
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert!(v["session"]["turn_detection"].is_null());
-        assert_eq!(v["session"]["input_audio_transcription"]["language"], "auto");
+        assert_eq!(
+            v["session"]["input_audio_transcription"]["language"],
+            "auto"
+        );
     }
 
     #[test]
@@ -629,6 +624,9 @@ mod tests {
     fn unknown_language_falls_back_to_auto() {
         let s = build_session_update("xx", 16000, true);
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(v["session"]["input_audio_transcription"]["language"], "auto");
+        assert_eq!(
+            v["session"]["input_audio_transcription"]["language"],
+            "auto"
+        );
     }
 }

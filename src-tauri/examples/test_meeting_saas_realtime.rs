@@ -71,12 +71,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ provider id = {}", provider.id());
     println!("    capabilities = {:#?}", provider.capabilities());
 
-    let audio_path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+    let audio_path =
+        std::env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .join(".claude/skills/openspeech-prompt-eval/cases/005-history-view-detail/audio.ogg")
-    });
+            });
     println!("📂 audio: {}", audio_path.display());
     let pcm = decode_ogg_to_pcm16_mono_16k(&audio_path)?;
     println!(
@@ -205,7 +209,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         final_count
     );
     if partial_count == 0 && final_count == 0 {
-        eprintln!("❌ ZERO transcripts — SaaS 转发链路上的问题，对比 test_meeting_speaker_realtime（自带腾讯）应该有结果。");
+        eprintln!(
+            "❌ ZERO transcripts — SaaS 转发链路上的问题，对比 test_meeting_speaker_realtime（自带腾讯）应该有结果。"
+        );
         std::process::exit(2);
     }
     Ok(())

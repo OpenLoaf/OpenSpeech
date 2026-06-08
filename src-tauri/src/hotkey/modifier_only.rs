@@ -28,8 +28,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::hotkey::{
-    binding_to_mod_sides, BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload, ModSide,
-    Side,
+    BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload, ModSide, Side, binding_to_mod_sides,
 };
 
 /// 录入模式下，HotkeyField 订阅此事件拿到 press/release，代替 WebView DOM keydown
@@ -572,8 +571,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                             .bindings
                             .iter()
                             .filter(|b| {
-                                virtual_matching.contains(&b.id)
-                                    && !s.active_ids.contains(&b.id)
+                                virtual_matching.contains(&b.id) && !s.active_ids.contains(&b.id)
                             })
                             .map(|b| (b.id, b.id_str.clone()))
                             .collect();
@@ -691,10 +689,7 @@ pub fn current_pressed(state: &SharedModifierOnlyState) -> HashSet<ModSide> {
     if let Some(real) = query_real_modifier_state() {
         return real;
     }
-    state
-        .lock()
-        .map(|s| s.pressed.clone())
-        .unwrap_or_default()
+    state.lock().map(|s| s.pressed.clone()).unwrap_or_default()
 }
 
 /// 从 apply_bindings 调用：用当前快照替换已注册的 modifier-only bindings。

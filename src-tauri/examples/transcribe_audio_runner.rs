@@ -81,11 +81,7 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
-fn drive_session(
-    sess: RealtimeAsrSession,
-    pcm: Vec<u8>,
-    chunk_ms: u64,
-) -> Result<String, String> {
+fn drive_session(sess: RealtimeAsrSession, pcm: Vec<u8>, chunk_ms: u64) -> Result<String, String> {
     let chunk_size = (SAMPLE_RATE * BYTES_PER_SAMPLE * chunk_ms as usize) / 1000;
     let chunk_size = chunk_size.max(BYTES_PER_SAMPLE * 2);
 
@@ -107,7 +103,10 @@ fn drive_session(
             if let Err(e) = sess.finish() {
                 return Err(format!("finish: {e}"));
             }
-            eprintln!("[transcribe] all PCM sent ({} bytes), finish() called", pcm.len());
+            eprintln!(
+                "[transcribe] all PCM sent ({} bytes), finish() called",
+                pcm.len()
+            );
             finish_sent = true;
         }
 
@@ -122,10 +121,15 @@ fn drive_session(
             Ok(Some(RealtimeEvent::Final {
                 sentence_id, text, ..
             })) => {
-                eprintln!("[transcribe] final[{sentence_id}]: {}", text.replace('\n', "⏎"));
+                eprintln!(
+                    "[transcribe] final[{sentence_id}]: {}",
+                    text.replace('\n', "⏎")
+                );
                 finals.entry(sentence_id).or_insert(text);
             }
-            Ok(Some(RealtimeEvent::Credits { remaining_credits, .. })) => {
+            Ok(Some(RealtimeEvent::Credits {
+                remaining_credits, ..
+            })) => {
                 eprintln!("[transcribe] credits remaining={:?}", remaining_credits);
             }
             Ok(Some(RealtimeEvent::Closed { reason, .. })) => {

@@ -204,13 +204,19 @@ mod tests {
 
     #[test]
     fn auto_strips_english_period() {
-        assert_eq!(strip("hello world.", "hello world", StripMode::Auto), "hello world");
+        assert_eq!(
+            strip("hello world.", "hello world", StripMode::Auto),
+            "hello world"
+        );
     }
 
     #[test]
     fn auto_keeps_when_user_ended_with_period() {
         // 用户自己说了"句号" / 自己打了句号 → 保留
-        assert_eq!(strip("我说完了。", "我说完了。", StripMode::Auto), "我说完了。");
+        assert_eq!(
+            strip("我说完了。", "我说完了。", StripMode::Auto),
+            "我说完了。"
+        );
     }
 
     #[test]
@@ -222,9 +228,15 @@ mod tests {
     #[test]
     fn auto_strips_inside_closing_quote() {
         // 末尾 `。"` → 砍句号留引号
-        assert_eq!(strip("他说\"你好。\"", "他说你好", StripMode::Auto), "他说\"你好\"");
+        assert_eq!(
+            strip("他说\"你好。\"", "他说你好", StripMode::Auto),
+            "他说\"你好\""
+        );
         // 中文引号
-        assert_eq!(strip("他说「你好。」", "他说你好", StripMode::Auto), "他说「你好」");
+        assert_eq!(
+            strip("他说「你好。」", "他说你好", StripMode::Auto),
+            "他说「你好」"
+        );
     }
 
     #[test]
@@ -236,7 +248,10 @@ mod tests {
 
     #[test]
     fn always_overrides_user_period() {
-        assert_eq!(strip("我说完了。", "我说完了。", StripMode::Always), "我说完了");
+        assert_eq!(
+            strip("我说完了。", "我说完了。", StripMode::Always),
+            "我说完了"
+        );
     }
 
     #[test]
@@ -254,7 +269,10 @@ mod tests {
     #[test]
     fn full_keeps_period_inside_sentence() {
         // 句中句号不能动
-        assert_eq!(strip("我去了上海。然后又去了北京", "...", StripMode::Auto), "我去了上海。然后又去了北京");
+        assert_eq!(
+            strip("我去了上海。然后又去了北京", "...", StripMode::Auto),
+            "我去了上海。然后又去了北京"
+        );
     }
 
     #[test]

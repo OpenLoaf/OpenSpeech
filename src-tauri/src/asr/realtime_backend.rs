@@ -22,19 +22,11 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub enum RealtimeBackendEvent {
     /// 握手已完成、服务端开始 ingest 音频。可选 `session_id` 用于关联 refine。
-    Ready {
-        session_id: Option<String>,
-    },
+    Ready { session_id: Option<String> },
     /// 非稳态 partial。`sentence_id` 用于 BTreeMap 累积排序。
-    Partial {
-        sentence_id: i64,
-        text: String,
-    },
+    Partial { sentence_id: i64, text: String },
     /// 稳态 final。
-    Final {
-        sentence_id: i64,
-        text: String,
-    },
+    Final { sentence_id: i64, text: String },
     /// 服务端表示音频流全部识别完成（腾讯 final=1 / SaaS Closed{normal}）。
     EndOfStream,
     /// 服务端关闭会话（错误或正常都可能）：reason 用于日志，total_credits 仅 SaaS 有值。
@@ -43,14 +35,9 @@ pub enum RealtimeBackendEvent {
         total_credits: Option<f64>,
     },
     /// 计费事件（SaaS 心跳）；BYOK 路径不发。
-    Credits {
-        remaining_credits: Option<f64>,
-    },
+    Credits { remaining_credits: Option<f64> },
     /// 协议层错误（vendor code != 0）。`code` 是稳定字符串，前端按串路由。
-    Error {
-        code: String,
-        message: String,
-    },
+    Error { code: String, message: String },
     /// 单条解码失败：上层只记日志、用预算控制连续坏帧。
     DecodeRecoverable(String),
     /// 网络层退出：worker 已死，主循环必须切 dead 路径。

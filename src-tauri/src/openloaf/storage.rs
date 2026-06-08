@@ -121,8 +121,7 @@ mod file {
         }
 
         fn path() -> Result<PathBuf, String> {
-            let home =
-                std::env::var_os("HOME").ok_or_else(|| "$HOME not set".to_string())?;
+            let home = std::env::var_os("HOME").ok_or_else(|| "$HOME not set".to_string())?;
             let mut p = PathBuf::from(home);
             p.push(".openspeech");
             p.push("dev-auth.json");
@@ -162,9 +161,8 @@ mod file {
             }
             let json = serde_json::to_string(value)
                 .map_err(|e| SaaSError::Input(format!("serialize stored auth: {e}")))?;
-            std::fs::write(&path, json).map_err(|e| {
-                SaaSError::Input(format!("dev auth write {}: {e}", path.display()))
-            })?;
+            std::fs::write(&path, json)
+                .map_err(|e| SaaSError::Input(format!("dev auth write {}: {e}", path.display())))?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -186,4 +184,3 @@ mod file {
         }
     }
 }
-

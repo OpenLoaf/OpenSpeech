@@ -7,7 +7,7 @@
 // plugin-updater 走 app.restart() 直接 spawn 二进制，不经 LaunchServices/`open`，
 // 新进程默认不是 active app，窗口虽然 visible 但落在其他 app 后面，用户感知"最小化"。
 pub(crate) fn activate_macos_app(window: &tauri::WebviewWindow) {
-    use objc::runtime::{Object, BOOL, YES};
+    use objc::runtime::{BOOL, Object, YES};
     use objc::{class, msg_send, sel, sel_impl};
 
     unsafe {
@@ -89,5 +89,7 @@ pub(crate) fn disable_app_nap() {
         // retain 让 token 活到进程结束 = activity 永久有效。不存 rust 侧、也不 end。
         let _: *mut Object = msg_send![token, retain];
     }
-    log::warn!("[app-nap] disabled via NSProcessInfo activity (UserInitiatedAllowingIdleSystemSleep)");
+    log::warn!(
+        "[app-nap] disabled via NSProcessInfo activity (UserInitiatedAllowingIdleSystemSleep)"
+    );
 }

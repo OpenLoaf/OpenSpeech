@@ -30,7 +30,10 @@ mod tests {
 
     #[test]
     fn collapses_double_comma() {
-        assert_eq!(normalize_asr_punctuation("我希望，，我现在"), "我希望，我现在");
+        assert_eq!(
+            normalize_asr_punctuation("我希望，，我现在"),
+            "我希望，我现在"
+        );
         assert_eq!(normalize_asr_punctuation("形式，，可以"), "形式，可以");
     }
 
@@ -72,7 +75,10 @@ mod tests {
     fn noop_on_clean_text() {
         assert_eq!(normalize_asr_punctuation("你好，世界。"), "你好，世界。");
         assert_eq!(normalize_asr_punctuation(""), "");
-        assert_eq!(normalize_asr_punctuation("没有标点的句子"), "没有标点的句子");
+        assert_eq!(
+            normalize_asr_punctuation("没有标点的句子"),
+            "没有标点的句子"
+        );
     }
 
     #[test]

@@ -31,11 +31,7 @@ pub fn build_canonical_query(params: &BTreeMap<&str, String>) -> String {
 
 /// 拼实时 WS 签名原文：`<host><path>?<canonical_query>`，**不含** `wss://`。
 /// 例：`asr.cloud.tencent.com/asr/v2/12345?engine_model_type=16k_zh&...`
-pub fn build_realtime_signing_string(
-    host: &str,
-    path: &str,
-    canonical_query: &str,
-) -> String {
+pub fn build_realtime_signing_string(host: &str, path: &str, canonical_query: &str) -> String {
     format!("{host}{path}?{canonical_query}")
 }
 
@@ -127,8 +123,8 @@ pub fn build_string_to_sign(
 }
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(key)
-        .expect("HMAC-SHA256 接受任意长度密钥，不会 panic");
+    let mut mac =
+        HmacSha256::new_from_slice(key).expect("HMAC-SHA256 接受任意长度密钥，不会 panic");
     mac.update(data);
     mac.finalize().into_bytes().into()
 }
@@ -247,7 +243,8 @@ mod tests {
             assert!(chunk.len() >= 2, "%-escape 至少 2 位 hex");
             let hex = &chunk[..2];
             assert!(
-                hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()),
+                hex.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()),
                 "URL encode 必须用大写 hex: 看到 {hex}"
             );
         }
@@ -323,9 +320,8 @@ mod tests {
         // StringToSign 的固定形态。
         let s = build_string_to_sign(1551113065, "2019-02-25", "cvm", "abc");
         let expected_hash = sha256_hex(b"abc");
-        let expected = format!(
-            "TC3-HMAC-SHA256\n1551113065\n2019-02-25/cvm/tc3_request\n{expected_hash}"
-        );
+        let expected =
+            format!("TC3-HMAC-SHA256\n1551113065\n2019-02-25/cvm/tc3_request\n{expected_hash}");
         assert_eq!(s, expected);
     }
 
@@ -333,8 +329,14 @@ mod tests {
     fn derive_and_sign_v3_is_deterministic() {
         // 自洽：固定 SecretKey + Date + Service + StringToSign → 固定 Signature。
         let key = derive_signing_key("Gu5t9xGARNpq86cd98joQYCN3Cozk1qA", "2019-02-25", "cvm");
-        let sig1 = sign_v3(&key, "TC3-HMAC-SHA256\n1551113065\n2019-02-25/cvm/tc3_request\nabc");
-        let sig2 = sign_v3(&key, "TC3-HMAC-SHA256\n1551113065\n2019-02-25/cvm/tc3_request\nabc");
+        let sig1 = sign_v3(
+            &key,
+            "TC3-HMAC-SHA256\n1551113065\n2019-02-25/cvm/tc3_request\nabc",
+        );
+        let sig2 = sign_v3(
+            &key,
+            "TC3-HMAC-SHA256\n1551113065\n2019-02-25/cvm/tc3_request\nabc",
+        );
         assert_eq!(sig1, sig2);
         // hex 64 字节
         assert_eq!(sig1.len(), 64);

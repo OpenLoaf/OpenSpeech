@@ -8,7 +8,11 @@ use super::provider::{MeetingEvent, MeetingSegment};
 use super::tencent_speaker::{SUPPORTED_LANGUAGES, parse_frame};
 
 fn one(events: Vec<MeetingEvent>) -> MeetingEvent {
-    assert_eq!(events.len(), 1, "expected exactly one event, got {events:?}");
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly one event, got {events:?}"
+    );
     events.into_iter().next().unwrap()
 }
 
@@ -79,15 +83,18 @@ fn parse_multi_sentences_in_one_frame() {
     ]}}"#;
     let events = parse_frame(raw).expect("parse");
     assert_eq!(events.len(), 2);
-    assert!(matches!(events[0], MeetingEvent::SegmentFinal(ref s) if s.sentence_id == 1 && s.text == "第一句"));
-    assert!(matches!(events[1], MeetingEvent::SegmentPartial(ref s) if s.sentence_id == 2 && s.text == "第二句"));
+    assert!(
+        matches!(events[0], MeetingEvent::SegmentFinal(ref s) if s.sentence_id == 1 && s.text == "第一句")
+    );
+    assert!(
+        matches!(events[1], MeetingEvent::SegmentPartial(ref s) if s.sentence_id == 2 && s.text == "第二句")
+    );
 }
 
 /// final=1 → EndOfStream（与音频流是否还在 buffer 无关）。
 #[test]
 fn parse_final_flag_emits_end_of_stream() {
-    let raw =
-        r#"{"code":0,"message":"success","voice_id":"vid","message_id":"vid_241","final":1}"#;
+    let raw = r#"{"code":0,"message":"success","voice_id":"vid","message_id":"vid_241","final":1}"#;
     let ev = one(parse_frame(raw).expect("parse"));
     assert_eq!(ev, MeetingEvent::EndOfStream);
 }
@@ -253,7 +260,8 @@ pub(super) fn decode_ogg_to_pcm16_mono_16k(
                     return Err("not an Ogg/Opus stream".into());
                 }
                 let channels_u8 = data[9];
-                let input_sample_rate = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+                let input_sample_rate =
+                    u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
                 if channels_u8 != 1 {
                     return Err(format!("expected mono, got {} channels", channels_u8).into());
                 }

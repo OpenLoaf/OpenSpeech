@@ -84,10 +84,10 @@ fn config_dir() -> PathBuf {
 
 fn load_settings() -> PersistInner {
     let path = config_dir().join("settings.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let parsed: PersistRoot = serde_json::from_str(&raw)
-        .unwrap_or_else(|e| panic!("parse settings.json: {e}"));
+    let raw =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let parsed: PersistRoot =
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse settings.json: {e}"));
     parsed.root
 }
 
@@ -97,9 +97,7 @@ fn pick_provider(vendor: &str) -> ProviderEntry {
         .custom_providers
         .into_iter()
         .find(|p| p.vendor == vendor)
-        .unwrap_or_else(|| {
-            panic!("no custom provider with vendor={vendor} in settings.json")
-        })
+        .unwrap_or_else(|| panic!("no custom provider with vendor={vendor} in settings.json"))
 }
 
 fn load_creds(provider_id: &str) -> DictationCredentials {
@@ -119,8 +117,8 @@ fn load_creds(provider_id: &str) -> DictationCredentials {
 fn pick_latest_ogg() -> PathBuf {
     let root = config_dir().join("recordings");
     let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-    let day_dirs = std::fs::read_dir(&root)
-        .unwrap_or_else(|e| panic!("read {}: {e}", root.display()));
+    let day_dirs =
+        std::fs::read_dir(&root).unwrap_or_else(|e| panic!("read {}: {e}", root.display()));
     for day in day_dirs {
         let day_path = day.expect("dir entry").path();
         if !day_path.is_dir() {
@@ -151,7 +149,10 @@ fn pick_latest_ogg() -> PathBuf {
 #[ignore]
 fn stage_0a_settings_loaded_and_dictation_in_custom_mode() {
     let s = load_settings();
-    eprintln!("custom providers: {} 条", s.dictation.custom_providers.len());
+    eprintln!(
+        "custom providers: {} 条",
+        s.dictation.custom_providers.len()
+    );
     for p in &s.dictation.custom_providers {
         eprintln!(
             "  - id={} vendor={} name={} appId={:?} region={:?}",
@@ -196,10 +197,21 @@ fn stage_0b_keychain_returns_credentials_for_each_provider() {
 #[ignore]
 async fn stage_1_tencent_credentials_pass_signature_check() {
     let p = pick_provider("tencent");
-    let DictationCredentials::Tencent { secret_id, secret_key } = load_creds(&p.id) else {
-        panic!("provider {} marked tencent but keychain JSON vendor mismatch", p.id);
+    let DictationCredentials::Tencent {
+        secret_id,
+        secret_key,
+    } = load_creds(&p.id)
+    else {
+        panic!(
+            "provider {} marked tencent but keychain JSON vendor mismatch",
+            p.id
+        );
     };
-    let region = p.tencent_region.as_deref().unwrap_or("ap-shanghai").to_string();
+    let region = p
+        .tencent_region
+        .as_deref()
+        .unwrap_or("ap-shanghai")
+        .to_string();
 
     // 一段 320 字节的"假音频"——鉴权阶段拒不到这里；
     // 即便鉴权过、走到业务层，也会因为太短被拒，这里同样接受。
@@ -215,9 +227,7 @@ async fn stage_1_tencent_credentials_pass_signature_check() {
                 !msg.contains("tencent_unauthenticated"),
                 "腾讯鉴权失败 → SecretId / SecretKey 错: {msg}"
             );
-            eprintln!(
-                "腾讯鉴权 OK（业务层拒收 dummy audio 是预期的）: {msg}"
-            );
+            eprintln!("腾讯鉴权 OK（业务层拒收 dummy audio 是预期的）: {msg}");
         }
     }
 }
@@ -227,7 +237,10 @@ async fn stage_1_tencent_credentials_pass_signature_check() {
 async fn stage_1_aliyun_credentials_pass_get_policy() {
     let p = pick_provider("aliyun");
     let DictationCredentials::Aliyun { api_key } = load_creds(&p.id) else {
-        panic!("provider {} marked aliyun but keychain JSON vendor mismatch", p.id);
+        panic!(
+            "provider {} marked aliyun but keychain JSON vendor mismatch",
+            p.id
+        );
     };
 
     let oss = ReqwestBailianOssClient::new().expect("build client");
@@ -249,13 +262,21 @@ async fn stage_1_aliyun_credentials_pass_get_policy() {
 #[ignore]
 async fn stage_2_tencent_file_e2e_with_local_recording() {
     let p = pick_provider("tencent");
-    let DictationCredentials::Tencent { secret_id, secret_key } = load_creds(&p.id) else {
+    let DictationCredentials::Tencent {
+        secret_id,
+        secret_key,
+    } = load_creds(&p.id)
+    else {
         panic!("vendor mismatch");
     };
-    let region = p.tencent_region.as_deref().unwrap_or("ap-shanghai").to_string();
+    let region = p
+        .tencent_region
+        .as_deref()
+        .unwrap_or("ap-shanghai")
+        .to_string();
     let ogg_path = pick_latest_ogg();
-    let bytes = std::fs::read(&ogg_path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", ogg_path.display()));
+    let bytes =
+        std::fs::read(&ogg_path).unwrap_or_else(|e| panic!("read {}: {e}", ogg_path.display()));
     eprintln!(
         "[tencent] 提交 {} ({} bytes) → CreateRecTask",
         ogg_path.display(),
@@ -296,7 +317,10 @@ async fn stage_2_tencent_file_e2e_with_local_recording() {
     } else {
         text
     };
-    eprintln!("[tencent] ✓ 转写完成 (audio_duration={}s):", data.audio_duration);
+    eprintln!(
+        "[tencent] ✓ 转写完成 (audio_duration={}s):",
+        data.audio_duration
+    );
     eprintln!("    {}", final_text);
     assert!(
         !final_text.trim().is_empty(),
@@ -312,8 +336,8 @@ async fn stage_2_aliyun_file_e2e_with_local_recording() {
         panic!("vendor mismatch");
     };
     let ogg_path = pick_latest_ogg();
-    let bytes = std::fs::read(&ogg_path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", ogg_path.display()));
+    let bytes =
+        std::fs::read(&ogg_path).unwrap_or_else(|e| panic!("read {}: {e}", ogg_path.display()));
     let file_name = ogg_path
         .file_name()
         .and_then(|s| s.to_str())
@@ -410,7 +434,11 @@ fn silence_pcm16() -> Vec<u8> {
 #[ignore]
 async fn stage_3_tencent_realtime_e2e_with_silence_pcm() {
     let p = pick_provider("tencent");
-    let DictationCredentials::Tencent { secret_id, secret_key } = load_creds(&p.id) else {
+    let DictationCredentials::Tencent {
+        secret_id,
+        secret_key,
+    } = load_creds(&p.id)
+    else {
         panic!("vendor mismatch");
     };
     let app_id = p
@@ -418,7 +446,11 @@ async fn stage_3_tencent_realtime_e2e_with_silence_pcm() {
         .as_deref()
         .unwrap_or_else(|| panic!("provider {} 缺 tencentAppId", p.id))
         .to_string();
-    let region = p.tencent_region.as_deref().unwrap_or("ap-shanghai").to_string();
+    let region = p
+        .tencent_region
+        .as_deref()
+        .unwrap_or("ap-shanghai")
+        .to_string();
 
     eprintln!("[tencent-rt] 建 WS appid={app_id} region={region} engine=16k_zh");
     let session = tokio::task::spawn_blocking(move || {
@@ -540,7 +572,10 @@ async fn stage_3_aliyun_realtime_e2e_with_silence_pcm() {
             AliyunSessionEvent::Frame(AliyunEvent::Partial { item_id, text }) => {
                 eprintln!("[aliyun-rt] partial item={item_id} text={text:?}");
             }
-            AliyunSessionEvent::Frame(AliyunEvent::Final { item_id, transcript }) => {
+            AliyunSessionEvent::Frame(AliyunEvent::Final {
+                item_id,
+                transcript,
+            }) => {
                 eprintln!("[aliyun-rt] final item={item_id} transcript={transcript:?}");
             }
             AliyunSessionEvent::Frame(AliyunEvent::EndOfStream) => {

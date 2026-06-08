@@ -28,12 +28,8 @@ use std::time::{Duration, Instant};
 
 use ogg::PacketReader;
 use openspeech_lib::asr::meeting::tencent_speaker::TencentSpeakerProvider;
-use openspeech_lib::asr::meeting::{
-    MeetingAsrProvider, MeetingEvent, MeetingSessionConfig,
-};
-use openspeech_lib::secrets::{
-    DictationCredentials, load_dictation_provider_credentials_for_rust,
-};
+use openspeech_lib::asr::meeting::{MeetingAsrProvider, MeetingEvent, MeetingSessionConfig};
+use openspeech_lib::secrets::{DictationCredentials, load_dictation_provider_credentials_for_rust};
 use opus::{Channels, Decoder};
 use serde::Deserialize;
 
@@ -48,18 +44,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let provider = load_provider()?;
     println!("✅ provider id = {}", provider.id());
-    println!("    app_id = {} (secret_id={}***)", provider.app_id, &provider.secret_id[..provider.secret_id.len().min(8)]);
+    println!(
+        "    app_id = {} (secret_id={}***)",
+        provider.app_id,
+        &provider.secret_id[..provider.secret_id.len().min(8)]
+    );
     println!("    capabilities = {:#?}", provider.capabilities());
 
-    let audio_path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+    let audio_path =
+        std::env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .join(".claude/skills/openspeech-prompt-eval/cases/005-history-view-detail/audio.ogg")
-    });
+            });
     println!("📂 audio: {}", audio_path.display());
     let pcm = decode_ogg_to_pcm16_mono_16k(&audio_path)?;
-    println!("📊 decoded {} bytes ({:.2}s)", pcm.len(), pcm.len() as f64 / (TARGET_RATE as f64 * 2.0));
+    println!(
+        "📊 decoded {} bytes ({:.2}s)",
+        pcm.len(),
+        pcm.len() as f64 / (TARGET_RATE as f64 * 2.0)
+    );
 
     let mut session = provider.open(MeetingSessionConfig {
         language: "zh".into(),
@@ -109,12 +117,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match session.next_event(Duration::from_millis(2)) {
             MeetingEvent::SegmentPartial(s) => {
                 if last_print.elapsed() > Duration::from_millis(200) {
-                    println!("  partial speaker={} sid={} text={}", s.speaker_id, s.sentence_id, s.text);
+                    println!(
+                        "  partial speaker={} sid={} text={}",
+                        s.speaker_id, s.sentence_id, s.text
+                    );
                     last_print = Instant::now();
                 }
             }
             MeetingEvent::SegmentFinal(s) => {
-                println!("✅ final   speaker={} sid={} t=[{}..{}]ms text={}", s.speaker_id, s.sentence_id, s.start_ms, s.end_ms, s.text);
+                println!(
+                    "✅ final   speaker={} sid={} t=[{}..{}]ms text={}",
+                    s.speaker_id, s.sentence_id, s.start_ms, s.end_ms, s.text
+                );
             }
             MeetingEvent::Error { code, message } => {
                 eprintln!("❌ error during stream: {code} {message}");
@@ -137,10 +151,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while Instant::now() < deadline {
         match session.next_event(Duration::from_millis(200)) {
             MeetingEvent::SegmentFinal(s) => {
-                println!("✅ final   speaker={} sid={} t=[{}..{}]ms text={}", s.speaker_id, s.sentence_id, s.start_ms, s.end_ms, s.text);
+                println!(
+                    "✅ final   speaker={} sid={} t=[{}..{}]ms text={}",
+                    s.speaker_id, s.sentence_id, s.start_ms, s.end_ms, s.text
+                );
             }
             MeetingEvent::SegmentPartial(s) => {
-                println!("  partial speaker={} sid={} text={}", s.speaker_id, s.sentence_id, s.text);
+                println!(
+                    "  partial speaker={} sid={} text={}",
+                    s.speaker_id, s.sentence_id, s.text
+                );
             }
             MeetingEvent::EndOfStream => {
                 println!("🏁 end-of-stream");
@@ -235,8 +255,7 @@ struct ProviderEntry {
 
 fn settings_path() -> PathBuf {
     let home = std::env::var("HOME").expect("HOME env var must be set");
-    PathBuf::from(home)
-        .join("Library/Application Support/com.openspeech.app/settings.json")
+    PathBuf::from(home).join("Library/Application Support/com.openspeech.app/settings.json")
 }
 
 fn load_provider() -> Result<TencentSpeakerProvider, Box<dyn std::error::Error>> {
@@ -254,9 +273,8 @@ fn load_provider() -> Result<TencentSpeakerProvider, Box<dyn std::error::Error>>
             path.display()
         )
     })?;
-    let parsed: PersistRoot = serde_json::from_str(&raw).map_err(|e| {
-        format!("解析 settings.json 失败：{e}（路径 {}）", path.display())
-    })?;
+    let parsed: PersistRoot = serde_json::from_str(&raw)
+        .map_err(|e| format!("解析 settings.json 失败：{e}（路径 {}）", path.display()))?;
     let dictation = parsed.root.dictation;
 
     let active_id = dictation.active_custom_provider_id.clone();

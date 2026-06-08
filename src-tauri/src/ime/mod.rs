@@ -28,12 +28,7 @@ mod imp {
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
         fn CFRelease(cf: CFTypeRef);
-        fn CFStringGetCString(
-            s: CFStringRef,
-            buf: *mut c_char,
-            buflen: i64,
-            encoding: u32,
-        ) -> u8;
+        fn CFStringGetCString(s: CFStringRef, buf: *mut c_char, buflen: i64, encoding: u32) -> u8;
     }
 
     pub fn active_ime_id() -> Option<String> {

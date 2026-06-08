@@ -62,10 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .await??
     .ok_or("no fast_chat_variant — server returned None")?;
-    let endpoint = variant
-        .endpoint
-        .clone()
-        .ok_or("variant missing endpoint")?;
+    let endpoint = variant.endpoint.clone().ok_or("variant missing endpoint")?;
     println!(
         "🤖 fast variant: id={}  endpoint={}  family={:?}",
         variant.id, endpoint, variant.family_id
@@ -78,9 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = endpoint;
     println!("➡  POST {url}");
 
-    let user_text = std::env::args().nth(1).unwrap_or_else(|| {
-        "现成的组件呢？找一下现成组件，尽量不要自己写。".to_string()
-    });
+    let user_text = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "现成的组件呢？找一下现成组件，尽量不要自己写。".to_string());
 
     let context_msg = "<system-tag type=\"HotWords\">\n\tOpenSpeech、OpenLoaf\n</system-tag>\n\n\
 <system-tag type=\"ConversationHistory\">\n\
@@ -104,8 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "enable_thinking": false,
     });
 
-    let http = reqwest::Client::builder()
-        .build()?;
+    let http = reqwest::Client::builder().build()?;
     let resp = http
         .post(&url)
         .bearer_auth(&sess.access_token)
@@ -130,7 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(nl) = buf.find('\n') else { break };
             let line = buf[..nl].trim_end_matches('\r').to_string();
             buf.drain(..=nl);
-            let Some(rest) = line.strip_prefix("data:") else { continue };
+            let Some(rest) = line.strip_prefix("data:") else {
+                continue;
+            };
             let payload = rest.trim();
             if payload.is_empty() || payload == "[DONE]" {
                 continue;
@@ -147,8 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !v.is_object() || !v.as_object().unwrap().contains_key("choices") {
                 continue;
             }
-            let parsed: Result<CreateChatCompletionStreamResponse, _> =
-                serde_json::from_value(v);
+            let parsed: Result<CreateChatCompletionStreamResponse, _> = serde_json::from_value(v);
             match parsed {
                 Ok(r) => {
                     for choice in r.choices {

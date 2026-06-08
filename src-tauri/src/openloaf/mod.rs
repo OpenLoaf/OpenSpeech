@@ -32,7 +32,7 @@ mod dev_session;
 pub mod feedback;
 mod storage;
 use dev_session::{clear_dev_session, dump_dev_session};
-use storage::{cleanup_legacy_keychain, new_storage, AuthStorageImpl};
+use storage::{AuthStorageImpl, cleanup_legacy_keychain, new_storage};
 
 // OpenLoaf SaaS REST 基址。构建期常量，按 build profile 分岔：
 //   - debug（`cargo run` / `cargo build`）  → localhost:5180 本地开发服务
@@ -237,8 +237,8 @@ impl OpenLoafState {
         log::info!("openloaf: refreshing access token via family_exchange / refresh …");
         let client = self.client.clone();
         let storage = self.storage.clone();
-        let result = tokio::task::spawn_blocking(move || refresh_session_blocking(&client, &storage))
-            .await;
+        let result =
+            tokio::task::spawn_blocking(move || refresh_session_blocking(&client, &storage)).await;
 
         match result {
             Ok(Ok(restored)) => {
@@ -705,10 +705,9 @@ pub async fn openloaf_try_recover(
 
     let client = ol.client.clone();
     let storage = ol.storage.clone();
-    let result =
-        tokio::task::spawn_blocking(move || refresh_session_blocking(&client, &storage))
-            .await
-            .map_err(|e| format!("join error: {e}"))?;
+    let result = tokio::task::spawn_blocking(move || refresh_session_blocking(&client, &storage))
+        .await
+        .map_err(|e| format!("join error: {e}"))?;
 
     match result {
         Ok(restored) => {
@@ -739,9 +738,7 @@ pub async fn openloaf_try_recover(
         }
         Err(RefreshFailure::NoStoredCredentials) => Ok(false),
         Err(RefreshFailure::Network(err)) => {
-            log::warn!(
-                "openloaf: try_recover hit network/5xx (keeping keychain): {err}"
-            );
+            log::warn!("openloaf: try_recover hit network/5xx (keeping keychain): {err}");
             Ok(false)
         }
     }
@@ -917,7 +914,9 @@ where
                             );
                             handle_session_expired(app, ol);
                         }
-                        Err(e) => log::warn!("openloaf: call_authed retry returned non-401 error: {e}"),
+                        Err(e) => {
+                            log::warn!("openloaf: call_authed retry returned non-401 error: {e}")
+                        }
                     }
                     retried
                 }
@@ -932,9 +931,7 @@ where
                 }
                 RefreshOutcome::Network => {
                     // 网络 / 服务端 5xx：保留登录态，让调用方按业务错处理。
-                    log::warn!(
-                        "openloaf: call_authed refresh hit network error, keeping session"
-                    );
+                    log::warn!("openloaf: call_authed refresh hit network error, keeping session");
                     Err(SaaSError::Network(
                         "auth refresh unreachable; keeping session".into(),
                     ))

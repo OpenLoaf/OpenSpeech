@@ -55,8 +55,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use openloaf_saas::v4_tools::{
-    RealtimeAsrLlmOlTlRt002Lang, RealtimeAsrLlmOlTlRt002Params,
-    RealtimeAsrLlmOlTlRt002ServerVad, RealtimeAsrLlmOlTlRt002Transcription,
+    RealtimeAsrLlmOlTlRt002Lang, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmOlTlRt002ServerVad,
+    RealtimeAsrLlmOlTlRt002Transcription,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -172,9 +172,7 @@ pub fn close_if_active() {
 fn parse_language(lang: Option<&str>) -> RealtimeAsrLlmOlTlRt002Lang {
     match lang.map(|s| s.trim().to_ascii_lowercase()) {
         Some(ref s) if s == "auto" || s.is_empty() => RealtimeAsrLlmOlTlRt002Lang::Auto,
-        Some(ref s) if s == "zh" || s == "zh-cn" || s == "zh-tw" => {
-            RealtimeAsrLlmOlTlRt002Lang::Zh
-        }
+        Some(ref s) if s == "zh" || s == "zh-cn" || s == "zh-tw" => RealtimeAsrLlmOlTlRt002Lang::Zh,
         Some(ref s) if s == "en" || s.starts_with("en-") => RealtimeAsrLlmOlTlRt002Lang::En,
         Some(ref s) if s == "ja" => RealtimeAsrLlmOlTlRt002Lang::Ja,
         Some(ref s) if s == "ko" => RealtimeAsrLlmOlTlRt002Lang::Ko,
@@ -270,16 +268,12 @@ pub async fn stt_start<R: Runtime>(
         match ol.ensure_access_token_fresh().await {
             RefreshOutcome::Refreshed => {}
             RefreshOutcome::AuthLost => {
-                log::warn!(
-                    "[stt] stt_start aborted: refresh rejected by server (auth-lost)"
-                );
+                log::warn!("[stt] stt_start aborted: refresh rejected by server (auth-lost)");
                 handle_session_expired(&app, &ol);
                 return Err(ERR_NOT_AUTHENTICATED.to_string());
             }
             RefreshOutcome::Network => {
-                log::warn!(
-                    "[stt] stt_start aborted: refresh hit network/5xx; keeping session"
-                );
+                log::warn!("[stt] stt_start aborted: refresh hit network/5xx; keeping session");
                 return Err(ERR_NETWORK_UNAVAILABLE.to_string());
             }
         }
@@ -326,7 +320,9 @@ fn stt_start_impl<R: Runtime>(
         DictationBackend::SaasRealtime => {
             let ol = app.state::<SharedOpenLoaf>();
             let client = ol.authenticated_client().ok_or_else(|| {
-                log::warn!("[stt] stt_start aborted: authenticated_client() = None (not logged in)");
+                log::warn!(
+                    "[stt] stt_start aborted: authenticated_client() = None (not logged in)"
+                );
                 handle_session_expired(&app, &ol);
                 ERR_NOT_AUTHENTICATED.to_string()
             })?;
@@ -386,19 +382,18 @@ fn stt_start_impl<R: Runtime>(
             log::debug!(
                 "[stt] tencent realtime params name={name} app_id={app_id} region={region} engine={engine_model_type} sample_rate=16000 lang={language:?}"
             );
-            let sess =
-                TencentRealtimeSession::connect(ConnectParams {
-                    app_id: &app_id,
-                    secret_id: &secret_id,
-                    secret_key: &secret_key,
-                    _region: &region,
-                    sample_rate: 16000,
-                    engine_model_type,
-                })
-                .map_err(|e| {
-                    log::error!("[stt] tencent realtime connect failed: {e}");
-                    format!("realtime connect: {e}")
-                })?;
+            let sess = TencentRealtimeSession::connect(ConnectParams {
+                app_id: &app_id,
+                secret_id: &secret_id,
+                secret_key: &secret_key,
+                _region: &region,
+                sample_rate: 16000,
+                engine_model_type,
+            })
+            .map_err(|e| {
+                log::error!("[stt] tencent realtime connect failed: {e}");
+                format!("realtime connect: {e}")
+            })?;
             log::info!(
                 "[stt] session started (vendor=tencent name={} engine={} app_id={})",
                 name,
@@ -826,7 +821,6 @@ pub async fn stt_cancel() {
     let _ = tauri::async_runtime::spawn_blocking(close_if_active).await;
 }
 
-
 #[cfg(test)]
 mod tests {
     //! 回归点 1：长录音 60s 后 worker 突然死亡 + 录音继续白录到松手才发现 segs=0。
@@ -850,9 +844,8 @@ mod tests {
     #[test]
     fn credits_with_null_f64_field_is_decoded_to_none() {
         let payload = r#"{"type":"credits","consumedSeconds":null,"consumedCredits":0.0,"remainingCredits":1.5}"#;
-        let ev = serde_json::from_str::<RealtimeEvent>(payload).expect(
-            "SDK ≥ 0.3.7 必须把 null f64 视为 None；若失败说明 SDK 回退或被降级",
-        );
+        let ev = serde_json::from_str::<RealtimeEvent>(payload)
+            .expect("SDK ≥ 0.3.7 必须把 null f64 视为 None；若失败说明 SDK 回退或被降级");
         match ev {
             RealtimeEvent::Credits {
                 consumed_seconds,
@@ -966,10 +959,9 @@ mod tests {
         let mut s = 0;
         let mut killed = None;
         for _ in 0..MAX_CONSECUTIVE_DECODE_ERRORS {
-            if let Some(k) = step_streak(
-                &mut s,
-                &RealtimeBackendEvent::DecodeRecoverable("x".into()),
-            ) {
+            if let Some(k) =
+                step_streak(&mut s, &RealtimeBackendEvent::DecodeRecoverable("x".into()))
+            {
                 killed = Some(k);
                 break;
             }

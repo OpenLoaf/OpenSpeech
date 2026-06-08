@@ -33,7 +33,7 @@
 use std::{
     fs::File,
     io::BufWriter,
-    num::{NonZeroU32, NonZeroU8},
+    num::{NonZeroU8, NonZeroU32},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -104,7 +104,10 @@ fn classify_mic_start_error(raw: &str) -> &'static str {
     if s.contains("devicenotavailable") || s.contains("device not available") {
         return "device-removed";
     }
-    if s.contains("default_input_config") || s.contains("stream config") || s.contains("unsupported") {
+    if s.contains("default_input_config")
+        || s.contains("stream config")
+        || s.contains("unsupported")
+    {
         return "device-config-unsupported";
     }
     // ready 超时通常说明 cpal HAL 卡在 audio thread 初始化——多半也是被独占 / 驱动异常。
@@ -338,7 +341,10 @@ struct DcBlocker {
 
 impl DcBlocker {
     fn new() -> Self {
-        Self { x_prev: 0.0, y_prev: 0.0 }
+        Self {
+            x_prev: 0.0,
+            y_prev: 0.0,
+        }
     }
 
     #[inline]
@@ -543,11 +549,7 @@ enum TrimDecision {
 /// - "裁多少"用 webrtc-vad（Quality 模式 + RMS 兜底）：找到首尾就裁，找不到就整段保留。
 /// - 只裁首尾，**绝不动中间**——句间停顿对 ASR 是合法分段线索。
 /// - 非对称 padding：头 TRIM_HEAD_PAD_MS / 尾 TRIM_TAIL_PAD_MS，尾部更宽以兜住衰减尾音。
-fn analyze_recording_trim(
-    interleaved: &[f32],
-    sample_rate: u32,
-    channels: u16,
-) -> TrimDecision {
+fn analyze_recording_trim(interleaved: &[f32], sample_rate: u32, channels: u16) -> TrimDecision {
     let ch = channels.max(1) as usize;
     let total_frames = interleaved.len() / ch;
     if total_frames == 0 {
@@ -676,8 +678,7 @@ fn analyze_recording_trim(
     };
 
     let start_frame = ((start_ms as u128) * sample_rate as u128 / 1000) as usize;
-    let end_frame =
-        (((end_ms as u128) * sample_rate as u128 / 1000) as usize).min(total_frames);
+    let end_frame = (((end_ms as u128) * sample_rate as u128 / 1000) as usize).min(total_frames);
 
     if end_frame <= start_frame {
         return TrimDecision::Empty;
@@ -1151,11 +1152,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
     // 已死线程导致 stream_info=None 后续报 "audio stream not running"。
     {
         let guard = monitor().lock().expect("monitor mutex poisoned");
-        let zombie = guard.ref_count > 0
-            && guard
-                .thread
-                .as_ref()
-                .is_none_or(|th| th.is_finished());
+        let zombie = guard.ref_count > 0 && guard.thread.as_ref().is_none_or(|th| th.is_finished());
         drop(guard);
         if zombie {
             force_stop();
@@ -1245,7 +1242,11 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
         "[audio] start: respawn={} ref_count={} (caller-owned stream {})",
         was_respawn,
         guard.ref_count,
-        if was_respawn { "moved to new device" } else { "newly opened" }
+        if was_respawn {
+            "moved to new device"
+        } else {
+            "newly opened"
+        }
     );
     Ok(())
 }
@@ -1412,11 +1413,7 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
 
     // 落盘前跑离线 VAD 找首尾 voice 边界——整段无 voice 直接跳过编码，节省云端 ASR 成本与
     // 用户激活但全程未说话时的"半小时静音"上传问题。
-    let decision = analyze_recording_trim(
-        &session.samples,
-        session.sample_rate,
-        session.channels,
-    );
+    let decision = analyze_recording_trim(&session.samples, session.sample_rate, session.channels);
 
     if matches!(decision, TrimDecision::Empty) {
         log::info!(
@@ -1452,13 +1449,11 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
     // 安全切片：start_sample / end_sample 已按 channels 对齐。
     let trimmed = &session.samples[start_sample..end_sample];
     let trimmed_frames = trimmed.len() / session.channels.max(1) as usize;
-    let trimmed_duration_ms =
-        (trimmed_frames as u64 * 1000) / session.sample_rate.max(1) as u64;
+    let trimmed_duration_ms = (trimmed_frames as u64 * 1000) / session.sample_rate.max(1) as u64;
 
     // 按日期分子目录落盘：recordings/<yyyy-MM-dd>/<id>.ogg；目录不存在时 mkdir_p。
     let day_dir = db::ensure_recordings_dir(&app)?.join(&session.date);
-    std::fs::create_dir_all(&day_dir)
-        .map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
+    std::fs::create_dir_all(&day_dir).map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
     let rel_path = format!("recordings/{}/{}.ogg", session.date, session.id);
     let abs_path = day_dir.join(format!("{}.ogg", session.id));
 

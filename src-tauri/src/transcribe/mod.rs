@@ -32,9 +32,7 @@ use crate::asr::aliyun::file::{
     DashScopeClient, FileTransError, ReqwestDashScopeClient, TokioSleeper as AliyunSleeper,
     merge_transcripts_payload, poll_task_until_terminal,
 };
-use crate::asr::aliyun::oss_upload::{
-    BailianOssClient, OssUploadError, ReqwestBailianOssClient,
-};
+use crate::asr::aliyun::oss_upload::{BailianOssClient, OssUploadError, ReqwestBailianOssClient};
 use crate::asr::tencent::cos::{CosClient, CosError};
 use crate::asr::tencent::file::{
     CreateRecTaskRequest, ReqwestHttp, TencentFileError, TokioSleeper, merge_result_detail,
@@ -468,7 +466,11 @@ fn aliyun_file_name_for(audio_path: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("recording.wav")
         .to_string();
-    if stem.is_empty() { "recording.wav".into() } else { stem }
+    if stem.is_empty() {
+        "recording.wav".into()
+    } else {
+        stem
+    }
 }
 
 async fn transcribe_aliyun_file(
@@ -479,8 +481,16 @@ async fn transcribe_aliyun_file(
 ) -> Result<String, AliyunFileError> {
     let oss = ReqwestBailianOssClient::new()?;
     let scope = ReqwestDashScopeClient::new()?;
-    transcribe_aliyun_file_with(&oss, &scope, &AliyunSleeper, bytes, audio_path, lang, api_key)
-        .await
+    transcribe_aliyun_file_with(
+        &oss,
+        &scope,
+        &AliyunSleeper,
+        bytes,
+        audio_path,
+        lang,
+        api_key,
+    )
+    .await
 }
 
 async fn transcribe_aliyun_file_with(
@@ -717,9 +727,7 @@ async fn run_asr_short_blocking(
                 "[transcribe] asr_short with system_prompt: chars={chars} bytes={bytes} lines={lines} lang={lang_short:?} preview={preview:?}"
             );
             // debug 等级输出全文——info 级只看到长度概览，调 prompt 时仍要看到原文。
-            log::debug!(
-                "[transcribe] asr_short system_prompt full body ({chars} chars):\n{sp}"
-            );
+            log::debug!("[transcribe] asr_short system_prompt full body ({chars} chars):\n{sp}");
             if chars > 2000 {
                 log::warn!(
                     "[transcribe] asr_short system_prompt chars={chars} exceeds the SDK-recommended 2000-char soft limit; upstream may truncate or refuse"
@@ -727,9 +735,7 @@ async fn run_asr_short_blocking(
             }
         }
         None => {
-            log::info!(
-                "[transcribe] asr_short without system_prompt lang={lang_short:?}"
-            );
+            log::info!("[transcribe] asr_short without system_prompt lang={lang_short:?}");
         }
     }
     let task = tokio::task::spawn_blocking(move || {
@@ -876,17 +882,17 @@ mod tencent_tests {
 
     #[test]
     fn cos_bucket_required_constant_value_is_stable() {
-        assert_eq!(ERR_TENCENT_COS_BUCKET_REQUIRED, "tencent_cos_bucket_required");
+        assert_eq!(
+            ERR_TENCENT_COS_BUCKET_REQUIRED,
+            "tencent_cos_bucket_required"
+        );
     }
 
     #[test]
     fn empty_or_whitespace_bucket_filtered_out() {
         let cases: Vec<Option<String>> = vec![None, Some(String::new()), Some("   ".into())];
         for c in cases {
-            let bucket = c
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
+            let bucket = c.as_deref().map(str::trim).filter(|s| !s.is_empty());
             assert!(bucket.is_none(), "expected None for {c:?}");
         }
         let ok = Some(" my-bucket ".to_string());
@@ -918,7 +924,9 @@ mod aliyun_tests {
                 "x_oss_object_acl": "private", "x_oss_forbid_overwrite": "true"
             }, "request_id": "r"
         }"#;
-        serde_json::from_str::<UploadPolicyEnvelope>(raw).unwrap().data
+        serde_json::from_str::<UploadPolicyEnvelope>(raw)
+            .unwrap()
+            .data
     }
 
     enum OssOp {
@@ -932,7 +940,10 @@ mod aliyun_tests {
     }
     impl MockOss {
         fn new(ops: Vec<OssOp>) -> Self {
-            Self { ops: Mutex::new(ops), captured: Mutex::new(Vec::new()) }
+            Self {
+                ops: Mutex::new(ops),
+                captured: Mutex::new(Vec::new()),
+            }
         }
         fn pop(&self) -> OssOp {
             let mut q = self.ops.lock().unwrap();
@@ -955,7 +966,10 @@ mod aliyun_tests {
             file_name: &str,
             _bytes: Vec<u8>,
         ) -> Result<String, OssUploadError> {
-            self.captured.lock().unwrap().push(format!("upload:{file_name}"));
+            self.captured
+                .lock()
+                .unwrap()
+                .push(format!("upload:{file_name}"));
             match self.pop() {
                 OssOp::Upload(r) => r,
                 OssOp::Policy(_) => panic!("expected Upload op"),
@@ -974,7 +988,10 @@ mod aliyun_tests {
     }
     impl MockScope {
         fn new(ops: Vec<ScopeOp>) -> Self {
-            Self { ops: Mutex::new(ops), captured: Mutex::new(Vec::new()) }
+            Self {
+                ops: Mutex::new(ops),
+                captured: Mutex::new(Vec::new()),
+            }
         }
         fn pop(&self) -> ScopeOp {
             let mut q = self.ops.lock().unwrap();
@@ -1005,7 +1022,10 @@ mod aliyun_tests {
             _api_key: &str,
             task_id: &str,
         ) -> Result<TaskOutput, FileTransError> {
-            self.captured.lock().unwrap().push(format!("query:{task_id}"));
+            self.captured
+                .lock()
+                .unwrap()
+                .push(format!("query:{task_id}"));
             match self.pop() {
                 ScopeOp::Query(r) => r,
                 _ => panic!("expected Query op"),
@@ -1116,17 +1136,10 @@ mod aliyun_tests {
         let oss = MockOss::new(vec![OssOp::Policy(Ok(p))]);
         let scope = MockScope::new(vec![]);
         let big = vec![0u8; 2 * 1024 * 1024]; // 2 MB > 1 MB
-        let err = transcribe_aliyun_file_with(
-            &oss,
-            &scope,
-            &ZeroSleeper,
-            big,
-            "audio.wav",
-            None,
-            "ak",
-        )
-        .await
-        .unwrap_err();
+        let err =
+            transcribe_aliyun_file_with(&oss, &scope, &ZeroSleeper, big, "audio.wav", None, "ak")
+                .await
+                .unwrap_err();
         let s = err.to_string();
         assert!(s.contains("aliyun_file_too_large"), "got {s}");
     }
@@ -1137,9 +1150,9 @@ mod aliyun_tests {
             OssOp::Policy(Ok(sample_policy())),
             OssOp::Upload(Ok("oss://b/k".into())),
         ]);
-        let scope = MockScope::new(vec![ScopeOp::Submit(Err(
-            FileTransError::Unauthenticated("HTTP 401".into()),
-        ))]);
+        let scope = MockScope::new(vec![ScopeOp::Submit(Err(FileTransError::Unauthenticated(
+            "HTTP 401".into(),
+        )))]);
         let err = transcribe_aliyun_file_with(
             &oss,
             &scope,
@@ -1195,10 +1208,7 @@ mod aliyun_tests {
             aliyun_file_name_for("recordings/2026-05-04/abc.ogg"),
             "abc.ogg"
         );
-        assert_eq!(
-            aliyun_file_name_for("recordings/legacy.wav"),
-            "legacy.wav"
-        );
+        assert_eq!(aliyun_file_name_for("recordings/legacy.wav"), "legacy.wav");
         assert_eq!(aliyun_file_name_for(""), "recording.wav");
     }
 }

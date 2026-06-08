@@ -72,7 +72,11 @@ pub struct TencentSpeakerProvider {
 }
 
 impl TencentSpeakerProvider {
-    pub fn new(app_id: impl Into<String>, secret_id: impl Into<String>, secret_key: impl Into<String>) -> Self {
+    pub fn new(
+        app_id: impl Into<String>,
+        secret_id: impl Into<String>,
+        secret_key: impl Into<String>,
+    ) -> Self {
         Self {
             app_id: app_id.into(),
             secret_id: secret_id.into(),
@@ -158,7 +162,10 @@ impl TencentSpeakerSession {
         provider: &TencentSpeakerProvider,
         _config: &MeetingSessionConfig,
     ) -> Result<Self, MeetingProviderError> {
-        if provider.app_id.is_empty() || provider.secret_id.is_empty() || provider.secret_key.is_empty() {
+        if provider.app_id.is_empty()
+            || provider.secret_id.is_empty()
+            || provider.secret_key.is_empty()
+        {
             return Err(MeetingProviderError::Unauthenticated(
                 "tencent app_id / secret_id / secret_key empty".into(),
             ));
@@ -388,8 +395,8 @@ fn run_worker(
                         }
                     }
                     Err(e) => {
-                        let _ = inbox_tx
-                            .send(SessionRaw::Event(MeetingEvent::DecodeRecoverable(e)));
+                        let _ =
+                            inbox_tx.send(SessionRaw::Event(MeetingEvent::DecodeRecoverable(e)));
                     }
                 }
             }

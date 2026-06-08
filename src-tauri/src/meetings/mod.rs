@@ -30,9 +30,7 @@ use crate::asr::byok::{
 };
 use crate::asr::meeting::saas::SaasMeetingProvider;
 use crate::asr::meeting::tencent_speaker::TencentSpeakerProvider;
-use crate::asr::meeting::{
-    MeetingAsrProvider, MeetingEvent, MeetingSession, MeetingSessionConfig,
-};
+use crate::asr::meeting::{MeetingAsrProvider, MeetingEvent, MeetingSession, MeetingSessionConfig};
 use crate::audio::is_valid_date_segment;
 use crate::db;
 use crate::meetings::writers::{MeetingAudioWriter, MeetingTranscriptAppender};
@@ -202,9 +200,29 @@ fn build_provider<R: Runtime>(
     }
 }
 
-/// 当前是否有活动会议——audio fanout 用来短路克隆。
+/// 当前是否有活动会议（含暂停态）——audio fanout 用来短路克隆。
 pub fn has_active() -> bool {
-    active_slot().try_lock().map(|g| g.is_some()).unwrap_or(false)
+    active_slot()
+        .try_lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+}
+
+/// 是否有正在录音（非暂停）的会议——hotkey 用来决定是否拦截听写/翻译/Ask 快捷键。
+/// 暂停态放行：用户暂停会议后可临时用听写，不被 maybe_block_for_meeting 拦下。
+///
+/// 用阻塞 lock 而非 try_lock：hotkey 是低频路径（一次按键一次），而 try_send_audio_pcm16
+/// 每 ~10ms 持锁一瞬，PTT 按下刚好撞上就会 try_lock 失败 → unwrap_or(false) 把「锁正忙」
+/// 误判成「没有会议」→ 放行听写、不发拦截提示。持锁方都是微秒级临界区，阻塞等锁无感、
+/// 不死锁；拿到真实状态才能保证拦截可靠。
+pub fn is_capturing() -> bool {
+    active_slot()
+        .lock()
+        .map(|g| {
+            g.as_ref()
+                .is_some_and(|a| !a.paused.load(Ordering::Relaxed))
+        })
+        .unwrap_or(false)
 }
 
 // ---------- Invoke 命令 ----------
@@ -412,15 +430,16 @@ fn meeting_start_impl<R: Runtime>(
     // 扫到一个没字幕的孤儿录音。
     let audio_writer = MeetingAudioWriter::create(&app, &args.meeting_id, &args.date)?;
     let audio_rel_path = audio_writer.rel_path().to_string();
-    let transcript_writer = match MeetingTranscriptAppender::create(&app, &args.meeting_id, &args.date) {
-        Ok(w) => w,
-        Err(e) => {
-            // audio_writer 拿在手里，drop 会 flush；这里直接放弃 audio 文件最干净。
-            // 不显式 unlink——后续 orphan_scan 会收掉；当下保留可读 OGG 比静默删除更安全。
-            drop(audio_writer);
-            return Err(e);
-        }
-    };
+    let transcript_writer =
+        match MeetingTranscriptAppender::create(&app, &args.meeting_id, &args.date) {
+            Ok(w) => w,
+            Err(e) => {
+                // audio_writer 拿在手里，drop 会 flush；这里直接放弃 audio 文件最干净。
+                // 不显式 unlink——后续 orphan_scan 会收掉；当下保留可读 OGG 比静默删除更安全。
+                drop(audio_writer);
+                return Err(e);
+            }
+        };
     let transcript_rel_path = transcript_writer.rel_path().to_string();
 
     let paused = Arc::new(AtomicBool::new(false));
@@ -496,7 +515,10 @@ pub fn try_send_audio_pcm16(pcm16: Vec<u8>) {
     let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
     BYTES.fetch_add(pcm16.len() as u64, Ordering::Relaxed);
     if n == 1 {
-        log::info!("[meetings] first PCM16 frame fanout to meeting session ({}B)", pcm16.len());
+        log::info!(
+            "[meetings] first PCM16 frame fanout to meeting session ({}B)",
+            pcm16.len()
+        );
     } else if n % 96 == 0 {
         log::info!(
             "[meetings] audio progress frames={n} bytes={}",
@@ -693,7 +715,10 @@ fn event_pump<R: Runtime>(
                 if max_sid_in_session >= 0 {
                     sentence_id_offset += max_sid_in_session + 1;
                 }
-                time_offset_ms = time_offset_ms.saturating_add(max_end_ms_in_session);
+                // 锚到 OGG 实际写入时长，而非 vendor end_ms（后者不含尾部静音，每次
+                // 重连/暂停都会让新段字幕 seek 越攒越早）。断网期间不写盘，故重连前后
+                // written_ms 不变，与排空丢弃的 OGG 时间线对齐。
+                time_offset_ms = audio_writer.written_ms();
                 max_sid_in_session = -1;
                 max_end_ms_in_session = 0;
                 reconnect_attempts += 1;
@@ -747,6 +772,63 @@ fn event_pump<R: Runtime>(
                     }
                 }
             }
+            SessionExit::Paused => {
+                // 用户暂停：关掉当前 session（drop=关 WS，避免服务端 idle 15s 后 4008
+                // 把会话判死），但不结束会议、不 finalize writers。
+                drop(session);
+                // 结转 offset：resume 时新 session 的 sid/时间戳从这里续接，与暂停前的
+                // 字幕和已落盘 OGG 对齐（暂停区间不占时间轴——麦克风此时已停采集）。
+                if max_sid_in_session >= 0 {
+                    sentence_id_offset += max_sid_in_session + 1;
+                }
+                // time_offset 不在这里结转：resume 握手窗口还会往 OGG 写真实音频，
+                // 必须等写完后用 written_ms() 锚定，否则新段字幕会比音频早握手那段时长。
+                max_sid_in_session = -1;
+                max_end_ms_in_session = 0;
+
+                // 等 resume（paused→false）或 stop（audio_tx 断开）。
+                let resumed = loop {
+                    if !paused.load(Ordering::Relaxed) {
+                        break true;
+                    }
+                    if let Err(TryRecvError::Disconnected) = audio_rx.try_recv() {
+                        break false;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                };
+                if !resumed {
+                    // 暂停中 stop：正常收尾结束会议。
+                    finalize_writers(audio_writer, transcript_writer);
+                    let _ = app.emit(EVENT_END, meeting_id.clone());
+                    return;
+                }
+                // resume：重建 session（无 backoff、不计 reconnect_attempts——这不是错误）。
+                match open_session_await_ready(provider.as_ref(), &config) {
+                    Some(new_session) => {
+                        session = new_session;
+                        // resume 握手窗口（最多 8s）cpal 已在采集真实音频：写盘保 OGG
+                        // 时间线连续（不灌新 session，它从 Ready 后才接帧）。
+                        while let Ok(pcm) = audio_rx.try_recv() {
+                            let _ = audio_writer.push_pcm16(&pcm);
+                        }
+                        // 锚到 OGG 实际写入时长（含上面握手期写盘）：新 session 字幕
+                        // start_ms 从这里续接，与 OGG 中新音频的位置精确对齐。
+                        time_offset_ms = audio_writer.written_ms();
+                    }
+                    None => {
+                        finalize_writers(audio_writer, transcript_writer);
+                        let _ = app.emit(
+                            EVENT_ERROR,
+                            ErrorPayload {
+                                meeting_id: meeting_id.clone(),
+                                code: "resume_failed".into(),
+                                message: "failed to reopen meeting session after resume".into(),
+                            },
+                        );
+                        return;
+                    }
+                }
+            }
         }
     }
 }
@@ -764,8 +846,14 @@ fn finalize_writers(audio: MeetingAudioWriter, transcript: MeetingTranscriptAppe
 
 enum SessionExit {
     EndOfStream,
-    Error { code: String, message: String },
+    Error {
+        code: String,
+        message: String,
+    },
     NetworkExit(String),
+    /// 用户暂停：worker 主动放弃当前 session（关 WS，避免服务端 idle 超时 4008），
+    /// 但不结束会议；event_pump 等 resume 后用 offset 重建续接。
+    Paused,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -785,9 +873,14 @@ fn run_session<R: Runtime>(
     let mut finished = false;
     let mut finish_deadline: Option<Instant> = None;
     loop {
-        // 1) 排空 audio queue：尽量把堆积的帧一次性灌进 session，避免节奏被打散。
-        //    同时把 PCM 编码追加到本地 OGG——pause 中也写盘，否则 review 的音频
-        //    跟字幕时间线会对不上（字幕时间线含 pause 间隔）。
+        // 用户暂停：主动退出让 event_pump 关闭 session 并在 resume 时重建——否则服务端
+        // idle 15s 后会发 4008（"客户端超过15秒未发送音频"）把整场会议判死。
+        if !finished && paused.load(Ordering::Relaxed) {
+            return SessionExit::Paused;
+        }
+        // 1) 排空 audio queue 灌进 session，同时把 PCM 编码追加到本地 OGG。
+        //    暂停时前端已 stopAudioLevel 停掉 cpal 采集，正常无帧到达；下方 send_audio
+        //    的 paused gate 是防御：共享 stream 被其他 holder 占着没真停时，丢帧不识别。
         loop {
             match audio_rx.try_recv() {
                 Ok(pcm) => {
@@ -888,8 +981,8 @@ fn attempt_reconnect<R: Runtime>(
     last_reason: &str,
 ) -> Option<Box<dyn MeetingSession>> {
     // 指数退避：base * 2^(attempt-1)，封顶 cap。attempt 从 1 开始。
-    let backoff_ms = (RECONNECT_BACKOFF_BASE.as_millis() as u64)
-        .saturating_mul(1u64 << (attempt - 1).min(20));
+    let backoff_ms =
+        (RECONNECT_BACKOFF_BASE.as_millis() as u64).saturating_mul(1u64 << (attempt - 1).min(20));
     let backoff = Duration::from_millis(backoff_ms.min(RECONNECT_BACKOFF_CAP.as_millis() as u64));
 
     let _ = app.emit(
@@ -923,30 +1016,39 @@ fn attempt_reconnect<R: Runtime>(
         },
     );
 
+    open_session_await_ready(provider, config)
+}
+
+/// provider.open() + 轮询到首个 Ready（最多 8s）。失败 / 超时 / 握手 Error 都返回 None。
+/// reconnect（带 backoff）和 resume（暂停后重建，无 backoff）共用这段握手。
+fn open_session_await_ready(
+    provider: &dyn MeetingAsrProvider,
+    config: &MeetingSessionConfig,
+) -> Option<Box<dyn MeetingSession>> {
     let mut session = match provider.open(config.clone()) {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("[meetings] reconnect open failed: {e}");
+            log::warn!("[meetings] open failed: {e}");
             return None;
         }
     };
-    // 等新一次 Ready，最多 8s——超时也算失败，外层会再试 backoff。
+    // 等新一次 Ready，最多 8s——超时也算失败。
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
         match session.next_event(Duration::from_millis(200)) {
             MeetingEvent::Ready { .. } => return Some(session),
             MeetingEvent::Error { code, message } => {
-                log::warn!("[meetings] reconnect handshake error: {code}: {message}");
+                log::warn!("[meetings] handshake error: {code}: {message}");
                 return None;
             }
             MeetingEvent::NetworkExit(m) => {
-                log::warn!("[meetings] reconnect handshake network exit: {m}");
+                log::warn!("[meetings] handshake network exit: {m}");
                 return None;
             }
             _ => continue,
         }
     }
-    log::warn!("[meetings] reconnect handshake timeout");
+    log::warn!("[meetings] handshake timeout");
     None
 }
 
@@ -1088,8 +1190,7 @@ pub fn meeting_transcript_write<R: Runtime>(
         return Err("invalid date".into());
     }
     let day_dir = db::ensure_recordings_dir(&app)?.join(&date);
-    std::fs::create_dir_all(&day_dir)
-        .map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
+    std::fs::create_dir_all(&day_dir).map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
     let abs = day_dir.join(format!("{meeting_id}.jsonl"));
     std::fs::write(&abs, payload).map_err(|e| format!("write {}: {e}", abs.display()))?;
     Ok(format!("recordings/{date}/{meeting_id}.jsonl"))
@@ -1119,6 +1220,55 @@ pub fn meeting_transcript_delete<R: Runtime>(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("delete {}: {e}", abs.display())),
     }
+}
+
+/// 双语翻译的译文行 append 入参（前端逐段翻完，会议 stop 后批量落库）。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationAppendItem {
+    sentence_id: i64,
+    translation: String,
+}
+
+#[derive(serde::Serialize)]
+struct TranslationLine<'a> {
+    #[serde(rename = "sentenceId")]
+    sentence_id: i64,
+    translation: &'a str,
+}
+
+/// 把译文以 append 模式补写进已 finalize 的会议 jsonl（每行 `{sentenceId, translation}`）。
+/// 不 truncate、不碰原文行；读取时按 sentenceId 合并。文件不存在直接报错（不该发生）。
+#[tauri::command]
+pub fn meeting_translation_append<R: Runtime>(
+    app: AppHandle<R>,
+    transcript_path: String,
+    items: Vec<TranslationAppendItem>,
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let sub = validated_transcript_subpath(&transcript_path)?;
+    let abs = db::recordings_dir(&app)?.join(sub);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&abs)
+        .map_err(|e| format!("open append {}: {e}", abs.display()))?;
+    use std::io::Write as _;
+    let mut buf = String::new();
+    for it in &items {
+        let line = TranslationLine {
+            sentence_id: it.sentence_id,
+            translation: &it.translation,
+        };
+        let json = serde_json::to_string(&line).map_err(|e| format!("serialize: {e}"))?;
+        buf.push_str(&json);
+        buf.push('\n');
+    }
+    file.write_all(buf.as_bytes())
+        .map_err(|e| format!("append {}: {e}", abs.display()))?;
+    file.flush().map_err(|e| format!("flush: {e}"))?;
+    Ok(())
 }
 
 // dest_path 由前端 plugin-dialog::save() 给出（系统 Save 对话框选的绝对路径）；
@@ -1176,8 +1326,7 @@ pub fn meeting_summary_write<R: Runtime>(
         return Err("invalid date".into());
     }
     let day_dir = db::ensure_recordings_dir(&app)?.join(&date);
-    std::fs::create_dir_all(&day_dir)
-        .map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
+    std::fs::create_dir_all(&day_dir).map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
     let abs = day_dir.join(format!("{meeting_id}.summary.md"));
     std::fs::write(&abs, content).map_err(|e| format!("write {}: {e}", abs.display()))?;
     Ok(format!("recordings/{date}/{meeting_id}.summary.md"))

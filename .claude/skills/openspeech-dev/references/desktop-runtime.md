@@ -24,6 +24,14 @@
 
 ---
 
+## 单实例（single-instance）
+
+- `tauri-plugin-single-instance` 守卫，**必须是 `Builder` 注册的第一个插件**——要在任何窗口创建前拦截第二个进程。
+- 第二个实例启动即被掐，其 `argv/cwd` 通过回调转发给已运行实例；回调里走 `show_main_window` 把主窗拉到前台（含 macOS 切回 Regular / Dock 图标）。
+- macOS `.app` 双击本就被 LaunchServices 防重，此插件主要兜 **CLI 直跑二进制 + Win/Linux** 的多开。
+
+---
+
 ## macOS Cmd+Q 必须自建 App Menu 接管
 
 - Tauri 2 在 macOS 下若无 `app.set_menu`，Cmd+Q 走 NSApp `terminate:` **绕过** Rust 与前端所有拦截直接退出。

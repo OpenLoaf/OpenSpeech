@@ -137,17 +137,13 @@ pub async fn analyze_dictionary_correction<R: Runtime>(
         return Err(format!("{ERR_HTTP}: HTTP {status}: {txt}"));
     }
 
-    let raw_text = resp
-        .text()
-        .await
-        .map_err(|e| format!("{ERR_PARSE}: {e}"))?;
+    let raw_text = resp.text().await.map_err(|e| format!("{ERR_PARSE}: {e}"))?;
     log::info!(
         "[dict_agent] response history_id={:?}\n{}",
         input.history_id,
         raw_text
     );
-    let parsed: Value =
-        serde_json::from_str(&raw_text).map_err(|e| format!("{ERR_PARSE}: {e}"))?;
+    let parsed: Value = serde_json::from_str(&raw_text).map_err(|e| format!("{ERR_PARSE}: {e}"))?;
 
     let content = parsed
         .get("choices")
@@ -365,13 +361,9 @@ pub async fn extract_dictionary_terms<R: Runtime>(
         return Err(format!("{ERR_HTTP}: HTTP {status}: {txt}"));
     }
 
-    let raw_text = resp
-        .text()
-        .await
-        .map_err(|e| format!("{ERR_PARSE}: {e}"))?;
+    let raw_text = resp.text().await.map_err(|e| format!("{ERR_PARSE}: {e}"))?;
     log::info!("[dict_extract] response\n{}", raw_text);
-    let parsed: Value =
-        serde_json::from_str(&raw_text).map_err(|e| format!("{ERR_PARSE}: {e}"))?;
+    let parsed: Value = serde_json::from_str(&raw_text).map_err(|e| format!("{ERR_PARSE}: {e}"))?;
 
     let content = parsed
         .get("choices")
@@ -458,11 +450,7 @@ fn build_extract_user_message(text: &str, dict: &[DictAgentEntry]) -> String {
                         .collect();
                     format!("[{}]", parts.join(", "))
                 };
-                format!(
-                    "- term=\"{}\" | aliases={}",
-                    escape_quote(&e.term),
-                    aliases,
-                )
+                format!("- term=\"{}\" | aliases={}", escape_quote(&e.term), aliases,)
             })
             .collect::<Vec<_>>()
             .join("\n")

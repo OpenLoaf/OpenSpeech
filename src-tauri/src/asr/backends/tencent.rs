@@ -54,10 +54,9 @@ fn map_tencent_frame(ev: TencentEvent) -> RealtimeBackendEvent {
                 Some(voice_id)
             },
         },
-        TencentEvent::Partial { sentence_id, text } => RealtimeBackendEvent::Partial {
-            sentence_id,
-            text,
-        },
+        TencentEvent::Partial { sentence_id, text } => {
+            RealtimeBackendEvent::Partial { sentence_id, text }
+        }
         TencentEvent::Final { sentence_id, text } => {
             RealtimeBackendEvent::Final { sentence_id, text }
         }

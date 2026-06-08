@@ -184,7 +184,10 @@ pub fn dispatch(
             match (vendor, creds) {
                 (
                     CustomVendor::Tencent,
-                    DictationCredentials::Tencent { secret_id, secret_key },
+                    DictationCredentials::Tencent {
+                        secret_id,
+                        secret_key,
+                    },
                 ) => {
                     let app_id = provider_ref
                         .tencent_app_id
@@ -332,14 +335,20 @@ mod tests {
         let pr: ProviderRef = serde_json::from_str(json).unwrap();
         assert!(matches!(pr.mode, ProviderMode::Custom));
         assert_eq!(pr.active_custom_provider_id.as_deref(), Some("p1"));
-        assert!(matches!(pr.custom_provider_vendor, Some(CustomVendor::Tencent)));
+        assert!(matches!(
+            pr.custom_provider_vendor,
+            Some(CustomVendor::Tencent)
+        ));
     }
 
     #[test]
     fn provider_kind_strs_match_history_column() {
         // 防御性：若哪个 vendor-realtime 字符串改了，会让 history.provider_kind
         // 旧记录与新记录无法在 i18n 文案上对得上。
-        assert_eq!(provider_kind_str(&DictationBackend::SaasRealtime), "saas-realtime");
+        assert_eq!(
+            provider_kind_str(&DictationBackend::SaasRealtime),
+            "saas-realtime"
+        );
         assert_eq!(provider_kind_str(&DictationBackend::SaasFile), "saas-file");
     }
 }

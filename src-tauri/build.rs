@@ -15,9 +15,7 @@ fn main() {
             let trimmed = line.trim_start();
             // 仅匹配简单形式 `openloaf-saas = "x.y.z"`；改为 inline-table（含
             // features 等）后须扩展到 `openloaf-saas = { version = "x" ... }`。
-            if trimmed.starts_with("openloaf-saas ")
-                || trimmed.starts_with("openloaf-saas=")
-            {
+            if trimmed.starts_with("openloaf-saas ") || trimmed.starts_with("openloaf-saas=") {
                 trimmed.split('"').nth(1).map(str::to_owned)
             } else {
                 None

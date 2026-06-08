@@ -81,8 +81,8 @@ mod backend {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("dev secrets mkdir {}: {e}", parent.display()))?;
         }
-        let json = serde_json::to_string_pretty(map)
-            .map_err(|e| format!("dev secrets serialize: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(map).map_err(|e| format!("dev secrets serialize: {e}"))?;
         std::fs::write(&p, json).map_err(|e| format!("dev secrets write {}: {e}", p.display()))?;
         #[cfg(unix)]
         {

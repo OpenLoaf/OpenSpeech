@@ -8,8 +8,8 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use tauri::{
-    utils::config::BackgroundThrottlingPolicy, AppHandle, LogicalPosition, Manager, Monitor,
-    Runtime, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, LogicalPosition, Manager, Monitor, Runtime, WebviewUrl, WebviewWindowBuilder,
+    utils::config::BackgroundThrottlingPolicy,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
@@ -104,8 +104,7 @@ fn spawn_follow_focus_watcher<R: Runtime>(app: &AppHandle<R>) {
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
         use std::time::Duration;
-        let mut tick =
-            tokio::time::interval(Duration::from_millis(FOLLOW_FOCUS_INTERVAL_MS));
+        let mut tick = tokio::time::interval(Duration::from_millis(FOLLOW_FOCUS_INTERVAL_MS));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // 第一拍 interval 立刻 fire，但此时窗口刚建好通常还没 show，会直接 skip。
         tick.tick().await;
@@ -173,8 +172,8 @@ fn follow_focus_tick<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(target_os = "macos")]
 fn enable_accepts_first_mouse<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     use objc::runtime::{
-        class_addMethod, class_getInstanceMethod, method_setImplementation, Class, Imp, Object,
-        Sel, BOOL, YES,
+        BOOL, Class, Imp, Object, Sel, YES, class_addMethod, class_getInstanceMethod,
+        method_setImplementation,
     };
     use objc::{msg_send, sel, sel_impl};
     use std::os::raw::c_char;
@@ -383,7 +382,10 @@ fn position_macos_native<R: Runtime>(
             if !s0.is_null() {
                 let f0: NSRect = msg_send![s0, frame];
                 cg_primary_height = f0.size.height;
-                log::warn!("[overlay] no NSScreen at origin (0,0); falling back to screens[0].height={:.1}", cg_primary_height);
+                log::warn!(
+                    "[overlay] no NSScreen at origin (0,0); falling back to screens[0].height={:.1}",
+                    cg_primary_height
+                );
             } else {
                 return Ok(false);
             }
@@ -425,7 +427,9 @@ fn position_macos_native<R: Runtime>(
                 // 非首次：保持原位，不强行回 main，避免把悬浮条从用户屏上拽走。
                 log::warn!(
                     "[overlay] focused window center ({:.1},{:.1} CG / {:.1} NS-y) outside any NSScreen → keep",
-                    win_cx, win_cy_cg, win_cy_ns
+                    win_cx,
+                    win_cy_cg,
+                    win_cy_ns
                 );
                 return Ok(true);
             }
@@ -463,12 +467,12 @@ fn position_macos_native<R: Runtime>(
             }
             log::info!(
                 "[overlay] first-time positioning fallback → CG primary screen (origin=({:.1},{:.1}))",
-                target_frame.origin.x, target_frame.origin.y
+                target_frame.origin.x,
+                target_frame.origin.y
             );
         }
 
-        let screen_key =
-            pack_origin(target_frame.origin.x as i32, target_frame.origin.y as i32);
+        let screen_key = pack_origin(target_frame.origin.x as i32, target_frame.origin.y as i32);
 
         let visible: NSRect = msg_send![target, visibleFrame];
         let ns_x = visible.origin.x + (visible.size.width - WIDTH) / 2.0;
@@ -491,11 +495,20 @@ fn position_macos_native<R: Runtime>(
         };
         log::info!(
             "[overlay] native position: frontmost=\"{}\" pid={} win_cg=({:.1},{:.1},{:.1}x{:.1}) → screen.frame.origin=({:.1},{:.1}) visibleFrame=({:.1},{:.1})/({:.1}x{:.1}) → setFrameOrigin=({:.1},{:.1})",
-            front_name, front_pid, win_x, win_y, win_w, win_h,
-            target_frame.origin.x, target_frame.origin.y,
-            visible.origin.x, visible.origin.y,
-            visible.size.width, visible.size.height,
-            ns_x, ns_y,
+            front_name,
+            front_pid,
+            win_x,
+            win_y,
+            win_w,
+            win_h,
+            target_frame.origin.x,
+            target_frame.origin.y,
+            visible.origin.x,
+            visible.origin.y,
+            visible.size.width,
+            visible.size.height,
+            ns_x,
+            ns_y,
         );
 
         let ns_window_ptr: *mut Object = match window.ns_window() {
@@ -616,7 +629,8 @@ fn promote_to_nonactivating_panel<R: Runtime>(window: &tauri::WebviewWindow<R>) 
 
         log::info!(
             "[overlay] promoted to NSPanel + nonactivating panel (styleMask {:#x} -> {:#x})",
-            current_mask, new_mask
+            current_mask,
+            new_mask
         );
     }
 }

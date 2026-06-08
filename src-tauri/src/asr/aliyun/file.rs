@@ -197,18 +197,11 @@ pub trait DashScopeClient: Send + Sync {
         language_hints: &[String],
     ) -> Result<String, FileTransError>;
 
-    async fn query_task(
-        &self,
-        api_key: &str,
-        task_id: &str,
-    ) -> Result<TaskOutput, FileTransError>;
+    async fn query_task(&self, api_key: &str, task_id: &str) -> Result<TaskOutput, FileTransError>;
 
     /// 拉 transcription_url 指向的 OSS JSON。这是 paraformer-v2 唯一能拿到正文
     /// 的路径——/api/v1/tasks/{id} 的 results[*].transcription 永远是空。
-    async fn fetch_transcription(
-        &self,
-        url: &str,
-    ) -> Result<TranscriptionPayload, FileTransError>;
+    async fn fetch_transcription(&self, url: &str) -> Result<TranscriptionPayload, FileTransError>;
 }
 
 pub struct ReqwestDashScopeClient {
@@ -284,11 +277,7 @@ impl DashScopeClient for ReqwestDashScopeClient {
         parse_submit_response(&raw)
     }
 
-    async fn query_task(
-        &self,
-        api_key: &str,
-        task_id: &str,
-    ) -> Result<TaskOutput, FileTransError> {
+    async fn query_task(&self, api_key: &str, task_id: &str) -> Result<TaskOutput, FileTransError> {
         let url = format!("{TASKS_URL}{task_id}");
         let resp = self
             .client
@@ -318,10 +307,7 @@ impl DashScopeClient for ReqwestDashScopeClient {
         Ok(resp.output)
     }
 
-    async fn fetch_transcription(
-        &self,
-        url: &str,
-    ) -> Result<TranscriptionPayload, FileTransError> {
+    async fn fetch_transcription(&self, url: &str) -> Result<TranscriptionPayload, FileTransError> {
         // OSS 临时签名 URL，自带认证；不要带 Bearer，否则签名校验冲突。
         let resp = self
             .client
@@ -529,17 +515,29 @@ mod tests {
             "request_id": "r"
         }"#;
         let resp: TaskResponse = serde_json::from_str(raw).unwrap();
-        assert_eq!(TaskStatus::from_str(&resp.output.task_status), TaskStatus::Succeeded);
+        assert_eq!(
+            TaskStatus::from_str(&resp.output.task_status),
+            TaskStatus::Succeeded
+        );
         assert_eq!(merge_transcriptions(&resp.output.results), "你好世界");
     }
 
     #[test]
     fn error_codes_are_stable() {
-        assert_eq!(FileTransError::Unauthenticated("x".into()).code(), "aliyun_unauthenticated");
-        assert_eq!(FileTransError::TaskFailed { msg: "x".into() }.code(), "aliyun_filetrans_failed");
+        assert_eq!(
+            FileTransError::Unauthenticated("x".into()).code(),
+            "aliyun_unauthenticated"
+        );
+        assert_eq!(
+            FileTransError::TaskFailed { msg: "x".into() }.code(),
+            "aliyun_filetrans_failed"
+        );
         assert_eq!(FileTransError::Timeout.code(), "aliyun_filetrans_timeout");
         assert_eq!(FileTransError::RateLimited.code(), "aliyun_rate_limited");
-        assert_eq!(FileTransError::Network("x".into()).code(), "aliyun_network_error");
+        assert_eq!(
+            FileTransError::Network("x".into()).code(),
+            "aliyun_network_error"
+        );
     }
 
     // ─── HTTP / 轮询 mock ───────────────────────────────────
@@ -593,7 +591,10 @@ mod tests {
             _api_key: &str,
             task_id: &str,
         ) -> Result<TaskOutput, FileTransError> {
-            self.captured.lock().unwrap().push(format!("query:{task_id}"));
+            self.captured
+                .lock()
+                .unwrap()
+                .push(format!("query:{task_id}"));
             match self.pop() {
                 Op::Query(r) => r,
                 Op::Submit(_) => panic!("expected Query op"),
