@@ -81,6 +81,18 @@
 
 ---
 
+## 会议「暂停」= 真停麦克风（栽过坑，2026-06-08）
+
+会议录制的 pause **必须停掉 cpal 采集流**（前端 `stores/meetings.ts::pause()` 调 `stopAudioLevel()`、`resume()` 调 `startAudioLevel()`），不能只设 Rust `meeting_pause` 的 paused flag。只设 flag → cpal stream 一直跑 → **macOS 状态栏橙色录音指示灯常亮** → 用户以为「点了暂停还在录」（用户实报 bug）。
+
+- **历史误设计**：早期注释声称「pause 时 audio writer 仍照录以保持音频/字幕时间线对齐」，但上游 `meetings/mod.rs::try_send_audio_pcm16` 在 paused 时就 `return` 丢帧，worker `run_session` 那段「pause 也写盘」根本收不到帧 —— 时间线对齐**从未生效**，代价（指示灯常亮）却照付。所以「真停麦克风」不牺牲任何既有行为。
+- **ref_count 配平**：cpal stream 的 ref_count 是 **dictation 与 meetings 共享的全局单例**。会议用 module-level `holdsAudioRef` 跟踪「当前是否持有 1 份 ref」：live 持有、paused 释放；`stop()`/`cancel()` 只在持有时 `stopAudioLevel`，否则从 paused 态 stop 会多减一次别人的 ref。`audio::start` 失败时 ref 不递增，故 resume 失败分支保持 `holdsAudioRef=false`。
+- **顺序契约**：pause 先 `meeting_pause`（设 flag 丢在途残帧）再 `stopAudioLevel`；resume 先 `startAudioLevel`（流就绪）再 `meeting_resume`（清 flag 放行识别）。resume 时 `startAudioLevel` 返回 false（设备被拔/占用）必须保持 paused + 报错，绝不在没有麦克风流时清 flag。
+- **暂停必须挂起 ASR session（否则 4008 杀会议）**：服务端腾讯 idle 15s 收不到音频会发 4008，真停麦克风后必然触发。worker 用 `SessionExit::Paused` 主动关 session：`run_session` loop 顶 `if !finished && paused` 退出 → `event_pump` Paused 分支 `drop(session)` 关 WS → 等待 resume(`!paused`)/stop(`audio_rx` Disconnected) → `open_session_await_ready` 重建（无 backoff、不计 reconnect_attempts）。复用既有 reconnect 的 `sentence_id_offset`/`time_offset_ms` 续接。**4008 在非暂停时仍走 `SessionExit::Error` 结束会议**（真网络问题，不动）。
+- **time_offset 锚 `audio_writer.written_ms()`，不是 vendor `end_ms`**：vendor end_ms 不含尾部静音，每次暂停/重连都让新段字幕 seek 越攒越早。reconnect 与 resume 两处结转都用 OGG 实际写入时长。**resume 的结转必须在握手写盘之后**：resume 握手窗口（最多 8s）cpal 已采集真实音频，要 `push_pcm16` 写盘保 OGG 连续，再 `time_offset_ms = written_ms()`——否则新段字幕早握手那段时长。
+- **暂停放行听写**：`hotkey::maybe_block_for_meeting` 用 `meetings::is_capturing()`（有会议 **且非暂停**）而非 `has_active()`，暂停态放行听写/翻译/Ask；audio fanout 仍用 `has_active()`（暂停时 try_send 内部 paused gate 丢帧）。
+- **pause/resume 并发守卫**：两者是 async，await 期间 view 还没翻，入口 gate 拦不住二次进入/与 stop 交错 → 双击致共享 ref_count 失衡（橙点不灭 / 误停听写）。用 module-level `pauseResumeInFlight` + 每个 await 后复查 view（被 stop 抢走则回滚已加的 cpal ref 再退出）。stop 走自己的 `stopInFlight`（用户结束动作不该被 pause/resume 挡）。resume 入口还须挡「听写进行中」（`useRecordingStore.getState().activeId !== null`）——UI「继续」按钮绕过 hotkey 拦截，否则两路同抢 cpal、听写串进会议字幕。
+
 ## 隐私边界（呼应 `docs/privacy.md`）
 
 - 录音仅落盘本机：`app_data_dir/recordings/<id>.wav`。

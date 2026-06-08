@@ -72,8 +72,8 @@ impl MeetingAudioWriter {
 
         let sr = NonZeroU32::new(MEETING_SAMPLE_RATE).unwrap();
         let ch = NonZeroU8::new(MEETING_CHANNELS as u8).unwrap();
-        let file = File::create(&abs_path)
-            .map_err(|e| format!("create {}: {e}", abs_path.display()))?;
+        let file =
+            File::create(&abs_path).map_err(|e| format!("create {}: {e}", abs_path.display()))?;
         let encoder = VorbisEncoderBuilder::new(sr, ch, BufWriter::new(file))
             .map_err(|e| format!("VorbisEncoderBuilder::new: {e}"))?
             .bitrate_management_strategy(VorbisBitrateManagementStrategy::QualityVbr {
@@ -111,8 +111,7 @@ impl MeetingAudioWriter {
 
         while self.pending.len() >= ENCODE_BLOCK_FRAMES {
             self.planar_buf[0].clear();
-            self.planar_buf[0]
-                .extend(self.pending.drain(..ENCODE_BLOCK_FRAMES));
+            self.planar_buf[0].extend(self.pending.drain(..ENCODE_BLOCK_FRAMES));
             self.encoder
                 .encode_audio_block(&self.planar_buf)
                 .map_err(|e| format!("encode_audio_block: {e}"))?;
@@ -139,6 +138,13 @@ impl MeetingAudioWriter {
             self.total_samples * 1000 / MEETING_SAMPLE_RATE as u64,
         );
         Ok(self.rel_path)
+    }
+
+    /// 已写入 OGG 的音频毫秒数（按 16k 采样换算）。worker 用它做 resume/reconnect
+    /// 的 time_offset 锚点——OGG 实际时长才是字幕时间戳要对齐的真相，vendor end_ms
+    /// 不含尾部静音会越攒越早。
+    pub fn written_ms(&self) -> u64 {
+        self.total_samples * 1000 / MEETING_SAMPLE_RATE as u64
     }
 
     pub fn rel_path(&self) -> &str {
@@ -189,7 +195,10 @@ impl MeetingTranscriptAppender {
             .truncate(true)
             .open(&abs_path)
             .map_err(|e| format!("create {}: {e}", abs_path.display()))?;
-        log::info!("[meetings] transcript writer opened: {}", abs_path.display());
+        log::info!(
+            "[meetings] transcript writer opened: {}",
+            abs_path.display()
+        );
         Ok(Self {
             file: BufWriter::new(file),
             abs_path,
