@@ -536,9 +536,12 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
 
                 if !os_synced {
                     // rdev 在 enigo 合成事件 / cmd-tab / 空间切换 / CGEventTap 短暂掉线
-                    // 期间会丢事件。两类不一致信号 + 各自的恢复策略：
+                    // 期间会丢事件，且 macOS 会在 🌐/Fn 被系统消费（如切输入法）时吞掉
+                    // press 只送 release。两类不一致信号只记日志、不做恢复：
                     //
                     //   1) ghost release（release 但 pressed 不含此键）—— 漏了 press。
+                    //      不补合成 press：PTT 在 release 时刻才补 press 等于启动后立即
+                    //      自取消，只会产生"提示音 + overlay 闪现"的幽灵脉冲。
                     //   2) ghost press（press 但 pressed 已含此键）—— 漏了 release。
                     //
                     // 仅在没有 OS 校准时走此分支（macOS/Linux 当前路径）。
@@ -556,48 +559,6 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                         );
                     }
 
-                    if ghost_release {
-                        // 合成"丢失的 press"：临时把 m insert 进 pressed，subset 匹配
-                        // bindings——任何 mods ⊆ pressed 的 binding 都算命中。pressed 里
-                        // 已有的其他真实 modifier 留着，让多键 binding 能正确命中。
-                        s.pressed.insert(m);
-                        let virtual_matching: HashSet<BindingId> = s
-                            .bindings
-                            .iter()
-                            .filter(|b| !b.mods.is_empty() && b.mods.is_subset(&s.pressed))
-                            .map(|b| b.id)
-                            .collect();
-                        let to_synth: Vec<(BindingId, String)> = s
-                            .bindings
-                            .iter()
-                            .filter(|b| {
-                                virtual_matching.contains(&b.id) && !s.active_ids.contains(&b.id)
-                            })
-                            .map(|b| (b.id, b.id_str.clone()))
-                            .collect();
-                        for (id, _) in &to_synth {
-                            s.active_ids.insert(*id);
-                        }
-                        let synth_count = to_synth.len();
-                        newly_pressed.extend(to_synth);
-                        let bindings_dump: Vec<String> = s
-                            .bindings
-                            .iter()
-                            .map(|b| format!("{}:{:?}", b.id_str, b.mods))
-                            .collect();
-                        log::warn!(
-                            "[modifier_only] ghost release recovery on {key:?} → \
-                             synthesized {synth_count} press (pressed={:?}, active={:?}, \
-                             bindings_count={}, bindings=[{}])",
-                            s.pressed,
-                            s.active_ids,
-                            bindings_dump.len(),
-                            bindings_dump.join(", "),
-                        );
-                        // pressed.insert 已经做了，跳过下面的"正常 pressed 更新"——
-                        // 直接做 release：从 pressed 移除让 release 路径正常执行。
-                    }
-
                     if is_press {
                         s.pressed.insert(m);
                     } else {
@@ -605,8 +566,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                     }
                 }
 
-                // 正常路径用 exact match 保留"修饰键集合完全相等"的语义；ghost 路径
-                // 已经把 pressed 清干净，subset 与 exact 等价。
+                // exact match 保留"修饰键集合完全相等"的语义。
                 let matching: HashSet<BindingId> = s
                     .bindings
                     .iter()

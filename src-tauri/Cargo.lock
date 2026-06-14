@@ -4451,7 +4451,7 @@ dependencies = [
 
 [[package]]
 name = "openspeech"
-version = "0.2.49-beta.5"
+version = "0.2.49-beta.6"
 dependencies = [
  "active-win-pos-rs",
  "anyhow",
