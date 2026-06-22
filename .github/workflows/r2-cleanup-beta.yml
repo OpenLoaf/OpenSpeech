@@ -1,0 +1,117 @@
+name: R2 cleanup (purge beta builds)
+
+# 一次性运维：清掉 Cloudflare R2 (bucket: openspeech) 里所有 beta 版本的二进制归档
+# （顶层前缀 v*-beta*/），保留全部正式版归档与顶层滚动 manifest（latest*.json /
+# download*.json）。复用 release.yml 同一套 R2_* secrets。
+#
+# 用法：Actions → 本 workflow → Run workflow
+#   1. 先用 mode=dry-run 跑一次，看 step 日志里的「将删除」清单与体积；
+#   2. 确认无误后再用 mode=delete 跑一次真删。
+#
+# 安全：delete step 对每个待删前缀二次校验必须含 `-beta` 才执行 rm，正式版与
+# 顶层 manifest 永不进入删除列表。
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run = 只列清单不删；delete = 真正删除 beta 归档'
+        required: true
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - delete
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT }}
+      AWS_DEFAULT_REGION:    auto
+      R2_BUCKET:             ${{ secrets.R2_BUCKET }}
+      MODE:                  ${{ inputs.mode }}
+    steps:
+      - name: List & classify top-level prefixes
+        run: |
+          set -euo pipefail
+          echo "Mode: $MODE | Bucket: $R2_BUCKET"
+          echo
+
+          echo "=== 顶层对象（manifest 等，保留）==="
+          aws s3api list-objects-v2 --bucket "$R2_BUCKET" --delimiter / \
+            --query 'Contents[].Key' --output text 2>/dev/null \
+            | tr '\t' '\n' | grep -v -e '^$' -e '^None$' || true
+          echo
+
+          echo "=== 顶层前缀分类 ==="
+          prefixes=$(aws s3api list-objects-v2 --bucket "$R2_BUCKET" --delimiter / \
+            --query 'CommonPrefixes[].Prefix' --output text 2>/dev/null \
+            | tr '\t' '\n' | grep -v -e '^$' -e '^None$' || true)
+
+          : > beta_prefixes.txt
+          total_del_objs=0
+          total_del_bytes=0
+          beta_count=0
+          for p in $prefixes; do
+            summ=$(aws s3 ls "s3://$R2_BUCKET/$p" --recursive --summarize 2>/dev/null | tail -2 || true)
+            objs=$(printf '%s\n' "$summ" | awk '/Total Objects/{print $NF}')
+            bytes=$(printf '%s\n' "$summ" | awk '/Total Size/{print $NF}')
+            objs=${objs:-0}; bytes=${bytes:-0}
+            if [[ "$p" == *-beta* ]]; then
+              printf '%-32s objs=%-4s bytes=%-13s [BETA → 将删]\n' "$p" "$objs" "$bytes"
+              echo "$p" >> beta_prefixes.txt
+              total_del_objs=$((total_del_objs + objs))
+              total_del_bytes=$((total_del_bytes + bytes))
+              beta_count=$((beta_count + 1))
+            else
+              printf '%-32s objs=%-4s bytes=%-13s [STABLE → 保留]\n' "$p" "$objs" "$bytes"
+            fi
+          done
+
+          echo
+          human=$(awk -v b="$total_del_bytes" 'BEGIN{printf "%.2f GiB", b/1073741824}')
+          echo "=== 将删除 ${total_del_objs} 个对象 / ${total_del_bytes} 字节 (${human})，覆盖 ${beta_count} 个 beta 前缀 ==="
+          echo
+          if [[ "$MODE" == "dry-run" ]]; then
+            echo "★ 当前 dry-run，未删除任何对象。确认清单后用 mode=delete 重新触发。"
+          fi
+
+      - name: Delete beta prefixes
+        if: ${{ inputs.mode == 'delete' }}
+        run: |
+          set -euo pipefail
+          if [[ ! -s beta_prefixes.txt ]]; then
+            echo "没有 beta 前缀可删，结束。"
+            exit 0
+          fi
+          while IFS= read -r p; do
+            [[ -z "$p" ]] && continue
+            case "$p" in
+              *-beta*) ;;
+              *) echo "跳过非 beta 前缀（不应出现）: $p"; continue ;;
+            esac
+            echo ">>> 删除 s3://$R2_BUCKET/$p"
+            aws s3 rm "s3://$R2_BUCKET/$p" --recursive --only-show-errors
+          done < beta_prefixes.txt
+          echo "删除完成。"
+
+      - name: Verify after delete
+        if: ${{ inputs.mode == 'delete' }}
+        run: |
+          set -euo pipefail
+          echo "=== 删除后剩余顶层前缀 ==="
+          aws s3api list-objects-v2 --bucket "$R2_BUCKET" --delimiter / \
+            --query 'CommonPrefixes[].Prefix' --output text 2>/dev/null \
+            | tr '\t' '\n' | grep -v -e '^$' -e '^None$' || true
+          echo
+          echo "=== 桶总用量 ==="
+          summ=$(aws s3 ls "s3://$R2_BUCKET" --recursive --summarize | tail -2)
+          echo "$summ"
+          bytes=$(printf '%s\n' "$summ" | awk '/Total Size/{print $NF}')
+          awk -v b="${bytes:-0}" 'BEGIN{printf "总计 %.2f GiB\n", b/1073741824}'
