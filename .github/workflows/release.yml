@@ -671,3 +671,17 @@ jobs:
           fi
           echo "Uploaded to R2: s3://${R2_BUCKET}/v${version}/"
 
+          # 发 beta 时顺手清掉历史 beta 归档：保留当前这个 beta + 全部正式版，删更早的 beta，
+          # 防止 R2 无限膨胀。失败不阻塞发版（已在前面 publish；逐个 rm 带 || true 兜底）。
+          # 只匹配版本前缀的 beta key（^v<数字>...-beta.../），根 manifest latest-beta.json 不受影响。
+          if [[ "$IS_BETA" == "true" ]]; then
+            keep="v${version}/"
+            betas=$(aws s3 ls "s3://${R2_BUCKET}" --recursive | awk '{print $4}' \
+              | grep -E '^v[0-9][^/]*-beta[^/]*/' | sed -E 's#/.*#/#' | sort -u || true)
+            for p in $betas; do
+              [[ "$p" == "$keep" ]] && continue
+              echo "prune old beta: $p"
+              aws s3 rm "s3://${R2_BUCKET}/$p" --recursive --only-show-errors || true
+            done
+          fi
+
