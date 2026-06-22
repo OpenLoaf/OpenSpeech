@@ -1,24 +1,35 @@
-name: R2 cleanup (purge beta builds)
+name: R2 cleanup (purge beta + prune old stable)
 
-# 一次性运维：清掉 Cloudflare R2 (bucket: openspeech) 里所有 beta 版本的二进制归档
-# （首段前缀含 -beta，如 v0.2.49-beta.6/），保留全部正式版归档与顶层滚动 manifest
-# （latest*.json / download*.json）。复用 release.yml 同一套 R2_* secrets。
+# 一次性/按需运维：清理 Cloudflare R2 (bucket: openspeech) 里的历史归档。
+#   - 永远删：所有 beta 版本前缀（v*-beta*/）
+#   - 可选删：正式版只保留最近 keep_stable 个（按 semver 排序），更老的正式版前缀也删
+#   - 永远留：最新 keep_stable 个正式版 + 顶层 manifest（latest*.json / download*.json）
+# 复用 release.yml 同一套 R2_* secrets。
 #
-# 分组不依赖 S3 delimiter/CommonPrefixes（R2 上为空），而是 aws s3 ls --recursive 拉全部
-# key 后按首段路径聚合。报告写成 artifact（report.txt / beta_prefixes.txt / totals.txt）。
-# delete step 对每个待删前缀二次校验必须含 -beta；删完自校验，若仍有 -beta key 残留则 exit 1。
+# 用法：Actions → 本 workflow → Run workflow
+#   1. 先 mode=dry-run（配合 keep_stable）看 artifact 报告里的「将删除」清单与体积；
+#   2. 确认后 mode=delete 真删。
+#
+# keep_stable=0 表示不动正式版（只清 beta，向后兼容旧行为）。
+# 安全：delete step 拒绝删除「最新正式版」前缀（latest 通道指向它）；删后自校验，
+# 仍有 beta 版本 key 残留则 exit 1。
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'dry-run = 只列清单不删；delete = 真正删除 beta 归档'
+        description: 'dry-run = 只列清单不删；delete = 真正删除'
         required: true
         type: choice
         default: dry-run
         options:
           - dry-run
           - delete
+      keep_stable:
+        description: '保留最近多少个正式版（0 = 全部保留，仅清 beta）'
+        required: true
+        type: string
+        default: '0'
 
 permissions:
   contents: read
@@ -33,11 +44,14 @@ jobs:
       AWS_DEFAULT_REGION:    auto
       R2_BUCKET:             ${{ secrets.R2_BUCKET }}
       MODE:                  ${{ inputs.mode }}
+      KEEP_STABLE:           ${{ inputs.keep_stable }}
     steps:
       - name: List & classify objects
         run: |
           set -euo pipefail
-          echo "Mode: $MODE | Bucket: $R2_BUCKET"
+          KEEP=${KEEP_STABLE:-0}
+          [[ "$KEEP" =~ ^[0-9]+$ ]] || KEEP=0
+          echo "Mode: $MODE | Bucket: $R2_BUCKET | keep_stable: $KEEP"
 
           aws s3 ls "s3://$R2_BUCKET" --recursive > all_objects.txt
           total_all=$(wc -l < all_objects.txt)
@@ -51,36 +65,61 @@ jobs:
           } END { for (g in objs) printf "%s\t%d\t%d\n", g, objs[g], bytes[g] }' \
             all_objects.txt | sort > groups.txt
 
-          : > beta_prefixes.txt
+          # 正式版列表（非 root、非 beta），按 semver 升序
+          awk -F'\t' '$1 != "(root)" && $1 !~ /-beta/ {print $1}' groups.txt | sort -V > stable.txt
+          n_stable=$(wc -l < stable.txt)
+          newest_stable=""
+          [[ "$n_stable" -gt 0 ]] && newest_stable=$(tail -1 stable.txt)
+          echo "$newest_stable" > newest_stable.txt
+
+          # 计算待删的「最老正式版」集合
+          : > drop_stable.txt
+          if [[ "$KEEP" -gt 0 && "$n_stable" -gt "$KEEP" ]]; then
+            drop=$((n_stable - KEEP))
+            head -n "$drop" stable.txt > drop_stable.txt
+          fi
+
+          : > del_prefixes.txt
           : > report.txt
-          del_objs=0; del_bytes=0; beta_count=0; keep_objs=0; keep_bytes=0
+          del_objs=0; del_bytes=0; del_count=0
+          keep_objs=0; keep_bytes=0
           while IFS=$'\t' read -r g o b; do
-            if [[ "$g" == *-beta* ]]; then
-              printf '%-34s objs=%-4s bytes=%s [BETA -> DELETE]\n' "$g" "$o" "$b" >> report.txt
-              echo "$g/" >> beta_prefixes.txt
-              del_objs=$((del_objs+o)); del_bytes=$((del_bytes+b)); beta_count=$((beta_count+1))
+            tag=""
+            if [[ "$g" == "(root)" ]]; then
+              tag="[ROOT-KEEP]"
+            elif [[ "$g" == *-beta* ]]; then
+              tag="[BETA -> DELETE]"
+            elif grep -qxF "$g" drop_stable.txt; then
+              tag="[STABLE-OLD -> DELETE]"
             else
-              printf '%-34s objs=%-4s bytes=%s [KEEP]\n' "$g" "$o" "$b" >> report.txt
+              tag="[STABLE-KEEP]"
+            fi
+            printf '%-34s objs=%-4s bytes=%s %s\n' "$g" "$o" "$b" "$tag" >> report.txt
+            if [[ "$tag" == *DELETE* ]]; then
+              echo "$g/" >> del_prefixes.txt
+              del_objs=$((del_objs+o)); del_bytes=$((del_bytes+b)); del_count=$((del_count+1))
+            else
               keep_objs=$((keep_objs+o)); keep_bytes=$((keep_bytes+b))
             fi
           done < groups.txt
 
           {
             echo "total_all_objects=$total_all"
-            echo "beta_prefix_count=$beta_count"
+            echo "keep_stable_target=$KEEP"
+            echo "stable_count_before=$n_stable"
+            echo "newest_stable=$newest_stable"
+            echo "delete_prefixes=$del_count"
             echo "delete_objects=$del_objs"
             echo "delete_bytes=$del_bytes"
             echo "keep_objects=$keep_objs"
             echo "keep_bytes=$keep_bytes"
           } > totals.txt
 
-          # job summary（Actions 页可视）
           {
-            echo "## R2 cleanup ($MODE)"
+            echo "## R2 cleanup ($MODE, keep_stable=$KEEP)"
             echo '```'
             cat totals.txt
             echo '```'
-            echo "### prefixes"
             echo '```'
             cat report.txt
             echo '```'
@@ -94,45 +133,55 @@ jobs:
           name: r2-cleanup-report
           path: |
             report.txt
-            beta_prefixes.txt
+            del_prefixes.txt
             totals.txt
           retention-days: 7
 
-      - name: Delete beta prefixes
+      - name: Delete prefixes
         if: ${{ inputs.mode == 'delete' }}
         run: |
           set -euo pipefail
-          if [[ ! -s beta_prefixes.txt ]]; then
-            echo "No beta prefixes to delete."
+          if [[ ! -s del_prefixes.txt ]]; then
+            echo "Nothing to delete."
             exit 0
           fi
+          newest=$(cat newest_stable.txt 2>/dev/null || true)
           while IFS= read -r p; do
             [[ -z "$p" ]] && continue
+            # 必须是版本前缀（以 / 结尾、v 开头），否则中止
             case "$p" in
-              *-beta*) ;;
-              *) echo "ABORT: non-beta prefix in delete list: $p"; exit 1 ;;
+              v*/) ;;
+              *) echo "ABORT: unexpected prefix in delete list: $p"; exit 1 ;;
             esac
+            # 绝不删最新正式版（latest 通道指向它）
+            if [[ -n "$newest" && "$p" == "$newest/" ]]; then
+              echo "ABORT: refusing to delete newest stable: $p"; exit 1
+            fi
             echo ">>> deleting s3://$R2_BUCKET/$p"
             aws s3 rm "s3://$R2_BUCKET/$p" --recursive --only-show-errors
-          done < beta_prefixes.txt
+          done < del_prefixes.txt
           echo "Delete done."
 
       - name: Verify after delete
         if: ${{ inputs.mode == 'delete' }}
         run: |
           set -euo pipefail
-          # 只数「版本前缀」里的 beta key；根 manifest latest-beta.json/download-beta.json 名字含 -beta，须排除
-          remaining=$(aws s3 ls "s3://$R2_BUCKET" --recursive | awk '{print $4}' | grep -cE '^v[0-9][^/]*-beta[^/]*/' || true)
+          # 只数版本前缀里的 beta key；根 manifest latest-beta.json/download-beta.json 名字含 -beta，须排除
+          remaining_beta=$(aws s3 ls "s3://$R2_BUCKET" --recursive | awk '{print $4}' | grep -cE '^v[0-9][^/]*-beta[^/]*/' || true)
+          stable_after=$(aws s3 ls "s3://$R2_BUCKET" --recursive | awk '{print $4}' \
+            | grep -E '^v[0-9]' | grep -vE '-beta' | sed -E 's#/.*#/#' | sort -u | grep -c . || true)
           summ=$(aws s3 ls "s3://$R2_BUCKET" --recursive --summarize | tail -2)
           bytes=$(printf '%s\n' "$summ" | awk '/Total Size/{print $NF}')
           {
             echo "## R2 cleanup verify"
-            echo "remaining_beta_keys=$remaining"
+            echo "remaining_beta_keys=$remaining_beta"
+            echo "stable_prefixes_after=$stable_after"
             echo "bucket_total_bytes=${bytes:-0}"
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "remaining_beta_keys=$remaining"
+          echo "remaining_beta_keys=$remaining_beta"
+          echo "stable_prefixes_after=$stable_after"
           echo "bucket_total_bytes=${bytes:-0}"
-          if [[ "$remaining" -ne 0 ]]; then
-            echo "ERROR: still $remaining beta keys left"; exit 1
+          if [[ "$remaining_beta" -ne 0 ]]; then
+            echo "ERROR: still $remaining_beta beta keys left"; exit 1
           fi
-          echo "OK: no beta keys remain."
+          echo "OK."
