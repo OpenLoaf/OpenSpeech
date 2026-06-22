@@ -121,7 +121,8 @@ jobs:
         if: ${{ inputs.mode == 'delete' }}
         run: |
           set -euo pipefail
-          remaining=$(aws s3 ls "s3://$R2_BUCKET" --recursive | awk '{print $4}' | grep -c -- '-beta' || true)
+          # 只数「版本前缀」里的 beta key；根 manifest latest-beta.json/download-beta.json 名字含 -beta，须排除
+          remaining=$(aws s3 ls "s3://$R2_BUCKET" --recursive | awk '{print $4}' | grep -cE '^v[0-9][^/]*-beta[^/]*/' || true)
           summ=$(aws s3 ls "s3://$R2_BUCKET" --recursive --summarize | tail -2)
           bytes=$(printf '%s\n' "$summ" | awk '/Total Size/{print $NF}')
           {
