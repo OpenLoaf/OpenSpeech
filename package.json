@@ -68,7 +68,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@openloaf/openspeech-frontend": "0.2.49",
+    "@openloaf/openspeech-frontend": "0.2.50-beta.0",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

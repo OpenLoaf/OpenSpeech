@@ -76,3 +76,6 @@ bun.lock
 
 # Sisyphus CLI 本地状态文件
 .sisyphus/
+
+# R2 清理 workflow 的本地报告产物
+.r2rep/

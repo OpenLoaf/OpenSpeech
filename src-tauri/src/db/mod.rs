@@ -359,5 +359,16 @@ CREATE INDEX IF NOT EXISTS idx_history_starred ON history(starred_at DESC) WHERE
 "#,
             kind: MigrationKind::Up,
         },
+        // v20：feedback 离线复现用——存 refine 触发那一刻实际注入的 context 段
+        // （ConversationHistory / MessageContext / TargetApp / HotWords / Domains 这些
+        // <system-tag> 块）。feedback 提交时与当前静态规则拼回 = 触发时的完整 system prompt，
+        // 让 context 相关 bug（如 ConversationHistory 诱导 refine 接话）可离线复现。只存
+        // context 段（~1-3KB），不存 35KB 静态规则。NULL = 没走 AI refine 或 v20 之前的老记录。
+        Migration {
+            version: 20,
+            description: "history_add_refine_context",
+            sql: "ALTER TABLE history ADD COLUMN refine_context TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
