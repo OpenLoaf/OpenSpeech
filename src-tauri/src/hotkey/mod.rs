@@ -25,7 +25,7 @@ pub const HOTKEY_EVENT: &str = "openspeech://hotkey";
 pub const HOTKEY_BLOCKED_BY_MEETING_EVENT: &str = "openspeech://hotkey-blocked-by-meeting";
 
 /// 会议录制中需要拦的录音类绑定。
-fn is_recording_binding(id: BindingId) -> bool {
+pub(crate) fn is_recording_binding(id: BindingId) -> bool {
     matches!(
         id,
         BindingId::DictatePtt | BindingId::DictateToggle | BindingId::AskAi | BindingId::Translate
@@ -51,6 +51,13 @@ fn meeting_blocked_set() -> &'static Mutex<HashSet<BindingId>> {
 /// 这把锁与 `state.active` 数据锁是**两把不同的锁**：handler 只取 `state.active`，从不取
 /// 本锁，所以不会重新引入当年那个死锁。互调链（set_hotkey_recording → pause/resume）里
 /// 本锁只在被调函数内部获取，无重入。
+///
+/// **铁律：凡获取本锁的 tauri command 必须 async（或 `#[tauri::command(async)]`），绝不能在
+/// 主线程同步执行。** 持锁的 `apply_bindings`（async，worker 线程）调 `plugin.unregister/
+/// register` 时会 `run_on_main_thread + rx.recv` 阻塞等主线程；此时若另一个持锁命令
+/// （`set_hotkey_recording`/`esc_capture_*`）在主线程同步执行并 `lock()` 本锁，主线程就被
+/// 卡死、永远 pump 不到那个闭包 → worker↔主线程循环等死。录入 combo 类快捷键并保存时
+/// （apply_hotkey_config 与 set_hotkey_recording(false) 紧邻发出）规律性命中。
 fn hotkey_op_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -495,6 +502,10 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
     }
 
     if phase == "pressed" {
+        // 采集下沉:录音类绑定按下当帧后台预开采集(前端醒来后 adopt)。见 audio::preopen_dictation_capture。
+        if is_recording_binding(id) {
+            crate::audio::preopen_dictation_capture(app);
+        }
         crate::cue::play_start();
     }
 
@@ -595,7 +606,8 @@ fn resume_combos<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 ///    `openspeech://hotkey-recording`，让 Fn 等 DOM 收不到的键可录入
 /// 2. `pause_combos` / `resume_combos` —— 反/重注册 OS 层的 combo 快捷键，
 ///    避免用户按到已绑定的组合时误触发原功能
-#[tauri::command]
+// async：持 hotkey_op_lock，必须脱离主线程（见 hotkey_op_lock 铁律）。
+#[tauri::command(async)]
 pub fn set_hotkey_recording<R: Runtime>(app: AppHandle<R>, enabled: bool) {
     modifier_only::set_recording(enabled);
     let res = if enabled {
@@ -625,7 +637,8 @@ fn esc_shortcut() -> Shortcut {
     Shortcut::new(None, Code::Escape)
 }
 
-#[tauri::command]
+// async：持 hotkey_op_lock，必须脱离主线程（见 hotkey_op_lock 铁律）。
+#[tauri::command(async)]
 pub fn esc_capture_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let _op = hotkey_op_lock().lock().unwrap_or_else(|e| e.into_inner());
     let plugin = app.global_shortcut();
@@ -648,7 +661,8 @@ pub fn esc_capture_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+// async：持 hotkey_op_lock，必须脱离主线程（见 hotkey_op_lock 铁律）。
+#[tauri::command(async)]
 pub fn esc_capture_stop<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let _op = hotkey_op_lock().lock().unwrap_or_else(|e| e.into_inner());
     let plugin = app.global_shortcut();

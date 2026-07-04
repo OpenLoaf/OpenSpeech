@@ -93,6 +93,17 @@
 - **暂停放行听写**：`hotkey::maybe_block_for_meeting` 用 `meetings::is_capturing()`（有会议 **且非暂停**）而非 `has_active()`，暂停态放行听写/翻译/Ask；audio fanout 仍用 `has_active()`（暂停时 try_send 内部 paused gate 丢帧）。
 - **pause/resume 并发守卫**：两者是 async，await 期间 view 还没翻，入口 gate 拦不住二次进入/与 stop 交错 → 双击致共享 ref_count 失衡（橙点不灭 / 误停听写）。用 module-level `pauseResumeInFlight` + 每个 await 后复查 view（被 stop 抢走则回滚已加的 cpal ref 再退出）。stop 走自己的 `stopInFlight`（用户结束动作不该被 pause/resume 挡）。resume 入口还须挡「听写进行中」（`useRecordingStore.getState().activeId !== null`）——UI「继续」按钮绕过 hotkey 拦截，否则两路同抢 cpal、听写串进会议字幕。
 
+## 采集下沉:Rust 在 hotkey 按下当帧预开 cpal,前端 adopt(栽过坑,2026-07-01)
+
+**病**:听写 FSM 跑在主窗 webview;主窗隐藏时被 macOS WKWebView 节流,Tauri hotkey `listen` 回调延迟 2–4s → 用户以为没反应连按 → epoch 去抖把多余点按收掉 → 「按好几次才录上」+ 节流期语音丢失。Rust `pressed: dictate_ptt` 与前端 `[recording] event received` 的时间差(正常 <1s,卡顿 2–4s)是判据。
+
+**修**:采集生命周期从前端下沉到 Rust,前端从「驱动」变「接管」。**单一不变量:一次听写的 cpal ref 只取一次、放一次。**
+- Rust:`is_recording_binding` 按下 → `audio::preopen_dictation_capture`(fire-and-forget 后台线程,**不阻塞 rdev**——`start()` cpal 冷启动 ~100ms)→ `ensure_dictation_capture`(**持 `DICTATION_CAPTURE` 锁跨 `start()` 的原子入口**:rdev 预开与前端 adopt 并发只有一个真 start,另一个等锁后 adopt,ref 恒 +1)。`DICTATION_ENABLED`(前端按 canRecord 推)gate 预开,未登录不开麦(隐私)。
+- 前端(`recording/store.ts`):start 块用 `adopt_dictation_capture` 拿 Rust 生成的 recordingId(chrono 本地时间,对齐 `ids.ts` 格式),**不再 `startAudioLevel`**;`startRecordingSession(id, adopted=true)` 跳过 `audio_recording_start`(否则重置 session、丢预采音频);直接进 `recording`(不再有 preparing 冷启动窗口)。
+- **ref 放**:前端 stop/cancel 的 `stopAudioLevel` 放那唯一 +1;flag 由 `audio_recording_stop/cancel/force_stop` 清。
+- **释放铁律**:终态放弃(gate 未过 / preflight 失败 / adopt 出错)必须 `release_dictation_capture`(锁串行 stop+清 flag);但 **epoch-stale(被后续 press 抢占)绝不能 release**——那会杀掉获胜 press 已 adopt 的采集。批量迟到场景:press1/2 stale 保留采集,press3 adopt,一段录音。
+- **验证盲区**:ref 配平是集成级(单测 FSM 复刻覆盖不到),改后必须真机 `pnpm tauri dev` 盯 macOS 状态栏橙点确认不泄漏。
+
 ## 隐私边界（呼应 `docs/privacy.md`）
 
 - 录音仅落盘本机：`app_data_dir/recordings/<id>.wav`。

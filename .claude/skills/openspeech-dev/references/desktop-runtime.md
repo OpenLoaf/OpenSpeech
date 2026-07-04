@@ -161,6 +161,12 @@
 
 ---
 
+## 托盘「停止录音」兜底 + Fn 被 macOS 吞的卡死根因（栽过坑，2026-06-28）
+
+- **根因**：听写是 toggle 模式（`store.ts`：`released` 不参与 FSM，仅 `pressed` 开始/结束），停止只有「再按一次绑定键」一条路。绑定键若是 Fn 且 macOS `AppleFnUsageType≠0`（系统设置「按下🌐键时」= 切输入法 / Emoji / 听写），按 Fn 被系统层整键消费、rdev 收不到 → 停止那次按下永远到不了 app → 录音永久卡 `recording`、overlay 常驻、updater 一直 `deferred: recording`。5 分钟自动 abort 兜底早被移除（`store.ts:106`），无任何自动退路。
+- **退路（A）**：托盘录音中插「停止录音」项（`tray.rs::tray_set_recording` 由前端 rec/prep 进出各推一次；`TRAY_STOP_RECORDING_EVENT`）。前端 `store.ts` 的 `uTrayStop` 监听：`recording` 态 `emit("openspeech://hotkey",{id:activeId,phase:"pressed"})` **复用热键派发链做真正的 toggle off（转写不丢话）**，其余活跃态退回 `cancelByEsc`（保证回 idle、保存音频到历史）。这是唯一不依赖被吞热键的出口。
+- **根因可见化（C）**：`commands::fn_usage_type` 读 `defaults read com.apple.HIToolbox AppleFnUsageType`（缺省=0=Do Nothing，非 macOS 恒 0）；`HotkeyBinder.tsx` 在绑定含 Fn + macOS + 值≠0 时挂软警告 `hotkey:warning.fn_usage_conflict`，引导改成「不执行任何操作」。**app 在用户态拦不住系统层吞键，只能可见化 + 给退路。**
+
 ## Autostart
 
 - `syncAutostart(desired)` 只在期望 ≠ OS 实际时写注册项。

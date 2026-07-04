@@ -54,6 +54,32 @@ pub(crate) fn relaunch_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// macOS「按下 🌐/Fn 键时」的用途：0=不执行任何操作 1=更改输入法 2=显示 Emoji
+/// 3=开始听写。非 0 时,系统会在用户态之前消费掉整个 Fn 按键,绑定成裸 Fn 的听写
+/// 热键就收不到「停止」那次按下、toggle 模式下永远停不下来（客户实报卡死的根因）。
+/// 前端据此在设置/onboarding 提示用户改成「不执行任何操作」。读 com.apple.HIToolbox
+/// 域；缺省（从未改过）视为 0。非 macOS 恒返 0。
+#[tauri::command]
+pub(crate) fn fn_usage_type() -> i64 {
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("defaults")
+            .args(["read", "com.apple.HIToolbox", "AppleFnUsageType"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<i64>()
+                .unwrap_or(0),
+            _ => 0, // 键不存在 = 从未改过默认 = Do Nothing
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0
+    }
+}
+
 #[tauri::command]
 pub(crate) fn get_active_window_info_cmd() -> Option<active_app::ActiveWindowInfo> {
     active_app::get_active_window_info()

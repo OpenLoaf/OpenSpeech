@@ -593,6 +593,11 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 if super::maybe_block_for_meeting(&app_clone, id, "pressed") {
                     continue;
                 }
+                // 采集下沉:录音类绑定按下当帧后台预开 cpal 采集,不等被 macOS 节流的
+                // 隐藏主窗 webview(前端醒来后 adopt 同一采集)。fire-and-forget,不阻塞 rdev。
+                if super::is_recording_binding(id) {
+                    crate::audio::preopen_dictation_capture(&app_clone);
+                }
                 crate::cue::play_start();
                 // 先 emit 事件给前端 FSM——保证按键事件不被后续 overlay 操作阻塞。
                 // 之前 overlay::show() 放在 emit 前面，rdev 回调线程上同步调窗口操作

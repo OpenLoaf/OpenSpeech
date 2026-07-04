@@ -359,6 +359,10 @@ pub fn run() {
                         return;
                     }
                     match id {
+                        "tray::stop_recording" => {
+                            // 兜底退路：不唤出主窗、不依赖听写热键，直接让前端 FSM 结束录音。
+                            let _ = app.emit(TRAY_STOP_RECORDING_EVENT, ());
+                        }
                         "tray::feedback" => {
                             show_main_window(app);
                             let _ = app.emit(TRAY_OPEN_FEEDBACK_EVENT, ());
@@ -445,6 +449,8 @@ pub fn run() {
             window::show_main_window_cmd,
             tray::tray_refresh,
             tray::update_tray_labels,
+            tray::tray_set_recording,
+            commands::fn_usage_type,
             commands::open_network_settings,
             logging::open_log_dir,
             logging::read_recent_log_tail,
@@ -477,6 +483,9 @@ pub fn run() {
             audio::audio_level_start,
             audio::audio_level_stop,
             audio::audio_list_input_devices,
+            audio::adopt_dictation_capture,
+            audio::release_dictation_capture,
+            audio::set_dictation_capture_enabled,
             audio::audio_recording_start,
             audio::audio_recording_stop,
             audio::audio_recording_cancel,

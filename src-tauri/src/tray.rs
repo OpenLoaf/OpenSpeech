@@ -35,6 +35,9 @@ pub(crate) struct TrayLabels {
     pub open_dictionary: String,
     pub check_update: String,
     pub quit: String,
+    // 录音中才显示的「停止录音」项；空串 = 用英文兜底。
+    #[serde(default)]
+    pub stop_recording: String,
 }
 
 impl Default for TrayLabels {
@@ -52,11 +55,37 @@ impl Default for TrayLabels {
             open_dictionary: "Dictionary".into(),
             check_update: "Check for updates".into(),
             quit: "Quit OpenSpeech".into(),
+            stop_recording: "Stop recording".into(),
         }
     }
 }
 
 static TRAY_LABELS: Mutex<Option<TrayLabels>> = Mutex::new(None);
+
+// 当前是否正在录音 / 转写：true 时托盘顶部插入「停止录音」项。这是不依赖听写热键
+// 的兜底退路——当用户的 Fn 等绑定键被 macOS 系统层吞掉（按 🌐 切输入法 / Emoji /
+// Dictation）时，toggle 模式下没有第二次按下就永远停不下来，托盘是唯一保底出口。
+static TRAY_RECORDING: Mutex<bool> = Mutex::new(false);
+
+fn tray_recording_active() -> bool {
+    TRAY_RECORDING.lock().map(|g| *g).unwrap_or(false)
+}
+
+// 前端录音状态机进入 / 离开「正在录音」时各调一次，使「停止录音」项随录音出现 / 消失。
+#[tauri::command]
+pub(crate) fn tray_set_recording(app: tauri::AppHandle, active: bool) {
+    let changed = TRAY_RECORDING
+        .lock()
+        .map(|mut g| {
+            let prev = *g;
+            *g = active;
+            prev != active
+        })
+        .unwrap_or(false);
+    if changed {
+        rebuild_tray_menu(&app);
+    }
+}
 
 fn current_tray_labels() -> TrayLabels {
     TRAY_LABELS
@@ -154,7 +183,14 @@ pub(crate) fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::R
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
 
-    MenuBuilder::new(app)
+    let mut builder = MenuBuilder::new(app);
+    // 录音中：顶部插入「停止录音」+ 分隔线，让兜底退路第一眼可见。
+    if tray_recording_active() {
+        let stop = MenuItemBuilder::with_id("tray::stop_recording", &labels.stop_recording)
+            .build(app)?;
+        builder = builder.item(&stop).separator();
+    }
+    builder
         .item(&home)
         .item(&toolbox)
         .item(&history)

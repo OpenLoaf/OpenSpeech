@@ -18,3 +18,6 @@ pub(crate) const TRAY_OPEN_HISTORY_EVENT: &str = "openspeech://tray-open-history
 pub(crate) const TRAY_OPEN_FEEDBACK_EVENT: &str = "openspeech://tray-open-feedback";
 pub(crate) const TRAY_CHECK_UPDATE_EVENT: &str = "openspeech://tray-check-update";
 pub(crate) const TRAY_SELECT_MIC_EVENT: &str = "openspeech://tray-select-mic";
+// 录音中托盘「停止录音」：不依赖可能被 macOS 系统层吞掉的听写热键的兜底退路，
+// 前端 FSM 收到后无条件结束当前录音（详见 tray.rs 录音项注释）。
+pub(crate) const TRAY_STOP_RECORDING_EVENT: &str = "openspeech://tray-stop-recording";
