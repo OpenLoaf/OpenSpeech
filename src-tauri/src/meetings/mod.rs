@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::asr::byok::{
-    DictationBackend, DictationModality, ProviderRef, dispatch as dispatch_dictation_backend,
+    dispatch as dispatch_dictation_backend, DictationBackend, DictationModality, ProviderRef,
 };
 use crate::asr::meeting::saas::SaasMeetingProvider;
 use crate::asr::meeting::tencent_speaker::TencentSpeakerProvider;
@@ -34,7 +34,7 @@ use crate::asr::meeting::{MeetingAsrProvider, MeetingEvent, MeetingSession, Meet
 use crate::audio::is_valid_date_segment;
 use crate::db;
 use crate::meetings::writers::{MeetingAudioWriter, MeetingTranscriptAppender};
-use crate::openloaf::{RefreshOutcome, SharedOpenLoaf, handle_session_expired};
+use crate::openloaf::{handle_session_expired, RefreshOutcome, SharedOpenLoaf};
 
 mod writers;
 
@@ -126,7 +126,7 @@ pub struct ReconnectPayload {
 /// 真实场景下连一帧 PCM 都送不到，握手成功 15s 后必触发腾讯 4008。
 struct ActiveMeeting {
     meeting_id: String,
-    #[allow(dead_code)]
+    /// 落 history.provider_kind 用（"saas" / "tencent" ...）。
     provider_id: String,
     audio_tx: Sender<Vec<u8>>,
     paused: Arc<AtomicBool>,
@@ -573,17 +573,54 @@ pub struct MeetingStopResult {
     pub duration_ms: u64,
     pub audio_path: String,
     pub transcript_path: String,
+    /// Rust 侧是否已经把 history 主行落库。前端见 true 就跳过自己那次 insert，
+    /// 只补 speaker_names / 译文这些增量字段。
+    pub history_inserted: bool,
 }
 
+/// `persist` = 这场会议要不要由 Rust 直接落 history 主行。
+///
+/// - `Some(true)`：正常结束且用户开着历史保留 → Rust 在 finalize 后立刻落库。
+///   这一步是为了不再依赖「前端拿到返回值之后还能正常跑完」——IPC 抖动、JS 异常、
+///   webview 被杀都发生在这一步之后，而那正是 0.2.51 之前整场会议凭空消失的原因。
+/// - `Some(false)` / `None`：cancel 路径，或不认识这个参数的旧版前端 → 只 finalize
+///   文件，落库仍归前端。默认 false 而不是 true：老前端 cancel 时同样不传参，
+///   默认 true 会给「用户主动取消的会议」误插一行。
 #[tauri::command]
-pub async fn meeting_stop<R: Runtime>(app: AppHandle<R>) -> Result<MeetingStopResult, String> {
-    tauri::async_runtime::spawn_blocking(move || meeting_stop_impl(app))
+pub async fn meeting_stop<R: Runtime>(
+    app: AppHandle<R>,
+    persist: Option<bool>,
+) -> Result<MeetingStopResult, String> {
+    let app_blocking = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || meeting_stop_impl(app_blocking))
         .await
-        .map_err(|e| format!("meeting_stop join: {e}"))?
+        .map_err(|e| format!("meeting_stop join: {e}"))??;
+    let StopOutcome {
+        mut result,
+        meeting_id,
+        provider_kind,
+    } = outcome;
+
+    if persist.unwrap_or(false) {
+        match persist_meeting_history(&app, &result, &meeting_id, &provider_kind).await {
+            Ok(inserted) => result.history_inserted = inserted,
+            // 落库失败不能反过来把 stop 判死：音频与逐字稿都已完好落盘，后面还有
+            // 前端自己的 insert、以及下次启动的孤儿扫描两道兜底。
+            Err(e) => log::warn!("[meetings] persist history on stop failed: {e}"),
+        }
+    }
+    Ok(result)
 }
 
-fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<MeetingStopResult, String> {
-    let (worker_handle, meeting_id, total_ms, audio_path, transcript_path) = {
+/// meeting_stop_impl 的返回：给前端的结果 + 落库要用、但没必要外传的字段。
+struct StopOutcome {
+    result: MeetingStopResult,
+    meeting_id: String,
+    provider_kind: String,
+}
+
+fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<StopOutcome, String> {
+    let (worker_handle, meeting_id, total_ms, audio_path, transcript_path, provider_kind) = {
         let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
         let mut a = slot.take().ok_or("no active meeting")?;
         let total_ms = a.elapsed_baseline_ms
@@ -600,6 +637,7 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<MeetingStopResult,
             total_ms,
             a.audio_rel_path,
             a.transcript_rel_path,
+            a.provider_id,
         )
     };
 
@@ -616,12 +654,127 @@ fn meeting_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<MeetingStopResult,
             elapsed_ms: total_ms,
         },
     );
-    let _ = app.emit(EVENT_END, meeting_id);
-    Ok(MeetingStopResult {
-        duration_ms: total_ms,
-        audio_path,
-        transcript_path,
+    let _ = app.emit(EVENT_END, meeting_id.clone());
+    Ok(StopOutcome {
+        result: MeetingStopResult {
+            duration_ms: total_ms,
+            audio_path,
+            transcript_path,
+            history_inserted: false,
+        },
+        meeting_id,
+        provider_kind,
     })
+}
+
+// ---------- stop 兜底落库 ----------
+//
+// 历史上 history 行只由前端在拿到 meeting_stop 返回值之后插入。那一步排在 IPC
+// 之后，前端任何一次异常（invoke reject、JS 抛错、webview 被杀）都会让整场会议
+// 只剩下磁盘上的 ogg + jsonl，历史列表里查无此人——只能等下次启动的孤儿扫描。
+// 这里把落库挪到 finalize 之后、返回之前：跨过 IPC 边界时，行已经在库里了。
+
+/// 从已 finalize 的 jsonl 拼回主历史 text——与前端 `buildPlainTranscript` 同语义：
+/// 只取正文行、trim、丢掉空串、按行 join。
+///
+/// 译文行形如 `{"sentenceId":N,"translation":"..."}`（stop 之后前端才 append），
+/// 没有 text 字段，在这里被跳过。
+fn plain_transcript_from_jsonl(abs: &std::path::Path) -> Result<String, String> {
+    let raw = std::fs::read_to_string(abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
+    let mut out: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // 单行坏 JSON 不该毁掉整场会议——跳过继续读下一行。
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(text) = v.get("text").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let text = text.trim();
+        if !text.is_empty() {
+            out.push(text.to_owned());
+        }
+    }
+    Ok(out.join("\n"))
+}
+
+/// 落一行 `type='meeting'` 的 history。返回是否真的插入了——一句话都没识别出来的
+/// 空会议不建记录，与前端 `hasContent` 口径一致。
+///
+/// 复用 tauri-plugin-sql 的连接池而不是自己再开一个：同一个 SQLite 文件被两个
+/// pool 并发写会撞 `database is locked`，且迁移到第几版只有插件那份连接说得准。
+/// 插件的 pool 要等前端 `Database.load()` 之后才在 map 里，会议能开起来就说明
+/// 前端早就 load 过了；真没有就报错交给上层降级。
+///
+/// `INSERT OR IGNORE`：前端旧版本仍会自己再插一次，主键撞上时静默跳过而不是
+/// 让谁报错。
+async fn persist_meeting_history<R: Runtime>(
+    app: &AppHandle<R>,
+    result: &MeetingStopResult,
+    meeting_id: &str,
+    provider_kind: &str,
+) -> Result<bool, String> {
+    let sub = validated_transcript_subpath(&result.transcript_path)?;
+    let abs = db::recordings_dir(app)?.join(sub);
+    let text = plain_transcript_from_jsonl(&abs)?;
+    if text.is_empty() {
+        log::info!("[meetings] history insert skipped: empty transcript ({meeting_id})");
+        return Ok(false);
+    }
+
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("clock before epoch: {e}"))?
+        .as_millis() as i64;
+
+    let instances = app.state::<tauri_plugin_sql::DbInstances>();
+    let map = instances.0.read().await;
+    let pool = map
+        .get(db::DB_URL)
+        .ok_or_else(|| format!("db not loaded: {}", db::DB_URL))?;
+    // 只开了 sqlite feature 时 DbPool 只有一个变体，这个 let-else 是不可反驳的；
+    // 保留分支是为了将来插件多开一种 driver 时不用回头改这里。
+    #[allow(irrefutable_let_patterns)]
+    let tauri_plugin_sql::DbPool::Sqlite(pool) = pool
+    else {
+        return Err("unexpected non-sqlite pool".into());
+    };
+
+    let affected = sqlx::query(
+        r#"
+INSERT OR IGNORE INTO history (
+    id, type, text, status, duration_ms, created_at,
+    audio_path, transcript_path, provider_kind, meeting_id
+) VALUES (?1, 'meeting', ?2, 'success', ?3, ?4, ?5, ?6, ?7, ?8)
+"#,
+    )
+    .bind(meeting_id)
+    .bind(&text)
+    .bind(result.duration_ms as i64)
+    .bind(created_at)
+    .bind(&result.audio_path)
+    .bind(&result.transcript_path)
+    .bind(provider_kind)
+    .bind(meeting_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("insert meeting history: {e}"))?
+    .rows_affected();
+
+    if affected == 0 {
+        // 该 id 已有行（前端抢先插了 / 重复调用）——目的同样达成。
+        log::info!("[meetings] history row already exists ({meeting_id})");
+    } else {
+        log::info!(
+            "[meetings] history inserted from rust ({meeting_id}, {} chars)",
+            text.chars().count()
+        );
+    }
+    Ok(true)
 }
 
 // ---------- Worker：把 vendor 事件转成前端 emit ----------

@@ -164,21 +164,24 @@ raw transcript ──[call 1: refine system prompt]──▶ refined ──[call
 - userText = phase 1 输出的 `refinedSrc`，**不传 historyEntries**（phase 1 已经把历史/热词融入 refined 结果，phase 2 只翻译这一段干净文本）
 - 输出 `translation`
 
-### 输出形态（`general.translateOutputMode`）
+### 输出形态（`general.translateOutputMode` + `general.translateBilingualOrder`）
 
-| 形态 | UX | refinedText 落 history 的内容 |
+| 形态 | UX | 注入 / 剪贴板的最终文本 |
 |---|---|---|
-| `target_only`（默认） | phase 1 静默累计 token（pill 留在 `transcribing`/思考中），phase 2 切到 `translating` 才开始流式注入译文 | 仅 translation |
-| `bilingual` | phase 1 流式注入 refined（pill 切到 `injecting`），完成后注入 `\n\n`，phase 2 切到 `translating` 流式注入译文 | `${refinedSrc}\n\n${translation}` |
+| `target_only` | phase 1 静默累计 token（pill 留在 `transcribing`/思考中），phase 2 切到 `translating` 才开始流式注入译文 | 仅 translation |
+| `bilingual` + `translation_first`（默认） | 同 `target_only` 的静默 phase 1；phase 2 流式注入译文，收尾后把 refine 后的原文整段追加到译文下面 | `${translation}\n${refinedSrc}` |
+| `bilingual` + `source_first` | phase 1 流式注入 refined（pill 切到 `injecting`），完成后注入换行，phase 2 切到 `translating` 流式注入译文 | `${refinedSrc}\n${translation}` |
 
-`target_only` 默认把 phase 1 静默是为了避免"先注入中文 → 再清掉 → 注入英文"的视觉跳跃。`bilingual` 让用户保留原文做核对。
+`target_only` 把 phase 1 静默是为了避免"先注入中文 → 再清掉 → 注入英文"的视觉跳跃。`bilingual` 让用户保留原文做核对。三种形态下 `history.refined_text` 都只存译文（`translationOnlyText`），跟注入文本不是一回事。
+
+**为什么"译文在上"必须让原文放弃流式**：`injectIncremental` 只能按前缀往后追加（`fullText.startsWith(session.lastInjectedText)` 是硬前提），没有回头往已注入文本前面插字的能力。译文要占住最上面，原文就只能等 phase 2 收尾后整段补在下面——不是没做，是做不了。代价是 `translation_first` 下 phase 2 失败时原文一起丢（与 `target_only` 的失败语义一致，history 标 failed）。
 
 ### FSM 切换点
 
 `recording.ts` 翻译路径：
 
 1. 录音结束 → `transcribing`
-2. phase 1 流式（bilingual）/ 静默（target_only）
+2. phase 1 流式（bilingual + source_first）/ 静默（target_only、bilingual + translation_first）
 3. phase 1 done → 主动 `setState({ state: "translating" })`
 4. phase 2 onChunk 复用普通 `onChunk`（其内部仅在 `state === "transcribing"` 时切到 `injecting`，所以 `translating` 不会被覆盖，整个 phase 2 期间保持 `translating`）
 5. phase 2 done → 末尾兜底 paste + `idle`

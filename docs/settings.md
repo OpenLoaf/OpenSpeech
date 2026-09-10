@@ -29,7 +29,8 @@
 |---|---|
 | 界面语言 | UI 显示语言；默认跟随系统 |
 | 翻译目标语言 | 翻译听写快捷键命中后，转写文本最终被译成的语种。持久化字段 `general.translateTargetLang`，可选值 `en / zh / zh-TW / ja / ko / fr / de / es`。**不含 `follow_interface`**——翻译要求一个明确的目标语，否则中文用户的中文转写还是中文，没意义。默认 `en` |
-| 翻译输出形态 | 持久化字段 `general.translateOutputMode`，`target_only`（默认，仅输出译文，单次 chat 调用最快）/ `bilingual`（先输出 refine 后的源文，空行分隔，再追加译文，两次 chat 调用，慢但保留原文供核对）。流水线细节见 [ai-refine.md §翻译听写流水线](./ai-refine.md#翻译听写流水线translate-hotkey) |
+| 翻译输出形态 | 持久化字段 `general.translateOutputMode`，`target_only`（仅输出译文，单次 chat 调用最快）/ `bilingual`（默认，原文与译文都输出，换行分隔，两次 chat 调用，慢但保留原文供核对）。流水线细节见 [ai-refine.md §翻译听写流水线](./ai-refine.md#翻译听写流水线translate-hotkey) |
+| 双语排列顺序 | 持久化字段 `general.translateBilingualOrder`，仅 `translateOutputMode === "bilingual"` 时出现（设置页条件渲染，首页翻译 tab 也有一个切换按钮）。`translation_first`（默认，译文在上）/ `source_first`（原文在上）。译文才是按翻译键真正想要的东西，放最上面第一眼读到、也方便直接选中前半段发出去 |
 
 > 「听写语种」已从「常规」节移到「听写」分区——它是听写通道的属性而不是 UI 属性。详见下文「听写」节。
 

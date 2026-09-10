@@ -4451,7 +4451,7 @@ dependencies = [
 
 [[package]]
 name = "openspeech"
-version = "0.2.50"
+version = "0.2.51-beta.0"
 dependencies = [
  "active-win-pos-rs",
  "anyhow",
@@ -4482,6 +4482,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "sqlx",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
