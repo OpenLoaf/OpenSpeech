@@ -79,3 +79,7 @@ bun.lock
 
 # R2 清理 workflow 的本地报告产物
 .r2rep/
+
+# 本地 Codex/Agent 配置与技能目录（每位开发者可能不同，不入库）
+/.agents/
+/.codex/
