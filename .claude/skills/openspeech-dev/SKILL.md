@@ -81,6 +81,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 - **`reqwest` 走 `rustls`**（关 default-features，避免拖入 native-tls）
 - **`tauri` 启用 `tray-icon` feature**（托盘依赖，不可移除）
 - **`openloaf-saas` 跟随 `@openloaf-saas/sdk` Node 包对齐版本号**
+- **桌面前端依赖必须在 `src/package.json` 独立声明**：仅加到主仓不能保证私仓 npm 包构建成功；会议虚拟列表依赖曾因此漏装。
 
 ### 添加依赖的规范动作
 
