@@ -15,10 +15,10 @@
     "windows": [
       {
         "title": "OpenSpeech",
-        "width": 1140,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
+        "width": 1060,
+        "height": 740,
+        "minWidth": 720,
+        "minHeight": 480,
         "maxWidth": 1600,
         "maxHeight": 1100,
         "fullscreen": false,

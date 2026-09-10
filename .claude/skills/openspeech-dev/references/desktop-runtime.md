@@ -1,14 +1,14 @@
 # 桌面运行时（窗口 / 托盘 / 权限 / Autostart）
 
 > 何时读：改窗口配置、改关闭/最小化行为、改托盘菜单、加新 invoke、加系统权限申请、改开机自启。
-> 真相来源：`src-tauri/src/lib.rs`、`src-tauri/tauri.conf.json`、`src-tauri/capabilities/`、`src/components/Layout.tsx`。本文只写源码读不出的取舍。
+> 真相来源：`src-tauri/src/lib.rs`、`src-tauri/src/window.rs`、`src-tauri/tauri.conf.json`、`src-tauri/capabilities/`、`src/components/Layout.tsx`。本文只写源码读不出的取舍。
 
 ---
 
 ## 窗口与标题栏
 
 - 主窗口 `titleBarStyle: "Overlay"` + `hiddenTitle: true`：macOS 红绿灯嵌入内容区左上角。
-- 实际启动尺寸由 `lib.rs setup` 按主显示器 work area 自适应计算（取上限与屏幕可用空间的小值）。
+- 实际启动尺寸由 `window.rs` 按主显示器 work area 自适应计算。work area 边界优先于静态最小尺寸：空间不足时运行时同步下调 minimum，避免 Windows 笔记本 175% 缩放后被最小高度顶出任务栏；窗口按 work area 的物理坐标居中，兼容任务栏停靠在左侧或顶部。
 - **全屏被全局禁用**：
   - `tauri.conf.json` 初始 `fullscreen: false`。
   - macOS 端 `lib.rs::disable_macos_fullscreen` 清 `FullScreenPrimary` / 加 `FullScreenNone`，绿按钮降级为 zoom。

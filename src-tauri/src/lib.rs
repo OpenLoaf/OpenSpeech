@@ -6,7 +6,7 @@
 #![allow(unexpected_cfgs)]
 
 use tauri::{
-    Emitter, LogicalSize, Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 // 菜单构建器现仅 macOS App Menu 使用（托盘菜单已搬入 tray.rs）。
@@ -191,8 +191,8 @@ pub fn run() {
 
             // ---- 主窗口尺寸自适应屏幕 ----------------------------------------
             // 初始尺寸（tauri.conf.json）是上限值；小屏 / 高 DPI 时按主显示器
-            // work area 缩小，留出任务栏和边距。只影响首次启动，用户手动调大小后
-            // 由系统记住。
+            // work area 缩小，留出任务栏和边距。每次创建主窗口时只设置一次，
+            // 之后不干预用户手动调整。
             if let Some(window) = app.get_webview_window("main") {
                 // macOS 保留原生 decorations：titleBarStyle:Overlay + hiddenTitle 让红绿灯叠在内容上；
                 // Win/Linux 关掉 decorations，由前端 WindowControls 接管。
@@ -200,21 +200,7 @@ pub fn run() {
                 {
                     let _ = window.set_decorations(false);
                 }
-                if let Some(monitor) = window.primary_monitor().ok().flatten() {
-                    let scale = monitor.scale_factor();
-                    let wa = monitor.work_area();
-                    let wa_w = wa.size.width as f64 / scale;
-                    let wa_h = wa.size.height as f64 / scale;
-                    // 边距：上下左右各留一定空间，避免窗口贴边
-                    let pad_x = 80.0;
-                    let pad_y = 80.0;
-                    let ideal_w = 1140.0_f64.min(wa_w - pad_x);
-                    let ideal_h = 800.0_f64.min(wa_h - pad_y);
-                    let w = ideal_w.max(800.0);
-                    let h = ideal_h.max(600.0);
-                    let _ = window.set_size(LogicalSize::new(w, h));
-                    let _ = window.center();
-                }
+                window::fit_main_window_to_primary_monitor(&window);
             }
 
             // ---- 输入设备列表 warmup ----------------------------------------
