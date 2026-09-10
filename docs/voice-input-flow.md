@@ -79,7 +79,7 @@ Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idl
 5. **内存音频必须 zeroize**：`Zeroizing<Vec<u8>>` 容器承载采集期的 PCM；落盘到 WAV 文件后，内存副本立即 drop（zeroize 自动触发）。panic/崩溃 handler 同样显式清零，避免 crash dump / swap 泄露。
 6. **松开事件丢失兜底**：PTT 模式下若用户按下后立即 Cmd+Tab 切走应用，`tauri-plugin-global-shortcut` 的 Released 事件可能丢失。应用在进入 Recording 时，全局键事件监听线程（`rdev`）同时订阅所有已注册快捷键的修饰键 keystate；每 200 ms 查询一次当前物理键状态，若检测到原组合已全部释放则主动触发"松开"逻辑。无客户端时长硬上限，松开事件兜底只靠 keystate 轮询 + 服务端 2h max-duration。
 7. **录音设备变更**：录音中若系统默认输入设备切换（拔耳机 / 切蓝牙），cpal 会发出 device change 事件；静默 rebind 到新默认设备，悬浮条闪一下 `DEVICE SWITCHED` 提示，录音不中断；若 rebind 失败则进入 Error。
-8. **麦克风被其他应用抢占**：cpal stream error → 立即进入 Error，错误文案"麦克风被其他应用占用"。
+8. **麦克风不可用 / 被其他应用抢占**：共享使用不拦截；启动失败时按已知原因提示占用、权限或设备断开，并引导停止其他应用录音或切换麦克风。初始化超时不能直接判定为独占。录音中 cpal stream error → 立即进入 Error，提示麦克风连接中断及已知原因；未知原因不推断为占用。约 3 秒未检测到人声时仅提醒检查静音、输入音量及所选设备，录音继续。
 
 ### 录音中切换模式（听写 ↔ 翻译）
 

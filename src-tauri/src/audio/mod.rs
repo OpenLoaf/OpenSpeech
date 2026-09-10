@@ -101,7 +101,11 @@ fn classify_mic_start_error(raw: &str) -> &'static str {
         return "device-busy";
     }
     // 设备拔出 / 切走（USB / Bluetooth 断连）：cpal 在 build 阶段会报 DeviceNotAvailable。
-    if s.contains("devicenotavailable") || s.contains("device not available") {
+    if s.contains("devicenotavailable")
+        || s.contains("device not available")
+        || s.contains("device is no longer available")
+        || s.contains("device associated with the stream is no longer available")
+    {
         return "device-removed";
     }
     if s.contains("default_input_config")
@@ -110,11 +114,46 @@ fn classify_mic_start_error(raw: &str) -> &'static str {
     {
         return "device-config-unsupported";
     }
-    // ready 超时通常说明 cpal HAL 卡在 audio thread 初始化——多半也是被独占 / 驱动异常。
-    if s.contains("not ready within") {
-        return "device-busy";
-    }
+    // 初始化超时也可能是驱动卡住；没有明确证据时不能断言被其他应用独占。
     "generic"
+}
+
+#[cfg(test)]
+mod mic_error_tests {
+    use super::classify_mic_start_error;
+
+    #[test]
+    fn classifies_cpal_device_errors_before_config_context() {
+        let error = format!(
+            "default_input_config: {}",
+            cpal::DefaultStreamConfigError::DeviceNotAvailable
+        );
+        assert_eq!(classify_mic_start_error(&error), "device-removed");
+        assert_eq!(
+            classify_mic_start_error(&cpal::PlayStreamError::DeviceNotAvailable.to_string()),
+            "device-removed"
+        );
+    }
+
+    #[test]
+    fn does_not_infer_exclusive_use_from_a_timeout() {
+        assert_eq!(
+            classify_mic_start_error("audio stream not ready within 3000ms"),
+            "generic"
+        );
+        assert_eq!(
+            classify_mic_start_error("Device or resource busy"),
+            "device-busy"
+        );
+        assert_eq!(
+            classify_mic_start_error("device already in use"),
+            "device-busy"
+        );
+        assert_eq!(
+            classify_mic_start_error("Permission denied"),
+            "permission-denied"
+        );
+    }
 }
 const TICK_MS: u64 = 50; // 20Hz emit — 配合前端 28 根柱子，整个波形窗口 ≈ 1.4s
 const PEAK_GAIN: f32 = 2.8; // 普通对话音量（-25 dBFS 左右）就推到波形 60%+
@@ -1048,7 +1087,11 @@ fn spawn_monitor_thread<R: Runtime>(
                 move |e: cpal::StreamError| {
                     log::error!("[audio] cpal stream error: {e}");
                     fatal.store(true, Ordering::Relaxed);
-                    let _ = app_err.emit(AUDIO_STREAM_ERROR_EVENT, e.to_string());
+                    let detail = e.to_string();
+                    let _ = app_err.emit(AUDIO_STREAM_ERROR_EVENT, MicStartFailedPayload {
+                        reason: classify_mic_start_error(&detail),
+                        detail,
+                    });
                 }
             };
 
