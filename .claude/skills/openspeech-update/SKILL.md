@@ -53,7 +53,7 @@ fallback GitHub Release。COS 仅保留 `latest.json` / `latest-beta.json` 给 �
 - 前端 SSoT = npm registry 上的 `@openloaf/openspeech-frontend@<ver>`（**不是** `src/` 目录），主仓通过 `package.json.devDependencies` + `pnpm-lock.yaml` 锁定；`src/` 是独立私仓（`OpenLoaf/OpenSpeech-Frontend`），被主仓 `.gitignore` 忽略
 - Release 正文 SSoT = `docs/changelogs/{version}/zh.md`（缺失则正文回退默认占位，体验差）
 - Updater 运行时 endpoint SSoT = `src-tauri/src/update_channel.rs`（按 region × channel 4 选 1；`tauri.conf.json` 里的 `endpoints` 只是占位）
-- 分发主存储 = Cloudflare R2 bucket `openspeech`（不再单写 COS；COS 只剩 manifest 兜底）
+- 分发主存储 = Cloudflare R2 bucket `openspeech`（COS 兜底步骤已于 2026-05-07 移除，CI 不再写 COS）
 - Bundle targets **必须显式列表，无 msi**（MSI 拒收 SemVer pre-release）
 
 ---
@@ -404,8 +404,7 @@ curl -sL https://github.com/OpenLoaf/OpenSpeech/releases/latest/download/latest.
 curl -sI https://openspeech-r2.hexems.com/latest-beta.json  | grep -iE "(^HTTP|etag)"
 curl -sI https://openspeech-cdn.hexems.com/latest-beta.json | grep -iE "(^HTTP|etag|x-nws)"
 
-# 4. COS 老客户端兜底 manifest 也应已就位（≤0.2.30-beta.2 用户走这里）
-curl -s https://openspeech-1329813561.cos.accelerate.myqcloud.com/latest-beta.json | jq '.version'
+# 4. COS 兜底已于 2026-05-07（e749f69）从 CI 移除，manifest 停在 v0.2.29 / v0.2.30-beta.16 是正常的，不用查
 ```
 
 任一返回 `Not Found` / 4xx → publish 或上传没成功；CDN 出 404 + cf-ray 同时有腾讯云 header
