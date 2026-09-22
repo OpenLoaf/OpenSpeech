@@ -130,8 +130,8 @@ importers:
         version: 5.0.12(@types/react@19.2.14)(immer@11.1.7)(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
     devDependencies:
       '@openloaf/openspeech-frontend':
-        specifier: 0.2.50
-        version: 0.2.50(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
+        specifier: 0.2.51
+        version: 0.2.51(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.10.1
@@ -751,8 +751,8 @@ packages:
   '@open-draft/until@2.1.0':
     resolution: {integrity: sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg==}
 
-  '@openloaf/openspeech-frontend@0.2.50':
-    resolution: {integrity: sha512-LleI9h+OlqAwUFRFZR9wURBYkECa8fOjLY1yMc1sDrxG1opW+5RASFnm27JJA1JDj40eH+TC1B7PfXiYusysTw==}
+  '@openloaf/openspeech-frontend@0.2.51':
+    resolution: {integrity: sha512-SPfSppAUupNFSx8qWFsNB8Kj43nDSfD1Ub7DM8sslLqccPPwd47jLDJZKWKR2wlCIrqvuQWS6WCw8OK+cfrDjw==}
 
   '@reduxjs/toolkit@2.11.2':
     resolution: {integrity: sha512-Kd6kAHTA6/nUpp8mySPqj3en3dm0tdMIgbttnQ1xFMVpufoj+ADi8pXLBsd4xzTRHQa7t/Jv8W5UnCuW4kuWMQ==}
@@ -1019,8 +1019,17 @@ packages:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
+  '@tanstack/react-virtual@3.14.13':
+    resolution: {integrity: sha512-JbDTAwtzZ99aOeCrAfW5EsE5KSq5RWh6Af2dtFwyLIIk48Ja7vm6n4axu/43T3vfjFnEGJalxJ1wyYjSQD6bSg==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
   '@tanstack/virtual-core@3.14.0':
     resolution: {integrity: sha512-JLANqGy/D6k4Ujmh8Tr25lGimuOXNiaVyXaCAZS0W+1390sADdGnyUdSWNIfd49gebtIxGMij4IktRVzrdr12Q==}
+
+  '@tanstack/virtual-core@3.17.11':
+    resolution: {integrity: sha512-+ILjvtHup6Y2hzQ6YzwMgX1Q+oQpxEGOXCEsCNaPoIP0VxMbizIBTmYTDtkerkIQS8/CbP1BRuyt8V/8BCsy1g==}
 
   '@tauri-apps/api@2.10.1':
     resolution: {integrity: sha512-hKL/jWf293UDSUN09rR69hrToyIXBb8CjGaWC7gfinvnQrBVvnLr08FeFi38gxtugAVyVcTa5/FD/Xnkb1siBw==}
@@ -3944,13 +3953,14 @@ snapshots:
 
   '@open-draft/until@2.1.0': {}
 
-  '@openloaf/openspeech-frontend@0.2.50(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))':
+  '@openloaf/openspeech-frontend@0.2.51(@types/node@25.6.0)(@types/react@19.2.14)(immer@11.1.7)(react-is@19.2.5)(redux@5.0.1)(typescript@5.8.3)(use-sync-external-store@1.6.0(react@19.2.5))(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))':
     dependencies:
       '@base-ui/react': 1.4.1(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@fontsource-variable/geist': 5.2.8
       '@fontsource-variable/inter': 5.2.8
       '@fontsource/space-mono': 5.2.9
       '@tailwindcss/vite': 4.2.4(vite@7.3.2(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0))
+      '@tanstack/react-virtual': 3.14.13(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tauri-apps/api': 2.10.1
       '@tauri-apps/plugin-autostart': 2.5.1
       '@tauri-apps/plugin-clipboard-manager': 2.3.2
@@ -4175,7 +4185,15 @@ snapshots:
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
 
+  '@tanstack/react-virtual@3.14.13(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+    dependencies:
+      '@tanstack/virtual-core': 3.17.11
+      react: 19.2.5
+      react-dom: 19.2.5(react@19.2.5)
+
   '@tanstack/virtual-core@3.14.0': {}
+
+  '@tanstack/virtual-core@3.17.11': {}
 
   '@tauri-apps/api@2.10.1': {}
 
