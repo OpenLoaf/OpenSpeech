@@ -39,7 +39,7 @@
 | 项 | 说明 |
 |---|---|
 | 输入设备 | 下拉选择麦克风。持久化字段 `inputDevice`：`""` = 跟随系统（默认）；非空 = 用户显式选中的设备名。"跟随系统"的 label 会拼上**当前系统默认设备名**（如 `跟随系统（当前：MacBook Pro Microphone）`），用户能看清此刻实际走的是哪一个 |
-| 输入声音 | 实时麦克风电平（5 格）。下方 hint 显示"正在监听：<设备名>"，和**实际在用**的设备保持一致（而非仅仅是用户的偏好） |
+| 输入声音 | 实时麦克风电平（5 格）。下方 hint 显示"正在监听：<设备名>"，和**实际在用**的设备保持一致（而非仅仅是用户的偏好）。右侧「系统设置」按钮跳系统声音面板（macOS 13+ 走 `com.apple.Sound-Settings.extension`，12 及更早走 `Sound.prefPane`；Windows 走 `ms-settings:sound`），供用户换输入设备或调系统输入音量 |
 
 **设备离线时的 fallback**：用户手动选了一个设备（如 AirPods），之后把它拔掉——`inputDevice` 持久化值**不被改写**，运行时按以下规则解析 effective device：`wanted=""` → 系统默认；`wanted ∈ 枚举列表` → `wanted`；`wanted ∉ 枚举列表` → 系统默认（持久化保留，设备插回后自动恢复）。Rust 侧 `audio::start()` 的 `or_else(default_input_device)` 是同一套逻辑的兜底；前端只负责在 Select 里追加一条 `"<wanted> · 已断开，暂用系统默认（<sysName>）"` 占位项，让 `<select value>` 不失匹配且让用户知情。
 | 开始/结束提示音 | 开关 |

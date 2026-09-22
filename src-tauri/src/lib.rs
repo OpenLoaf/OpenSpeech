@@ -438,6 +438,7 @@ pub fn run() {
             tray::tray_set_recording,
             commands::fn_usage_type,
             commands::open_network_settings,
+            commands::open_sound_settings,
             logging::open_log_dir,
             logging::read_recent_log_tail,
             commands::open_recordings_dir,

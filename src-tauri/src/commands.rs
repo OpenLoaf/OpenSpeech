@@ -137,3 +137,72 @@ pub(crate) fn open_network_settings() {
         log::warn!("[network] open_network_settings failed: {e:?}");
     }
 }
+
+/// 读取 macOS 主版本号（"26.5.2" → 26）。解析失败返回 None，调用方按新版兜底。
+#[cfg(target_os = "macos")]
+fn macos_major_version() -> Option<u32> {
+    let out = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+// 设置页"输入声音"一行的"系统设置"按钮调用：电平不对时，用户要去系统里换输入
+// 设备或调输入音量。与 open_network_settings 同理，不走 tauri-plugin-opener。
+#[tauri::command]
+pub(crate) fn open_sound_settings() {
+    use std::process::Command;
+
+    // macOS 13 Ventura 把"系统偏好设置"重写成"系统设置"，声音面板从
+    // Sound.prefPane 变成 ExtensionKit 扩展；12 及更早只认旧 prefPane。
+    // 按版本挑一个先试，退出码非零再试另一个（版本号解析失败 / beta 系统兜底）。
+    #[cfg(target_os = "macos")]
+    let result = {
+        const MODERN: &str = "x-apple.systempreferences:com.apple.Sound-Settings.extension";
+        const LEGACY: &str = "/System/Library/PreferencePanes/Sound.prefPane";
+        let open = |target: &str| Command::new("open").arg(target).status().map(|s| s.success());
+        let modern_first = macos_major_version().is_none_or(|v| v >= 13);
+        let (first, second) = if modern_first {
+            (MODERN, LEGACY)
+        } else {
+            (LEGACY, MODERN)
+        };
+        match open(first) {
+            Ok(true) => Ok(()),
+            first_outcome => match open(second) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(std::io::Error::other(format!(
+                    "`open` exited non-zero for both targets (first: {first_outcome:?})"
+                ))),
+                Err(e) => Err(e),
+            },
+        }
+    };
+
+    // Windows 10 1703+ 都认 ms-settings:sound（声音设置主页，含输入设备与输入音量）。
+    #[cfg(target_os = "windows")]
+    let result = Command::new("cmd")
+        .args(["/C", "start", "ms-settings:sound"])
+        .spawn()
+        .map(|_| ());
+
+    // Linux 没有统一入口：GNOME → KDE → pavucontrol 依次退。都失败也不强求。
+    #[cfg(target_os = "linux")]
+    let result = Command::new("gnome-control-center")
+        .arg("sound")
+        .spawn()
+        .or_else(|_| Command::new("kcmshell6").arg("kcm_pulseaudio").spawn())
+        .or_else(|_| Command::new("kcmshell5").arg("kcm_pulseaudio").spawn())
+        .or_else(|_| Command::new("pavucontrol").spawn())
+        .map(|_| ());
+
+    if let Err(e) = result {
+        log::warn!("[audio] open_sound_settings failed: {e:?}");
+    }
+}
