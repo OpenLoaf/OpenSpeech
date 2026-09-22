@@ -19,14 +19,14 @@
 
 `RefineChatInput.drift_guard = true` 时，Rust 侧（`ai_refine/postprocess.rs::StreamingDriftGuard`）比对模型输出与 `user_text` 的**内容字符集合**（字母 / 数字 / 汉字；标点空白不算；中英大小写归一；阿拉伯数字与中文数字归为同一类）：
 
-- `novel_ratio`：输出里有多少字在正文（含 HotWords 的 term / aliases）里从未出现
+- `novel_ratio`：输出里有多少字在正文里从未出现。输出中**整词命中** HotWords term / aliases 的片段先剔除再算（按词典把「塞坝」还原成「sidebar」不算 novel）；**不按字母豁免**——词典一长 26 个字母很快凑齐，任何拉丁文幻觉都测不出来
 - `dropped_ratio`：正文里有多少字在输出里完全消失
 - `expansion`：输出内容字数 / 正文内容字数
 
 终判命中任一条即离题：
 
 - **改写**：`novel > 0.5` 且（`dropped > 0.5` 或 `expansion > 2`）且输出 ≥ 4 个内容字
-- **抄 history**：输出去掉尾句读后与某条 `ConversationHistory` 正文完全相同，且 `novel ≥ 0.5`（用户重复口述同一句时 novel ≈ 0，不会误判）
+- **抄 history**：输出的内容字符串与某条 `ConversationHistory` 正文相同、或互为子串（较短一侧 ≥ 4 个内容字），且 `novel ≥ 0.5`（用户重复口述同一句时 novel ≈ 0，不会误判）。模型抄 history 常掐头去尾（少个「帮我」），只认完全相等会漏
 - **零重叠短输出**：`novel = dropped = 100%` 且输出 ≥ 2 个内容字（「制作组制作手机 UI」→「特写」）
 - **截断**：输出是正文内容字符的严格前缀、长度 < 正文 35%、`dropped > 0.6`（「制作组制作手机 UI」→「制作」；只删尾巴残字或结巴去重「好的好的好的」→「好的」不命中，因为字符集没丢）
 
@@ -39,6 +39,11 @@
 事故原型（2026-09-22 用户反馈）：正文「上午行程结束后，下午的行程是点点点点点。」被 refine 成「上午九点十五分」——模型把 `MessageContext.requestTime`（09:15）当成用户说的时间填了进去；坏输出随即进入 ConversationHistory，下一条又被原样抄出。prompt 侧同时补了 r3「补全值只能来自正文」硬约束、`<reference_tags>` 的 MessageContext 说明与 `default-placeholder-no-fill` 示例；守卫是 prompt 失效时的最后兜底。
 
 同一用户同日第二轮反馈：「制作组制作手机 UI。」两次分别被写成「特写」（抄 history 第一条）与「制作」（截断成两个字）。输出只有 2 个内容字，走不到改写判据的 4 字门槛，于是补了抄 history / 零重叠 / 截断三条判据——它们各自只盯一种崩塌形态，阈值都留了余量，避免误伤同音纠错（「在见」→「再见」）与结巴去重。
+
+同日第三轮反馈（15:22 / 15:47，target Orca）两条连环事故：
+
+1. 「帮我用 Cloudflare 的命令去添加一个 DNS 的一个设置。」被「完善」成「帮我用 Cloudflare 的 API 创建一个 DNS 记录，域名是 example.com，类型 A，值 1.2.3.4」——域名 / 类型 / IP 全是模型编的占位值，「命令」还被偷换成「API」。字符集守卫对这种「保留用户的词、再添一段像模像样的参数」**天然无能为力**（novel 0.21 / dropped 0.29 / expansion 1.6，全在正常整理范围内），只能靠 prompt：r3 加了「模糊的请求保持模糊，不替用户补参数」硬约束，并新增 `default-vague-request-no-fill` 示例（正文就是这条事故）。
+2. 坏输出进了 history，25 分钟后「我主要担心的是，用这个方法的话，会不会被封。」被整段替换成 history 里那条 Cloudflare 请求（只少了「帮我」）。这条本该被改写判据拦住（dropped 0.76），却因为 **HotWords 按字母整体豁免**漏网：用户词典里有十来个英文词条（harness / viewer / sidebar / OpenSpeech …），字母几乎凑齐整套，`Cloudflare` / `API` / `DNS` / `example.com` 全被当成「已知」，novel 只有 0.31。抄 history 判据也因为少了「帮我」不完全相等而失效。修法：novel 只豁免输出里整词命中的词条；抄 history 放宽到互为子串。prompt 侧在 `default-history-bleed-long-ask` 的 focus 里补了「带指代的担忧 / 评价句」形态。
 
 ## settings 字段
 

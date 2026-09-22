@@ -172,7 +172,9 @@ fn normalize_system_tag(block: &str) -> String {
 /// 输出前缀先 hold 多少个「内容字符」（字母 / 数字 / 汉字，不含标点空白）再做离题预判。
 /// 8 个字 ≈ 2-3 个 SSE chunk，用户感知不到；短于 8 个字的输出天然 hold 到流结束。
 const DRIFT_PREFIX_HOLD_CONTENT_CHARS: usize = 8;
-/// 输出内容字符里「正文（含 HotWords）从未出现过」的占比超过此值 → 在写正文没有的东西。
+/// 输出内容字符里「正文从未出现过」的占比超过此值 → 在写正文没有的东西。
+/// 输出中**整词命中** HotWords term / alias 的片段先剔除再算（按词典还原品牌名不算 novel）；
+/// 只按词条豁免、不按字母豁免——词典一长，26 个字母很快被凑齐，任何拉丁文幻觉都测不出来。
 const DRIFT_NOVEL_RATIO: f32 = 0.5;
 /// 正文内容字符里「在输出中完全消失」的占比超过此值 → 丢了正文大半。
 const DRIFT_DROPPED_RATIO: f32 = 0.5;
@@ -190,9 +192,12 @@ const DRIFT_MIN_OUTPUT_CONTENT_CHARS_ZERO_OVERLAP: usize = 2;
 /// 「好的好的好的」→「好的」这类结巴去重字符集没丢，也不会命中。
 const DRIFT_TRUNCATION_MAX_EXPANSION: f32 = 0.35;
 const DRIFT_TRUNCATION_DROPPED_RATIO: f32 = 0.6;
-/// 输出与某条 ConversationHistory 文本完全相同、且与正文的重叠低于此值 → 抄 history。
+/// 输出与某条 ConversationHistory 文本相同（或互为子串）、且与正文的重叠低于此值 → 抄 history。
 /// 用户重复口述同一句时 novel ≈ 0，不会误判。
 const DRIFT_HISTORY_ECHO_MIN_NOVEL: f32 = 0.5;
+/// 抄 history 的子串判据只在较短一侧至少这么多内容字时生效：完全相同不限长度（「特写」两个字
+/// 也要拦），但「好的」这类短语几乎必然是某条长 history 的子串，不能凭子串关系就判抄。
+const DRIFT_HISTORY_ECHO_MIN_SUBSTRING_CHARS: usize = 4;
 
 /// 流式「离题守卫」：拦截与正文几乎无关的整段幻觉。
 ///
@@ -203,18 +208,24 @@ const DRIFT_HISTORY_ECHO_MIN_NOVEL: f32 = 0.5;
 /// 不是整理，是另写——丢弃它，让调用方以正文原文兜底。
 ///
 /// 只看字符集合不看语义。主判据：novel 高，再叠加 dropped 高 **或** 膨胀：
-/// - novel_ratio：输出的内容字符里，多少在正文（含 HotWords term / aliases）里从未出现
+/// - novel_ratio：输出的内容字符里，多少在正文里从未出现（整词命中 HotWords 的片段先剔除）
 /// - dropped_ratio：正文的内容字符里，多少在输出里完全消失（另写 / 抄 history）
 /// - expansion：输出比正文长了多少倍（答题 / 展开解释）
 ///
 /// 三条补充判据覆盖主判据的盲区（同一用户当天的后续反馈）：
-/// - 抄 history：输出 == 某条 ConversationHistory 文本且与正文几乎无重叠（「制作组制作手机 UI」→「特写」）
+/// - 抄 history：输出 == 某条 ConversationHistory 文本（或互为子串）且与正文几乎无重叠
+///   （「制作组制作手机 UI」→「特写」；「我主要担心的是…会不会被封」→ 抄走上一条只少了「帮我」）
 /// - 零重叠短输出：novel = dropped = 100% 时门槛从 4 字降到 2 字
 /// - 截断：输出是正文的严格前缀且只剩不到 35%（「制作组制作手机 UI」→「制作」）
 ///
 /// 单看 novel 会误伤「克劳德 → Claude」这类音译还原；单看 dropped 会误伤撤回覆盖
 /// （「帮我写邮件…啊不对算了，发消息给项目群」→ 只留后半句）。数字形态归一到同一类，
 /// 「一点二 → 1.2」不算新增。
+///
+/// 第三轮反馈（2026-09-22 15:47）暴露的盲区：HotWords 曾按**字母**整体豁免，用户词典里有十来个
+/// 英文词条时 26 个字母几乎被凑齐，「我主要担心的是…会不会被封」被抄成 history 里的
+/// 「用 Cloudflare 的 API 创建一个 DNS 记录，域名是 example.com…」novel 只有 0.31 而漏网。
+/// 现在只豁免输出里**整词命中**的词条，其余字母一律按正文判。
 ///
 /// 流式策略：前 DRIFT_PREFIX_HOLD_CONTENT_CHARS 个内容字符先 hold；凑够后用 novel_ratio
 /// 预判——不离题就放行并转透传，离题就继续 hold 到流结束终判。终判离题且从未放行过
@@ -224,12 +235,13 @@ pub struct StreamingDriftGuard {
     source_chars: HashSet<char>,
     /// 正文内容字符数（含重复）——expansion 的分母。
     source_content_len: usize,
-    /// 正文 + HotWords 的内容字符集合——输出里不在其中的字符算 novel。
-    known_chars: HashSet<char>,
+    /// HotWords term / aliases 的内容字符串（归一后，≥ 2 字）——算 novel 前先从输出里整词剔除。
+    hotword_terms: Vec<String>,
     /// 正文的内容字符序列——截断判据要比对前缀。
     source_content: Vec<char>,
-    /// ConversationHistory 各条正文（去掉 `[N 分钟前 …]` 头、归一空白），抄 history 判据用。
-    history_entries: HashSet<String>,
+    /// ConversationHistory 各条正文的内容字符串（去掉 `[N 分钟前 …]` 头、只留内容字符），
+    /// 抄 history 判据用——相等或互为子串都算。
+    history_keys: Vec<String>,
     pending: String,
     /// 前缀预判已通过，后续 delta 直接透传。
     released: bool,
@@ -258,28 +270,37 @@ pub struct DriftStats {
 }
 
 impl StreamingDriftGuard {
-    /// `hotword_sources` 传本次请求的 system / context message 内容，从中抽 HotWords 块的
-    /// term 与 aliases 加入 known 集——模型按词典把「Cloud Code」还原成「Claude Code」
-    /// 时，那些字母不能算 novel。
+    /// `context_sources` 传本次请求的 system / context message 内容，从中抽 HotWords 块的
+    /// term 与 aliases——模型按词典把「Cloud Code」还原成「Claude Code」时，命中的整词
+    /// 不算 novel；同时抽 ConversationHistory 各条正文供抄 history 判据比对。
     pub fn new<'a>(user_text: &str, context_sources: impl IntoIterator<Item = &'a str>) -> Self {
         let source_content: Vec<char> = user_text.chars().filter_map(content_char_class).collect();
         let source_chars: HashSet<char> = source_content.iter().copied().collect();
-        let mut known_chars = source_chars.clone();
-        let mut history_entries = HashSet::new();
+        let mut hotword_terms: Vec<String> = Vec::new();
+        let mut history_keys: Vec<String> = Vec::new();
         for source in context_sources {
-            known_chars.extend(
-                extract_hotword_terms(source)
-                    .chars()
-                    .filter_map(content_char_class),
-            );
-            history_entries.extend(extract_history_entries(source));
+            for term in extract_hotword_terms(source) {
+                let key = content_key(&term);
+                // 单字词条会把输出里所有同字母都豁免掉，没有区分度，跳过。
+                if key.chars().count() >= 2 && !hotword_terms.contains(&key) {
+                    hotword_terms.push(key);
+                }
+            }
+            for entry in extract_history_entries(source) {
+                let key = content_key(&entry);
+                if !key.is_empty() && !history_keys.contains(&key) {
+                    history_keys.push(key);
+                }
+            }
         }
+        // 长词条优先剔除，避免短词条先把长词条截成碎片（「tab」先于「table」）。
+        hotword_terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
         Self {
             source_chars,
             source_content_len: source_content.len(),
-            known_chars,
+            hotword_terms,
             source_content,
-            history_entries,
+            history_keys,
             pending: String::new(),
             released: false,
             emitted: String::new(),
@@ -292,9 +313,9 @@ impl StreamingDriftGuard {
         Self {
             source_chars: HashSet::new(),
             source_content_len: 0,
-            known_chars: HashSet::new(),
+            hotword_terms: Vec::new(),
             source_content: Vec::new(),
-            history_entries: HashSet::new(),
+            history_keys: Vec::new(),
             pending: String::new(),
             released: true,
             emitted: String::new(),
@@ -355,9 +376,7 @@ impl StreamingDriftGuard {
             && dropped_ratio >= 1.0;
         let history_echo = !output_content.is_empty()
             && novel_ratio >= DRIFT_HISTORY_ECHO_MIN_NOVEL
-            && self
-                .history_entries
-                .contains(&normalize_for_history_match(&full));
+            && self.echoes_history(&output_content.iter().collect::<String>());
         let truncated = !output_content.is_empty()
             && output_content.len() < self.source_content.len()
             && self.source_content.starts_with(&output_content)
@@ -381,9 +400,16 @@ impl StreamingDriftGuard {
         if out_chars.is_empty() || self.source_chars.is_empty() {
             return (0.0, 0.0);
         }
-        let novel = out_chars
-            .iter()
-            .filter(|c| !self.known_chars.contains(c))
+        // 先把整词命中 HotWords 的片段剔掉，剩下的字符才拿去和正文比。
+        let mut residual: String = out_chars.iter().collect();
+        for term in &self.hotword_terms {
+            if residual.contains(term.as_str()) {
+                residual = residual.replace(term.as_str(), "");
+            }
+        }
+        let novel = residual
+            .chars()
+            .filter(|c| !self.source_chars.contains(c))
             .count();
         let out_set: HashSet<char> = out_chars.iter().copied().collect();
         let dropped = self
@@ -396,6 +422,28 @@ impl StreamingDriftGuard {
             dropped as f32 / self.source_chars.len() as f32,
         )
     }
+
+    /// 输出（内容字符串）是否抄自某条 history：完全相同不限长度；互为子串时较短一侧
+    /// 至少 DRIFT_HISTORY_ECHO_MIN_SUBSTRING_CHARS 个字——模型抄 history 常会掐头去尾
+    /// （少个「帮我」、多个语气词），只认完全相等会漏。
+    fn echoes_history(&self, output_key: &str) -> bool {
+        let out_len = output_key.chars().count();
+        self.history_keys.iter().any(|entry| {
+            if entry == output_key {
+                return true;
+            }
+            let shorter = out_len.min(entry.chars().count());
+            shorter >= DRIFT_HISTORY_ECHO_MIN_SUBSTRING_CHARS
+                && (entry.contains(output_key) || output_key.contains(entry))
+        })
+    }
+}
+
+/// 文本的「内容字符串」：只留 content_char_class 归一后的字符，标点 / 空白全丢。
+/// HotWords 整词匹配与抄 history 比对都用这个键，这样「子Agent」/「子 Agent」、
+/// 「M2」/「M 二」都能对上。
+fn content_key(text: &str) -> String {
+    text.chars().filter_map(content_char_class).collect()
 }
 
 /// 把字符归一到「内容字符」类别：
@@ -475,11 +523,11 @@ fn normalize_for_history_match(text: &str) -> String {
         .join(" ")
 }
 
-/// 从 system / context message 里抽 HotWords 块的 term 与 aliases 文本。
+/// 从 system / context message 里抽 HotWords 块的 term 与每个 alias，一词一项。
 /// 前端两种格式都覆盖：单行「A、B、C」，或多行 `term | aliases: a, b | note: ...`；
-/// note 是给模型看的解释，不进 known 集，否则会把一大段说明文字洗成「已知字符」。
-fn extract_hotword_terms(source: &str) -> String {
-    let mut out = String::new();
+/// note 是给模型看的解释，不当词条，否则会把一大段说明文字当成「已知内容」。
+fn extract_hotword_terms(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
     for block in extract_system_tag_blocks(source) {
         if !block.starts_with("<system-tag type=\"HotWords\"") {
             continue;
@@ -494,8 +542,13 @@ fn extract_hotword_terms(source: &str) -> String {
                 if segment.starts_with("note:") {
                     continue;
                 }
-                out.push_str(segment.strip_prefix("aliases:").unwrap_or(segment));
-                out.push(' ');
+                let list = segment.strip_prefix("aliases:").unwrap_or(segment);
+                out.extend(
+                    list.split([',', '、'])
+                        .map(str::trim)
+                        .filter(|term| !term.is_empty())
+                        .map(str::to_string),
+                );
             }
         }
     }
@@ -796,6 +849,12 @@ mod tests {
     // 2026-09-22 10:00 第二轮反馈时的 history 块（WPS Office 目标）。
     const FEEDBACK_HISTORY: &str = "<system-tag type=\"ConversationHistory\" targetApp=\"WPS Office\">\n\t[49 分钟前] 特写\n\n\t[48 分钟前] 释义者神秘任务开启\n\n\t[47 分钟前 · focusTitle=剧本.docx] B 同时入画上车\n\n\t[44 分钟前] 上午九点十五分\n</system-tag>";
 
+    // 2026-09-22 15:47 第三轮反馈时的真实词典：十来个英文词条，字母几乎凑齐整套。
+    const FEEDBACK_HOTWORDS_LONG: &str = "<system-tag type=\"HotWords\">\n\tharness\n\tviewer\n\trunner\n\t子Agent | aliases: zv\n\tskill | aliases: scale\n\tFN | aliases: F 和 N\n\tsidebar | aliases: 塞坝\n\tharnessctl-cli | aliases: hexems-cli\n\thexems | aliases: 海科森云\n\ttab | aliases: type, table\n\tAnthropic | aliases: authpic\n\tOpenSpeech\n\tOpenLoaf\n</system-tag>";
+
+    // 第三轮反馈的 history 块（Orca 目标）：最后一条是上一次 refine 编出来的坏输出。
+    const FEEDBACK_HISTORY_CLOUDFLARE: &str = "<system-tag type=\"ConversationHistory\" targetApp=\"Orca\">\n\t[107 分钟前] 我发现一个问题：打开一个新的 bash 终端，输入一些命令后关闭，再开一个新终端，结果这个终端没有显示之前的历史记录\n\n\t[25 分钟前] 帮我用 Cloudflare 的 API 创建一个 DNS 记录，域名是 example.com，类型 A，值 1.2.3.4\n</system-tag>";
+
     // 第二轮反馈 ①：「制作组制作手机 UI」被写成 history 里的「特写」。只有两个字，
     // 走不到主判据的 4 字门槛，靠「抄 history」与「零重叠」两条都能拦。
     #[test]
@@ -977,6 +1036,93 @@ mod tests {
         assert!(matches!(verdict, DriftFinalize::Release(_)));
     }
 
+    // 第三轮反馈：正文「我主要担心的是…会不会被封」被抄成 history 里那条 Cloudflare 请求
+    // （只少了「帮我」）。旧实现按字母豁免 HotWords，长词典把字母凑齐，novel 只有 0.31 漏网；
+    // 改成整词豁免后 novel ≈ 0.9、dropped ≈ 0.76 → 主判据命中，从未 emit → 兜底。
+    #[test]
+    fn drift_guard_falls_back_when_latin_heavy_history_copy_slips_past_long_hotwords() {
+        let (released, verdict) = run_drift(
+            "我主要担心的是，用这个方法的话，会不会被封。",
+            &[FEEDBACK_HOTWORDS_LONG, FEEDBACK_HISTORY_CLOUDFLARE],
+            &[
+                "用 Cloudflare",
+                " 的 API 创建一个 DNS 记录，",
+                "域名是 example.com，类型 A，值 1.2.3.4",
+            ],
+        );
+        assert_eq!(released, "");
+        match verdict {
+            DriftFinalize::Fallback(stats) => {
+                assert!(
+                    stats.novel_ratio > DRIFT_NOVEL_RATIO,
+                    "novel={}",
+                    stats.novel_ratio
+                );
+                assert!(stats.dropped_ratio > DRIFT_DROPPED_RATIO);
+            }
+            _ => panic!("expected Fallback"),
+        }
+    }
+
+    // 同一条输出即使主判据没到阈值，抄 history 的子串判据也要能兜住：
+    // 输出比 history 条目少了「帮我」，完全相等判不到，子串关系判得到。
+    #[test]
+    fn drift_guard_history_echo_matches_substring_of_entry() {
+        let guard = StreamingDriftGuard::new(
+            "我主要担心的是，用这个方法的话，会不会被封。",
+            [FEEDBACK_HISTORY_CLOUDFLARE],
+        );
+        assert!(guard.echoes_history(&content_key(
+            "用 Cloudflare 的 API 创建一个 DNS 记录，域名是 example.com，类型 A，值 1.2.3.4"
+        )));
+        // 太短的子串不算：「一个」几乎必然出现在某条 history 里。
+        assert!(!guard.echoes_history(&content_key("一个")));
+        // 无关句不算。
+        assert!(!guard.echoes_history(&content_key("我主要担心的是会不会被封")));
+    }
+
+    // 用户重复口述 history 里那句（少了「帮我」）：输出是 history 子串，但与正文完全重叠
+    // （novel = 0）→ 放行，不能因为子串关系就当抄。
+    #[test]
+    fn drift_guard_passes_repeated_dictation_that_is_history_substring() {
+        let text = "用 Cloudflare 的 API 创建一个 DNS 记录，域名是 example.com，类型 A，值 1.2.3.4";
+        let (released, verdict) = run_drift(
+            text,
+            &[FEEDBACK_HOTWORDS_LONG, FEEDBACK_HISTORY_CLOUDFLARE],
+            &[text],
+        );
+        assert_eq!(released, text);
+        assert!(matches!(verdict, DriftFinalize::Release(_)));
+    }
+
+    // 长词典下按词典还原仍然豁免：「塞坝」→「sidebar」、「type」→「tab」都是整词命中，
+    // 剔掉后剩余字符全在正文里 → novel = 0 → 放行。
+    #[test]
+    fn drift_guard_exempts_whole_hotword_matches_under_long_dictionary() {
+        let (released, verdict) = run_drift(
+            "帮我在塞坝里加一个 type，然后把 harness 的日志打出来。",
+            &[FEEDBACK_HOTWORDS_LONG],
+            &[
+                "帮我在 sidebar 里加一个 tab，",
+                "然后把 harness 的日志打出来",
+            ],
+        );
+        assert_eq!(
+            released,
+            "帮我在 sidebar 里加一个 tab，然后把 harness 的日志打出来"
+        );
+        assert!(matches!(verdict, DriftFinalize::Release(_)));
+    }
+
+    // 字母不再按词典整体豁免：词典里没有 Cloudflare，它的字母就得按正文判——
+    // 正文完全无关时整段都是 novel。
+    #[test]
+    fn drift_guard_no_longer_exempts_letters_outside_matched_hotwords() {
+        let guard = StreamingDriftGuard::new("会不会被封", [FEEDBACK_HOTWORDS_LONG]);
+        let (novel, _) = guard.ratios("Cloudflare DNS");
+        assert!(novel > 0.9, "novel={novel}");
+    }
+
     // 没有词典兜底的音译还原：novel 60% 但 dropped 43%、膨胀 1.4× → 不算离题。
     #[test]
     fn drift_guard_passes_modest_transliteration_without_hotword() {
@@ -1032,12 +1178,24 @@ mod tests {
     #[test]
     fn hotword_extraction_keeps_terms_and_aliases_but_drops_notes() {
         let terms = extract_hotword_terms(FEEDBACK_HOTWORDS);
-        assert!(terms.contains("Codex"));
-        assert!(terms.contains("Codecs"));
-        assert!(terms.contains("Claude Code"));
-        assert!(terms.contains("芯片厂"));
-        assert!(!terms.contains("误识别"));
-        assert!(!terms.contains("aliases"));
+        assert!(terms.iter().any(|t| t == "Codex"));
+        assert!(terms.iter().any(|t| t == "Codecs"));
+        assert!(terms.iter().any(|t| t == "Claude Code"));
+        assert!(terms.iter().any(|t| t == "Cloud Code"));
+        assert!(terms.iter().any(|t| t == "芯片厂"));
+        assert!(!terms.iter().any(|t| t.contains("误识别")));
+        assert!(!terms.iter().any(|t| t.contains("aliases")));
+    }
+
+    // 多 alias 用逗号分隔，每个 alias 各成一条词条。
+    #[test]
+    fn hotword_extraction_splits_comma_separated_aliases() {
+        let terms = extract_hotword_terms(FEEDBACK_HOTWORDS_LONG);
+        assert!(terms.iter().any(|t| t == "tab"));
+        assert!(terms.iter().any(|t| t == "type"));
+        assert!(terms.iter().any(|t| t == "table"));
+        assert!(terms.iter().any(|t| t == "F 和 N"));
+        assert!(!terms.iter().any(|t| t == "type, table"));
     }
 
     #[test]
