@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 // 被 `pnpm version <bump>` 通过 npm lifecycle hook 触发：读 package.json.version
-// 写回 src-tauri/Cargo.toml 的 [package] version，保证两处一致。
-// tauri.conf.json 已用 "../package.json" 自动跟随，无需手动写。
+// 写回 src-tauri/Cargo.toml 的 [package] version 与 Cargo.lock 里 openspeech 自身
+// 的 [[package]] 条目，保证三处一致。tauri.conf.json 已用 "../package.json" 自动跟随。
 //
-// 用 sed 级别的最小替换：只改 [package] 段首个 version = "x.y.z" 字面量，
-// 避免误碰 dependencies 表里的 version 字段。
+// Cargo.lock 也要改：cargo 在 build 时会把 lock 里本 crate 的 version 改成 Cargo.toml
+// 的值，不同步就会在 CI 里产生 lock 漂移（0.2.51 / 0.2.52 两版都是发完才手补一个
+// commit 再重打 tag）。
+//
+// 用 sed 级别的最小替换：Cargo.toml 只改 [package] 段首个 version = "x.y.z" 字面量，
+// 避免误碰 dependencies 表里的 version 字段；Cargo.lock 只改 name = "openspeech"
+// 紧邻的那行 version。
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,9 +36,22 @@ if (!m) {
 }
 if (m[2] === version) {
   console.log(`[sync-version] Cargo.toml already at ${version}; skip`);
-  process.exit(0);
+} else {
+  writeFileSync(cargoPath, cargo.replace(re, `$1"${version}"`));
+  console.log(`[sync-version] Cargo.toml [package] version ${m[2]} → ${version}`);
 }
 
-const next = cargo.replace(re, `$1"${version}"`);
-writeFileSync(cargoPath, next);
-console.log(`[sync-version] Cargo.toml [package] version ${m[2]} → ${version}`);
+const lockPath = resolve(root, "src-tauri/Cargo.lock");
+const lock = readFileSync(lockPath, "utf8");
+const lockRe = /(\[\[package\]\]\r?\nname = "openspeech"\r?\nversion = )"([^"]+)"/;
+const lm = lock.match(lockRe);
+if (!lm) {
+  console.error("[sync-version] failed to locate openspeech entry in Cargo.lock");
+  process.exit(1);
+}
+if (lm[2] === version) {
+  console.log(`[sync-version] Cargo.lock already at ${version}; skip`);
+} else {
+  writeFileSync(lockPath, lock.replace(lockRe, `$1"${version}"`));
+  console.log(`[sync-version] Cargo.lock openspeech version ${lm[2]} → ${version}`);
+}

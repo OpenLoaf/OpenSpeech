@@ -281,13 +281,17 @@ pnpm version major    # 0.2.4 → 1.0.0
 `pnpm version` 自动：
 
 1. 改 `package.json.version`
-2. 触发 `package.json.scripts.version` lifecycle → `node scripts/sync-version.mjs && git add src-tauri/Cargo.toml`
-   - `sync-version.mjs` 同步 `src-tauri/Cargo.toml [package].version`
+2. 触发 `package.json.scripts.version` lifecycle → `node scripts/sync-version.mjs && git add src-tauri/Cargo.toml src-tauri/Cargo.lock`
+   - `sync-version.mjs` 同步 `src-tauri/Cargo.toml [package].version` **和** `Cargo.lock` 里 openspeech 自身条目
+     （自 0.2.52 后；之前两版都是发完才发现 lock 漂移、手补 commit 再重打 tag）
    - `tauri.conf.json` 用 `"version": "../package.json"` 自动跟随
 3. 自动 `git commit -m "0.x.y"` 把这两个文件提交
 4. 自动打 annotated tag `v0.x.y`
 
-**不要手改 Cargo.toml / tauri.conf.json 的版本号；不要 `npm version`，要 `pnpm version`。**
+**不要手改 Cargo.toml / Cargo.lock / tauri.conf.json 的版本号；不要 `npm version`，要 `pnpm version`。**
+
+> 若 `pnpm version` 后 `git show --stat HEAD` 里没有 `Cargo.lock`，说明 lifecycle 没跑到（或 lock 本来就已对齐）；
+> 自查：`grep -A1 '^name = "openspeech"$' src-tauri/Cargo.lock` 必须显示新版本号。
 
 > beta 用 `pnpm version prepatch --preid=beta` 或 `prerelease --preid=beta`，详见 `references/beta.md`。
 

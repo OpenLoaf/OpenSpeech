@@ -15,7 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "reset:permissions": "bash scripts/reset-permissions.sh",
-    "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml",
+    "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml src-tauri/Cargo.lock",
     "dmg:build": "node scripts/build-dmg.mjs"
   },
   "pnpm": {
