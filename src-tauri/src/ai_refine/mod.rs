@@ -28,7 +28,10 @@ use crate::openloaf::{DEFAULT_BASE_URL, RefreshOutcome, SharedOpenLoaf, handle_s
 use crate::secrets;
 
 mod postprocess;
-use postprocess::{StreamingStripper, StripMode};
+use postprocess::{
+    DriftFinalize, StreamingContextLeakFilter, StreamingDriftGuard, StreamingStripper, StripMode,
+    strip_full_at_end,
+};
 
 /// 截取 system_prompt 的前 N 字做日志预览。换行替成 ⏎ 让一行能看清结构。
 fn preview_for_log(s: &str, max_chars: usize) -> String {
@@ -87,6 +90,11 @@ pub struct RefineChatInput {
     /// 输出尾句号过滤：off / auto / always。None = auto。
     #[serde(default)]
     pub strip_trailing_period: Option<String>,
+    /// 离题守卫（postprocess::StreamingDriftGuard）：输出与正文几乎无字符重叠时丢弃模型
+    /// 输出、以正文兜底。**只有听写 refine 打开**；翻译 / 润色 / 会议摘要等输出本就该
+    /// 与输入不同的路径必须留 None / false，否则译文会被当离题。None = 关。
+    #[serde(default)]
+    pub drift_guard: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -585,6 +593,18 @@ pub(crate) async fn run_refine_core<R: Runtime>(
         input.target_app_addon.as_deref(),
         &input.user_text,
     );
+    let context_sources: Vec<&str> = messages
+        .iter()
+        .take(messages.len().saturating_sub(1))
+        .filter_map(|message| message.get("content").and_then(Value::as_str))
+        .collect();
+    let mut context_leak_filter =
+        StreamingContextLeakFilter::new(context_sources.iter().copied(), &input.user_text);
+    let mut drift_guard = if input.drift_guard.unwrap_or(false) {
+        StreamingDriftGuard::new(&input.user_text, context_sources.iter().copied())
+    } else {
+        StreamingDriftGuard::disabled()
+    };
 
     let mut body = json!({
         "model": resolved.model,
@@ -794,9 +814,12 @@ pub(crate) async fn run_refine_core<R: Runtime>(
             for choice in parsed.choices {
                 if let Some(content) = choice.delta.content {
                     if !content.is_empty() {
-                        // 经过 stripper 做 tail-hold；潜在尾句号字符被 hold 住
-                        // 不立即 emit，下一段 delta 来时（或 finalize 时）再决断。
-                        let to_emit = stripper.push(&content);
+                        // 三级 hold 串联：先等前缀过滤器确认模型没有回显本次请求的
+                        // system-tag，再让离题守卫预判前缀没跑题，最后经 stripper 做尾句号
+                        // tail-hold——三类内容都不能先流式注入后才处理。
+                        let filtered = context_leak_filter.push(&content);
+                        let guarded = drift_guard.push(&filtered);
+                        let to_emit = stripper.push(&guarded);
                         if !to_emit.is_empty() {
                             full.push_str(&to_emit);
                             let _ = app.emit(
@@ -810,6 +833,94 @@ pub(crate) async fn run_refine_core<R: Runtime>(
                     }
                 }
             }
+        }
+    }
+
+    // 若流结束时前缀仍未能判定（如普通文本恰好以 `<sys` 收尾），
+    // 必须原样释放，再依次交给离题守卫与尾句号处理器。
+    let prefix_extra = context_leak_filter.finalize();
+    if !prefix_extra.is_empty() {
+        let guarded = drift_guard.push(&prefix_extra);
+        let to_emit = stripper.push(&guarded);
+        if !to_emit.is_empty() {
+            full.push_str(&to_emit);
+            let _ = app.emit(
+                EVENT_DELTA,
+                DeltaPayload {
+                    task_id: task_id.clone(),
+                    chunk: to_emit,
+                },
+            );
+        }
+    }
+    if context_leak_filter.stripped_blocks() > 0 {
+        log::warn!(
+            "[ai_refine] stripped {} echoed system-tag block(s) from response prefix task_id={:?}",
+            context_leak_filter.stripped_blocks(),
+            task_id,
+        );
+    }
+
+    // 离题守卫终判。Fallback = 模型输出与正文几乎无关且一个字都没 emit 过：
+    // 整段丢弃，改用正文原文（唯一一帧 delta），跳过 stripper——它全程没收到过字符。
+    let drift_pending = match drift_guard.finalize() {
+        DriftFinalize::Release(pending) => pending,
+        DriftFinalize::ReleaseDrifted { pending, stats } => {
+            log::warn!(
+                "[ai_refine] drift detected after prefix already emitted novel={:.2} dropped={:.2} expansion={:.2}; cannot fall back task_id={task_id:?}",
+                stats.novel_ratio,
+                stats.dropped_ratio,
+                stats.expansion,
+            );
+            pending
+        }
+        DriftFinalize::Fallback(stats) => {
+            debug_assert!(
+                full.is_empty(),
+                "drift fallback requires nothing emitted yet"
+            );
+            // 正文尾句号是 ASR 补的（不是模型「尊重用户原话」保留的），auto 视同 always 砍掉。
+            let fallback_mode = match strip_mode {
+                StripMode::Off => StripMode::Off,
+                StripMode::Auto | StripMode::Always => StripMode::Always,
+            };
+            let fallback = strip_full_at_end(&input.user_text, &input.user_text, fallback_mode);
+            log::warn!(
+                "[ai_refine] drift guard discarded model output novel={:.2} dropped={:.2} expansion={:.2} → fallback to raw text chars={} task_id={task_id:?}",
+                stats.novel_ratio,
+                stats.dropped_ratio,
+                stats.expansion,
+                fallback.chars().count(),
+            );
+            let _ = app.emit(
+                EVENT_DELTA,
+                DeltaPayload {
+                    task_id: task_id.clone(),
+                    chunk: fallback.clone(),
+                },
+            );
+            return finish_refine(
+                &app,
+                &input,
+                fallback,
+                strip_mode,
+                task_id,
+                request_envelope,
+                credits_consumed,
+            );
+        }
+    };
+    if !drift_pending.is_empty() {
+        let to_emit = stripper.push(&drift_pending);
+        if !to_emit.is_empty() {
+            full.push_str(&to_emit);
+            let _ = app.emit(
+                EVENT_DELTA,
+                DeltaPayload {
+                    task_id: task_id.clone(),
+                    chunk: to_emit,
+                },
+            );
         }
     }
 
@@ -835,8 +946,27 @@ pub(crate) async fn run_refine_core<R: Runtime>(
         );
     }
     // 最终态以 stripper 的 final_full 为准（含被砍尾后的版本）。
-    let full = final_full;
+    finish_refine(
+        &app,
+        &input,
+        final_full,
+        strip_mode,
+        task_id,
+        request_envelope,
+        credits_consumed,
+    )
+}
 
+/// 收尾：打 done 日志、emit done 事件、组装返回值。正常路径与离题兜底路径共用。
+fn finish_refine<R: Runtime>(
+    app: &AppHandle<R>,
+    input: &RefineChatInput,
+    full: String,
+    strip_mode: StripMode,
+    task_id: Option<String>,
+    request_envelope: Option<String>,
+    credits_consumed: f64,
+) -> Result<RefineChatResult, String> {
     let trailing_period = full
         .trim_end()
         .chars()

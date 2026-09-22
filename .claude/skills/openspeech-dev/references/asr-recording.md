@@ -104,6 +104,14 @@
 - **释放铁律**:终态放弃(gate 未过 / preflight 失败 / adopt 出错)必须 `release_dictation_capture`(锁串行 stop+清 flag);但 **epoch-stale(被后续 press 抢占)绝不能 release**——那会杀掉获胜 press 已 adopt 的采集。批量迟到场景:press1/2 stale 保留采集,press3 adopt,一段录音。
 - **验证盲区**:ref 配平是集成级(单测 FSM 复刻覆盖不到),改后必须真机 `pnpm tauri dev` 盯 macOS 状态栏橙点确认不泄漏。
 
+## AI refine 后处理三级 hold 与 `driftGuard` 只开听写（栽过坑，2026-09-22）
+
+`run_refine_core` 的 SSE 消费链是 **context-leak filter → drift guard → trailing-period stripper** 三级 hold 串联，任何新加的"输出先看一眼再放"逻辑都插到这条链里，不要另起一条独立缓冲——否则前端 `injectIncremental` 的 typedLen 前缀假设会被打破（已注入的字撤不回）。
+
+`RefineChatInput.driftGuard` 是**调用方契约**，Rust 不做默认开：听写 refine（`finalize.ts` phase 1 两处 + `history.ts` 重试）传 `true`；翻译 phase 2 / 润色 / 会议摘要 / 标题 / 设置页测试按钮 **不传**。开错地方的症状是"译文被换回原文"——译文与原文零字符重叠，守卫必判离题。
+
+`MessageContext.requestTime` 对 refine 是幻觉诱因（正文「下午的行程是点点点点点」被填成「上午九点十五分」= 当时的系统时钟），且坏输出会经 ConversationHistory 级联污染后续每条。守卫兜住的是"整段离题"；"前半句照录、后半句凭空补一个时间"这种局部幻觉守卫抓不到，只能靠 prompt r3 的「补全值只能来自正文」约束。细节见 `docs/ai-refine.md` 离题守卫一节。
+
 ## 隐私边界（呼应 `docs/privacy.md`）
 
 - 录音仅落盘本机：`app_data_dir/recordings/<id>.wav`。

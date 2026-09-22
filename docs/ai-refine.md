@@ -13,6 +13,33 @@
 
 两种模式都用 async-openai 的 `Client::with_config(OpenAIConfig::new().with_api_base(base).with_api_key(key))` + `chat().create_stream(...)`，事件路径一致：每个 chunk 走 `openspeech://ai-refine:delta`，结束 `openspeech://ai-refine:done`，错误 `openspeech://ai-refine:error`。
 
+流式响应在 emit / 注入前会暂存开头的少量字符：如果模型误将本次请求里某个完整的 `<system-tag>...</system-tag>` 上下文块（如 TargetApp / HotWords）回显在输出开头，在流式注入前剔除。只剥离“前导 + 与本次请求中的块匹配”的标签，不全局删 XML，避免损坏用户本来就在口述的标签文本。
+
+### 离题守卫（drift guard）
+
+`RefineChatInput.drift_guard = true` 时，Rust 侧（`ai_refine/postprocess.rs::StreamingDriftGuard`）比对模型输出与 `user_text` 的**内容字符集合**（字母 / 数字 / 汉字；标点空白不算；中英大小写归一；阿拉伯数字与中文数字归为同一类）：
+
+- `novel_ratio`：输出里有多少字在正文（含 HotWords 的 term / aliases）里从未出现
+- `dropped_ratio`：正文里有多少字在输出里完全消失
+- `expansion`：输出内容字数 / 正文内容字数
+
+终判命中任一条即离题：
+
+- **改写**：`novel > 0.5` 且（`dropped > 0.5` 或 `expansion > 2`）且输出 ≥ 4 个内容字
+- **抄 history**：输出去掉尾句读后与某条 `ConversationHistory` 正文完全相同，且 `novel ≥ 0.5`（用户重复口述同一句时 novel ≈ 0，不会误判）
+- **零重叠短输出**：`novel = dropped = 100%` 且输出 ≥ 2 个内容字（「制作组制作手机 UI」→「特写」）
+- **截断**：输出是正文内容字符的严格前缀、长度 < 正文 35%、`dropped > 0.6`（「制作组制作手机 UI」→「制作」；只删尾巴残字或结巴去重「好的好的好的」→「好的」不命中，因为字符集没丢）
+
+离题 ⇒ **丢弃模型输出，改用正文原文**（尾句号按 always 砍；`off` 不砍），只 emit 一帧 delta，`done.refined_text` 即原文。这样坏输出也不会进 history 污染后续请求。
+
+流式策略：输出前 8 个内容字先 hold（约 2-3 个 SSE chunk），凑够后用 `novel_ratio` 预判——不离题就放行并转透传；离题就继续 hold 到流结束终判。短输出天然 hold 到结束。前缀已放行后才发现整体离题的，来不及撤回，只打 `warn` 日志。
+
+**只在听写 refine（含历史重试）打开。** 翻译 / 润色 / 会议摘要 / 标题的输出本就该与输入不同，开了会把译文当离题兜底回原文——这些调用方保持缺省（关）。设置页「测试」按钮等调试路径也不开，便于看到模型原始输出。
+
+事故原型（2026-09-22 用户反馈）：正文「上午行程结束后，下午的行程是点点点点点。」被 refine 成「上午九点十五分」——模型把 `MessageContext.requestTime`（09:15）当成用户说的时间填了进去；坏输出随即进入 ConversationHistory，下一条又被原样抄出。prompt 侧同时补了 r3「补全值只能来自正文」硬约束、`<reference_tags>` 的 MessageContext 说明与 `default-placeholder-no-fill` 示例；守卫是 prompt 失效时的最后兜底。
+
+同一用户同日第二轮反馈：「制作组制作手机 UI。」两次分别被写成「特写」（抄 history 第一条）与「制作」（截断成两个字）。输出只有 2 个内容字，走不到改写判据的 4 字门槛，于是补了抄 history / 零重叠 / 截断三条判据——它们各自只盯一种崩塌形态，阈值都留了余量，避免误伤同音纠错（「在见」→「再见」）与结巴去重。
+
 ## settings 字段
 
 `settings.aiRefine`（schema v9 引入）：
@@ -41,7 +68,7 @@ ASR 阶段（OL-TL-003）和 refine 阶段共用同一份 prompt 组装逻辑：
 
 - `includeHistory` 默认 `true`。从 `historyStore` 取最近 `N=5` 条 `success` 记录，按时间正序拼成 `[<分钟前> · focusTitle=<title>] <text>` 一行。当前 target 已知时整段统一同 app，`targetApp` 提到 tag attribute（`<system-tag type="ConversationHistory" targetApp="VSCode">`）避免每行重复；target 未知（罕见）时退化为行内 `targetApp=`。`focusTitle` 字段缺失的老记录或 retry 路径自动省略。翻译 phase 2 路径调 `buildSpeechSystemPrompt({ ..., skipHistory: true })`，因为历史已被 phase 1 融入 refined 结果。
 - **按目标应用隔离**：当本次会话的 `target_app` 已知时，仅取 `target_app` 完全相同的历史条目；拿不到（null）时不过滤。retry 路径以"被重试那条记录的 `target_app`"作为当前应用，并 `excludeHistoryId` 排除自身。
-- `MessageContext` 内含 `requestTime`（本地时间 + 时区偏移 + IANA 时区名）/ `platform`（macOS / Windows / Linux）/ `appLanguage`（OpenSpeech UI 语言）/ `dictationLanguage`（听写设置语言）/ `systemLocale`（navigator 给的）。`MachineInfo` 已合进这一段，不再单独 emit。
+- `MessageContext` 内含 `requestTime`（本地时间 + 时区偏移 + IANA 时区名）/ `platform`（macOS / Windows / Linux）/ `appLanguage`（OpenSpeech UI 语言）/ `dictationLanguage`（听写设置语言）/ `systemLocale`（navigator 给的）。`MachineInfo` 已合进这一段，不再单独 emit。**对 refine 而言这一段全是幻觉诱因**：`requestTime` 会被当成用户说的时间、`deviceName` / `username` 会被当成人名填进正文（见上文离题守卫的事故原型）。refine prompt 已在 `<reference_tags>` 明示「MessageContext 是遥测，一个字都不能进输出」；若再出现同类事故，下一步是给 refine 路径单独传一份精简 MessageContext（只留 `platform` / `appLanguage` / `audioDuration`），ASR 与翻译路径保持现状。
 
 ### system_prompt 段落顺序（ASR / refine 共用）
 
@@ -127,6 +154,8 @@ RefineChatInput {
     custom_model: Option<String>,
     custom_keyring_id: Option<String>,
     task_id: Option<String>,
+    strip_trailing_period: Option<String>,   // off / auto / always，None = auto
+    drift_guard: Option<bool>,               // 离题守卫，只有听写 refine 传 true（见上文）
 }
 ```
 
@@ -191,4 +220,3 @@ raw transcript ──[call 1: refine system prompt]──▶ refined ──[call
 ## 与现有 docs 关系
 
 替换 [`docs/speech-providers.md`](./speech-providers.md) 中 `llm.polish` capability 走的旧 V4 工具调用路径。前端 / Rust 端均已不再实现该旧通道，AI refine 只走本页定义的 chat completions 协议。
-
