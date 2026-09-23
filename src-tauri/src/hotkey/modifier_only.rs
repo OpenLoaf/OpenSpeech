@@ -489,7 +489,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 // 里就缺那条 release，所以"幽灵 modifier 卡住"的根因是 OS 不是 rdev。
                 // 典型症状：日志里连续多个事件 `pressed_before={Meta}` 不消失，下一
                 // 次 Ctrl press 立刻被算成 Ctrl+Meta 命中 PTT 错误响声。校准后 pressed
-                // 直接等于 OS 真实物理状态（含本次事件之后的结果），无需 ghost 检测。
+                // = OS 真实物理状态 + 本次事件（hook 内 OS 状态尚未含本次事件），无需 ghost 检测。
                 let os_synced = if let Some(real) = query_real_modifier_state() {
                     // Fn 仅 macOS 走 rdev::Key::Function 路径，Windows 永远不会进入
                     // pressed；此处保留 had_fn 是面向"将来 macOS 也接入校准"的预留。
@@ -498,6 +498,15 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                     s.pressed = real;
                     if had_fn {
                         s.pressed.insert(ModSide::Fn);
+                    }
+                    // LL hook 回调发生在 OS 异步键状态更新之前（MSDN LowLevelKeyboardProc
+                    // 明确说明），GetAsyncKeyState 读到的不含本次事件。必须手动叠加，
+                    // 否则第二个修饰键按下那帧匹配不上，要等修饰键 auto-repeat（~250-500ms）
+                    // 的下一帧才触发，快按直接不触发——即 Windows 上"快捷键不好按"。
+                    if is_press {
+                        s.pressed.insert(m);
+                    } else {
+                        s.pressed.remove(&m);
                     }
                     if prev != s.pressed {
                         // 两类 correction 都是预期、可重现、自动兜底的，全走 debug：

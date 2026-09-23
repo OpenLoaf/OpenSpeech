@@ -6,14 +6,14 @@
 
 | Binding ID | macOS | Windows | Linux | 形态 |
 |---|---|---|---|---|
-| `dictate_ptt`（听写） | `Fn + Ctrl(L)` | `Alt(L) + Win` | `Ctrl(L) + Super(L)` | modifierOnly |
-| `translate`（翻译听写） | `Fn + Shift(L)` | `Ctrl(R)` | `Alt(L) + Super(L)` | modifierOnly |
+| `dictate_ptt`（听写） | `Fn + Ctrl(L)` | `Alt(L) + Win(L)` | `Ctrl(L) + Super(L)` | modifierOnly |
+| `translate`（翻译听写） | `Fn + Shift(L)` | `Alt(R) + Win(R)` | `Alt(L) + Super(L)` | modifierOnly |
 | `show_main_window`（唤起主窗口） | `Shift(L) + Cmd(L) + O` | `Shift(L) + Win + O` | `Shift(L) + Super(L) + O` | combo |
 | `open_toolbox`（打开 AI 工具） | `Shift(L) + Cmd(L) + T` | `Shift(L) + Win + T` | `Shift(L) + Super(L) + T` | combo |
 
-> **Windows translate 为何用单 Right Ctrl？** 早期默认 `Shift + Win`（modifierOnly）会在按下 Shift+Win 的瞬间触发录音，与 Windows 自带 `Win+Shift+S`（截图）以及 PowerToys 的 `Win+Shift+V/H/C/?` 系列正面对撞——所有这些 combo 都被 translate 抢先一步起录。改成 `Right Ctrl` 单键后零冲突 PowerToys，代价是落 W3 软警告（吞 RCtrl 全部原生组合），但 RCtrl+? 在 Windows 上几乎无人使用，可接受。
+> **Windows translate 为何用 `Right Alt + Right Win`？** 与听写 `Left Alt + Left Win` 左右对称，一只手记一组。早期默认 `Shift + Win` 会在按下瞬间抢先起录，与 Windows `Win+Shift+S`（截图）及 PowerToys `Win+Shift+V/H/C/?` 系列正面对撞，已弃用；之后的单 `Right Ctrl` 也已替换。代价：多数笔记本 / 部分紧凑键盘没有右 Win 键，这类用户需在设置里手动改绑翻译。
 
-> 标记 `(L)` = 必须左侧物理键；右侧不命中（详见"左右匹配"章节）。`Fn` 没有左右概念。**Win 键（meta）在 Windows 上不区分左右**：UI 上不渲染 `L`/`R` 角标，因为绝大多数 Windows 键盘只有左 Win，且产品上"Windows 键就是 Windows 键"。
+> 标记 `(L)` = 必须左侧物理键；右侧不命中（详见"左右匹配"章节）。`Fn` 没有左右概念。Win 键（meta）在 Windows 上同样区分左右并渲染 `L`/`R` 角标——听写与翻译默认只靠左右区分。
 
 | 行为 | 形态 | 可否自定义 | 可否清空 |
 |---|---|---|---|
