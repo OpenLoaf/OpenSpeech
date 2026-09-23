@@ -120,7 +120,18 @@ ASR core rules 是约 150 字的三语短规则：用 Domains/HotWords/History/T
 - ASR 阶段的 system_prompt 与 `aiRefine.enabled` **解耦**：refine.enabled 只决定"录音结束后是否做文本清洗"，跟 ASR 阶段是否带识别偏置无关。即使关掉 AI 优化（直接落原文），ASR 阶段仍会带 system_prompt。
 - `includeHistory === false` ⇒ 不出 ConversationHistory 段；其他段不变。`skipHistory: true` 同等效果（phase 2 翻译用）。
 - **不主动截断**长度。SDK 建议 ≤ 2000 字，超过时 Rust 侧 `[transcribe] asr_short system_prompt chars=N exceeds the SDK-recommended 2000-char soft limit` warn 暴露真实长度，由用户自行精简。
-- ASR：仅 SaaS short audio (≤5min, OL-TL-003) 路径透传；OL-TL-004 长音频、腾讯 file、阿里 file 路径都打 warn 后丢弃。
+- ASR（文件转写 / UTTERANCE 主路径，2026-09 起）：走 **OL-TL-010（Qwen-Audio-3.1）+ `vocabulary`**。
+  3.1 会整条丢弃 system 消息，所以词典偏置改由 `buildAsrVocabulary()` 拼即时热词表
+  （用户词典 term 权重 4，所选领域关键词 / Trending 权重 2，≤1000 词、每词 ≤64 字；
+  **不取 aliases**，那是错误写法）。`system_prompt` 仍然照常组装并随请求传给 Rust，
+  只在 010 非鉴权失败、自动退回 OL-TL-003（Qwen3-ASR，能读 system 消息）时使用。
+  OL-TL-004 长音频、腾讯 file、阿里 file 路径对两者都打 warn 后丢弃。
+- ASR（realtime / REALTIME 模式）：走 **OL-TL-RT-005 + `vocabulary` + `context`**。热词表同上；
+  context 由 `buildRealtimeAsrContext()` 给最近 ≤5 条听写正文（优先用户手改版本，旧 → 新），
+  每条作一个 user 轮次，超 400 字整条跳过不截断。不带 MessageContext / TargetApp——
+  上游把 context 当成真实对话，requestTime / deviceName 会被当成用户说过的话。
+  实测热词只在 Final 生效，partial 仍可能是同音错字。腾讯 / 阿里 BYOK realtime 没有等价字段，打 warn 后丢弃。
+- 换代依据与 A/B 数据见 `docs/proposals/qwen-audio-3.1-asr.md` §九。
 - refine：合并到 system_prompt 后前端**不再**单独传 `hotwords / historyEntries / requestTime / targetApp / domains` 给 Rust。Rust `build_context_message` 这些字段全 None ⇒ return None ⇒ messages 变为 `[system, user]` 两条；struct 字段保留作为兼容兜底。
 - 详细日志：前端 `console.info` 各调用点打 `len=N chars`；ASR 路径 Rust 侧 `log::info!` 打 chars/bytes/lines + 前 200 字预览（换行替成 ⏎），`log::debug!` 打全文。
 

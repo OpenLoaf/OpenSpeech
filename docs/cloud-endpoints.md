@@ -15,8 +15,8 @@
 
 | # | 业务能力 | Tauri Command / 触发路径 | 文件 : 行 | 当前实现（默认 SaaS） | 协议 |
 |---|---|---|---|---|---|
-| C1 | 实时听写（边录边出字） | `stt_start` / `stt_finalize` / `stt_cancel` | `src-tauri/src/stt/mod.rs:263` | OpenLoaf SDK `tools_v4().realtime_asr_llm_ol_tl_rt_002` (`OL-TL-RT-002` / Qwen3-ASR-Flash-Realtime) | WebSocket |
-| C2 | 短录音文件转写 (≤5min) | `transcribe_recording_file`（duration ≤5min 分支） | `src-tauri/src/transcribe/mod.rs:135` | OpenLoaf SDK `tools_v4().asr_short_ol_tl_003` (`OL-TL-003`) | HTTP / base64 直传 |
+| C1 | 实时听写（边录边出字） | `stt_start` / `stt_finalize` / `stt_cancel` | `src-tauri/src/stt/mod.rs:263` | OpenLoaf SDK `tools_v4().realtime_asr_ol_tl_rt_005` (`OL-TL-RT-005` / Qwen-Audio-3.1-ASR-Flash-Streaming，热词 `vocabulary` + `context`) | WebSocket |
+| C2 | 短录音文件转写 (≤5min) | `transcribe_recording_file`（duration ≤5min 分支） | `src-tauri/src/transcribe/mod.rs:135` | OpenLoaf SDK `tools_v4().asr_short_ol_tl_010` (`OL-TL-010` / Qwen-Audio-3.1，热词 `vocabulary`；失败退回 `OL-TL-003`) | HTTP / base64 直传 |
 | C3 | 长录音 URL 转写 (>5min, 公网 URL) | `transcribe_long_audio_url` + `transcribe_recording_file`（>5min 分支当前未支持本地） | `src-tauri/src/transcribe/mod.rs:190 / :205` | OpenLoaf SDK `tools_v4().asr_long_ol_tl_004*` (`OL-TL-004`) | HTTP submit + 轮询 |
 | C4 | AI 文本改写 / 翻译 / 问 AI（流式） | `refine_text_via_chat_stream` | `src-tauri/src/ai_refine/mod.rs:299`（reqwest 直发） | mode=`saas`：SDK `ai().fast_chat_variant()` 选模型 + 直发 `/api/v1/chat/completions`<br>mode=`custom`：用户填的 baseUrl + keyring 中 ApiKey | HTTP SSE |
 | C5 | 用户身份 / 余额 / 订阅 | `openloaf_fetch_profile` / `openloaf_fetch_realtime_asr_pricing` | `src-tauri/src/openloaf/mod.rs:648 / :673` | SDK `user().current()` / `ai().tools_capabilities("realtimeAsrLlm")` | HTTP |
@@ -41,7 +41,7 @@
 
 | 供应商 | C1 实时听写 | C2 短文件 (≤5MB / ≤60s) | C3 长文件 (URL 或 ≤1GB) | 凭证 |
 |---|---|---|---|---|
-| **OpenLoaf SaaS**（默认）| `OL-TL-RT-002` (Qwen3-ASR realtime) | `OL-TL-003` (DashScope multimodal) | `OL-TL-004` (Qwen3 filetrans) | SaaS access_token（OAuth 登录后由 SDK 持有）|
+| **OpenLoaf SaaS**（默认）| `OL-TL-RT-005` (Qwen-Audio-3.1 streaming) | `OL-TL-010` (Qwen-Audio-3.1 multimodal；退路 `OL-TL-003`) | `OL-TL-004` (Qwen3 filetrans) | SaaS access_token（OAuth 登录后由 SDK 持有）|
 | **腾讯云 ASR** | [实时语音识别 WebSocket](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/websocket-realtime-asr.md)（`wss://asr.cloud.tencent.com/asr/v2/<appid>`，HMAC-SHA1 签名） | [录音文件识别（一句话）](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-request.md)（`SourceType=0` URL 模式，**必须填 COS bucket**，单文件 ≤512MB——见 §4.4） | 同左：[`CreateRecTask`](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-request.md) + [`DescribeTaskStatus`](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/file-recognition-query.md)（URL 或本地，URL ≤5h、≤1GB；签名 [TC3-HMAC-SHA256](../../Tenas-All/OpenLoaf-saas/docs/tencent-asr/common-signature-v3.md)）| `AppID + SecretId + SecretKey`（+ COS Bucket，必填）|
 | **阿里云 ASR (DashScope)** | Qwen3-ASR-Flash-Realtime（同 OL-TL-RT-002 上游）/ Paraformer Realtime | DashScope `multimodal-generation`（同 OL-TL-003 上游）| Qwen3-ASR-Flash-Filetrans（同 OL-TL-004 上游；本地音频走 OSS 上传，详见 §4.3）| `DashScope ApiKey`（Bearer）|
 | Azure / Google / OpenAI Whisper / byo-rest | 见 [speech-providers.md §6.5](./speech-providers.md) | 同左 | 同左 | 见各 vendor 文档 |
