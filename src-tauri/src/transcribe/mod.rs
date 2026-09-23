@@ -2,7 +2,10 @@
 // 兼用 history 重试 + UTTERANCE 主路径——UTTERANCE 录音结束后直接走这条线。
 //
 // 接口分流（按时长自动选择，与前端 history 重试流程对接）：
-// - ≤ 5 分钟 ⇒ `OL-TL-003` (asrShort)：同步 HTTP，base64 直传，秒级返回。
+// - ≤ 5 分钟 ⇒ `OL-TL-010` (asrShort, Qwen-Audio-3.1)：同步 HTTP，base64 直传，秒级返回。
+//   词典偏置走 `vocabulary`（3.1 会整条丢弃 system 消息，prompt 对它无效）。
+//   010 非鉴权失败时退回 `OL-TL-003`（Qwen3-ASR）+ `system_prompt` 再试一次——
+//   010 是 2026-09 新上线的上游，留一条已验证过的退路。
 // - > 5 分钟 ⇒ `OL-TL-004` (asrLong)：base64 直传，服务端自动上传到 DashScope
 //   免费 48h 临时 OSS；submit 拿 task_id 后用同一查询接口轮询。history 重试若
 //   已有公网 URL 则直接传 URL。
@@ -15,8 +18,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use openloaf_saas::v4_tools::{
     AsrLongOlTl004Input, AsrLongOlTl004Lang, AsrLongOlTl004Params, AsrLongOlTl004Status,
-    AsrShortOlTl003Input, AsrShortOlTl003Params,
+    AsrShortOlTl003Input, AsrShortOlTl003Params, AsrShortOlTl010Input, AsrShortOlTl010Params,
 };
+use std::collections::BTreeMap;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -159,6 +163,8 @@ pub async fn transcribe_recording_file<R: Runtime>(
     lang: Option<String>,
     provider: Option<ProviderRef>,
     system_prompt: Option<String>,
+    // Qwen-Audio-3.1 即时热词（词 → 权重）。前端 buildAsrVocabulary() 拼，这里再清洗一次。
+    vocabulary: Option<BTreeMap<String, u8>>,
 ) -> Result<TranscribeFileResult, String> {
     let provider_ref = provider.unwrap_or_else(default_saas_provider_ref);
     let backend = match dispatch(&provider_ref, DictationModality::File) {
@@ -190,6 +196,7 @@ pub async fn transcribe_recording_file<R: Runtime>(
         let trimmed = s.trim();
         if trimmed.is_empty() { None } else { Some(s) }
     });
+    let vocabulary = crate::asr::vocabulary::sanitize(vocabulary);
     match backend {
         DictationBackend::SaasFile => {
             transcribe_recording_file_impl_async(
@@ -199,6 +206,7 @@ pub async fn transcribe_recording_file<R: Runtime>(
                 lang,
                 kind,
                 system_prompt,
+                vocabulary,
             )
             .await
         }
@@ -216,6 +224,7 @@ pub async fn transcribe_recording_file<R: Runtime>(
                     sp.chars().count(),
                 );
             }
+            warn_vocabulary_ignored(&vocabulary, "tencent file");
             let bucket = cos_bucket
                 .as_deref()
                 .map(str::trim)
@@ -257,6 +266,7 @@ pub async fn transcribe_recording_file<R: Runtime>(
                     sp.chars().count(),
                 );
             }
+            warn_vocabulary_ignored(&vocabulary, "aliyun file");
             let bytes = read_recording_bytes(&app, &audio_path)?;
             log::info!(
                 "[transcribe] aliyun file vendor=aliyun name={name} model=paraformer-v2 lang={:?}",
@@ -600,6 +610,7 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     lang: Option<String>,
     provider_kind: String,
     system_prompt: Option<String>,
+    vocabulary: Option<BTreeMap<String, u8>>,
 ) -> Result<TranscribeFileResult, String> {
     let ol: SharedOpenLoaf = app.state::<SharedOpenLoaf>().inner().clone();
 
@@ -627,10 +638,11 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     if duration_ms > SHORT_AUDIO_LIMIT_MS {
         if let Some(ref sp) = system_prompt {
             log::warn!(
-                "[transcribe] asr_long (OL-TL-004) ignores system_prompt (chars={}); only OL-TL-003 short path supports it",
+                "[transcribe] asr_long (OL-TL-004) ignores system_prompt (chars={}); only the short path supports biasing",
                 sp.chars().count(),
             );
         }
+        warn_vocabulary_ignored(&vocabulary, "asr_long (OL-TL-004)");
         let lang_long = parse_lang_long(lang.as_deref());
         return tauri::async_runtime::spawn_blocking(move || {
             let input = AsrLongOlTl004Input::from_base64(b64, Some(media_type));
@@ -643,19 +655,20 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     let lang_short = parse_lang_short(lang.as_deref());
 
     // 第一次尝试。spawn_blocking 包同步 SDK 调用，避免阻塞 tauri 主异步执行器。
-    match run_asr_short_blocking(
+    match run_asr_short_with_fallback(
         &ol,
         &b64,
         media_type,
         lang_short.clone(),
         system_prompt.clone(),
+        vocabulary.clone(),
     )
     .await?
     {
         AsrShortAttempt::Ok(r) => Ok(TranscribeFileResult {
-            text: r.data.text,
+            text: r.text,
             variant: "asrShort".into(),
-            credits_consumed: r.credits_consumed,
+            credits_consumed: r.credits,
             provider_kind,
         }),
         AsrShortAttempt::Unauthorized(raw) => {
@@ -675,13 +688,22 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
                     return Err(ERR_NETWORK_UNAVAILABLE.to_string());
                 }
             }
-            match run_asr_short_blocking(&ol, &b64, media_type, lang_short, system_prompt).await? {
+            match run_asr_short_with_fallback(
+                &ol,
+                &b64,
+                media_type,
+                lang_short,
+                system_prompt,
+                vocabulary,
+            )
+            .await?
+            {
                 AsrShortAttempt::Ok(r) => {
                     log::info!("[transcribe] asr_short retry after refresh succeeded");
                     Ok(TranscribeFileResult {
-                        text: r.data.text,
+                        text: r.text,
                         variant: "asrShort".into(),
-                        credits_consumed: r.credits_consumed,
+                        credits_consumed: r.credits,
                         provider_kind,
                     })
                 }
@@ -699,24 +721,90 @@ async fn transcribe_recording_file_impl_async<R: Runtime>(
     }
 }
 
+struct AsrShortOk {
+    text: String,
+    credits: f64,
+}
+
 enum AsrShortAttempt {
-    Ok(openloaf_saas::v4_tools::AsrShortOlTl003Result),
+    Ok(AsrShortOk),
     Unauthorized(String),
     Other(String),
 }
 
-async fn run_asr_short_blocking(
+/// BYOK / 长音频通道没有即时热词字段，静默丢会让"词典配了却不生效"变成无声失败。
+fn warn_vocabulary_ignored(vocabulary: &Option<BTreeMap<String, u8>>, channel: &str) {
+    if let Some(v) = vocabulary {
+        log::warn!(
+            "[transcribe] {channel} ignores vocabulary (words={})",
+            v.len()
+        );
+    }
+}
+
+/// 先走 OL-TL-010 + vocabulary；非鉴权失败时退回 OL-TL-003 + system_prompt 再试一次。
+///
+/// 401 不退回——两个 variant 用同一个 token，退回也必然 401，交给调用方走续期流程。
+/// 超时也不退回：已经耗掉 120s，再等一轮会撞上前端 invoke 的兜底超时。
+async fn run_asr_short_with_fallback(
+    ol: &SharedOpenLoaf,
+    b64: &str,
+    media_type: &'static str,
+    lang_short: Option<String>,
+    system_prompt: Option<String>,
+    vocabulary: Option<BTreeMap<String, u8>>,
+) -> Result<AsrShortAttempt, String> {
+    match run_asr_short_010_blocking(ol, b64, media_type, lang_short.clone(), vocabulary).await? {
+        AsrShortAttempt::Other(raw) => {
+            log::warn!("[transcribe] asr_short OL-TL-010 failed, falling back to OL-TL-003: {raw}");
+            run_asr_short_003_blocking(ol, b64, media_type, lang_short, system_prompt).await
+        }
+        other => Ok(other),
+    }
+}
+
+/// OL-TL-010（Qwen-Audio-3.1）。不传 system_prompt：3.1 整条丢弃 system 消息，传了只是白占带宽。
+async fn run_asr_short_010_blocking(
+    ol: &SharedOpenLoaf,
+    b64: &str,
+    media_type: &'static str,
+    lang_short: Option<String>,
+    vocabulary: Option<BTreeMap<String, u8>>,
+) -> Result<AsrShortAttempt, String> {
+    let client = authenticated_client_for_dispatch(ol)?;
+    log::info!(
+        "[transcribe] asr_short OL-TL-010 lang={lang_short:?} vocabulary_words={}",
+        vocabulary.as_ref().map_or(0, BTreeMap::len)
+    );
+    let b64_owned = b64.to_string();
+    run_asr_short_blocking(move || {
+        let input = AsrShortOlTl010Input::from_base64(b64_owned, media_type);
+        let params = AsrShortOlTl010Params {
+            language: lang_short,
+            format: None,
+            system_prompt: None,
+            vocabulary,
+        };
+        client
+            .tools_v4()
+            .asr_short_ol_tl_010(&input, &params)
+            .map(|r| AsrShortOk {
+                text: r.data.text,
+                credits: r.credits_consumed,
+            })
+    })
+    .await
+}
+
+/// OL-TL-003（Qwen3-ASR）。只作 010 的退路；它能读 system 消息做偏置。
+async fn run_asr_short_003_blocking(
     ol: &SharedOpenLoaf,
     b64: &str,
     media_type: &'static str,
     lang_short: Option<String>,
     system_prompt: Option<String>,
 ) -> Result<AsrShortAttempt, String> {
-    let client = ol.authenticated_client().ok_or_else(|| {
-        log::warn!("[transcribe] authenticated_client() returned None right before dispatch");
-        ERR_NOT_AUTHENTICATED.to_string()
-    })?;
-    let b64_owned = b64.to_string();
+    let client = authenticated_client_for_dispatch(ol)?;
     match system_prompt.as_deref() {
         Some(sp) => {
             let chars = sp.chars().count();
@@ -724,7 +812,7 @@ async fn run_asr_short_blocking(
             let lines = sp.lines().count();
             let preview = system_prompt_preview(sp, 200);
             log::info!(
-                "[transcribe] asr_short with system_prompt: chars={chars} bytes={bytes} lines={lines} lang={lang_short:?} preview={preview:?}"
+                "[transcribe] asr_short OL-TL-003 with system_prompt: chars={chars} bytes={bytes} lines={lines} lang={lang_short:?} preview={preview:?}"
             );
             // debug 等级输出全文——info 级只看到长度概览，调 prompt 时仍要看到原文。
             log::debug!("[transcribe] asr_short system_prompt full body ({chars} chars):\n{sp}");
@@ -735,18 +823,45 @@ async fn run_asr_short_blocking(
             }
         }
         None => {
-            log::info!("[transcribe] asr_short without system_prompt lang={lang_short:?}");
+            log::info!(
+                "[transcribe] asr_short OL-TL-003 without system_prompt lang={lang_short:?}"
+            );
         }
     }
-    let task = tokio::task::spawn_blocking(move || {
+    let b64_owned = b64.to_string();
+    run_asr_short_blocking(move || {
         let input = AsrShortOlTl003Input::from_base64(b64_owned, media_type);
         let params = AsrShortOlTl003Params {
             language: lang_short,
             enable_itn: Some(true),
             system_prompt,
         };
-        client.tools_v4().asr_short_ol_tl_003(&input, &params)
-    });
+        client
+            .tools_v4()
+            .asr_short_ol_tl_003(&input, &params)
+            .map(|r| AsrShortOk {
+                text: r.data.text,
+                credits: r.credits_consumed,
+            })
+    })
+    .await
+}
+
+fn authenticated_client_for_dispatch(
+    ol: &SharedOpenLoaf,
+) -> Result<openloaf_saas::SaaSClient, String> {
+    ol.authenticated_client().ok_or_else(|| {
+        log::warn!("[transcribe] authenticated_client() returned None right before dispatch");
+        ERR_NOT_AUTHENTICATED.to_string()
+    })
+}
+
+/// 同步 SDK 调用包进 spawn_blocking + 超时，并把错误分成 401 / 其它两类。
+async fn run_asr_short_blocking<F>(call: F) -> Result<AsrShortAttempt, String>
+where
+    F: FnOnce() -> openloaf_saas::SaaSResult<AsrShortOk> + Send + 'static,
+{
+    let task = tokio::task::spawn_blocking(call);
     let join = match tokio::time::timeout(ASR_SHORT_REQUEST_TIMEOUT, task).await {
         Ok(j) => j.map_err(|e| format!("transcribe join: {e}"))?,
         Err(_) => {

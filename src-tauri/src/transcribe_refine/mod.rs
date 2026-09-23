@@ -32,6 +32,8 @@ pub struct TranscribeAndRefineResult {
     pub clipboard_written: bool,
 }
 
+// tauri command 的参数一一对应前端 invoke 的 JSON 字段，收成结构体反而要改前后端协议。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn transcribe_and_refine<R: Runtime>(
     app: AppHandle<R>,
@@ -40,6 +42,8 @@ pub async fn transcribe_and_refine<R: Runtime>(
     lang: Option<String>,
     provider: Option<ProviderRef>,
     asr_system_prompt: Option<String>,
+    // Qwen-Audio-3.1 即时热词，透传给 transcribe_recording_file（见该命令注释）。
+    asr_vocabulary: Option<std::collections::BTreeMap<String, u8>>,
     // None = 只转写不 refine（等价 skip-refine / refine 关闭）。user_text 由本命令
     // 用 ASR 输出填充，前端传空串占位即可。
     refine: Option<RefineChatInput>,
@@ -53,6 +57,7 @@ pub async fn transcribe_and_refine<R: Runtime>(
         lang,
         provider,
         asr_system_prompt,
+        asr_vocabulary,
     )
     .await;
     let (raw_text, asr_variant, provider_kind, credits_asr) = match asr {

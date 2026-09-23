@@ -22,6 +22,7 @@ pub mod meeting;
 pub mod realtime_backend;
 pub mod tencent;
 pub mod test_provider;
+pub mod vocabulary;
 
 #[cfg(test)]
 mod byok_e2e;

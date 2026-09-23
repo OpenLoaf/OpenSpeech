@@ -1,4 +1,8 @@
-// OpenLoaf SaaS realtime ASR 会话编排（V4 通道：`OL-TL-RT-002` / Qwen3-ASR-Flash-Realtime）。
+// OpenLoaf SaaS realtime ASR 会话编排（V4 通道：`OL-TL-RT-005` / Qwen-Audio-3.1-ASR-Flash-Streaming）。
+//
+// 2026-09 从 RT-002（Qwen3-ASR-Flash-Realtime）换代：3.1 有真正的即时热词参数，实测
+// 同音专名与英文缩写明显更准（docs/proposals/qwen-audio-3.1-asr.md §九）。下文里仍提到
+// RT-002 的 `turn_detection` / manual 模式说明是历史背景，RT-005 上游恒按 VAD 切句。
 //
 // 职责：
 // 1. `stt_start`  —— 前端在 recording 态进入时调用；从 openloaf state 拿已登录
@@ -15,6 +19,13 @@
 //                  按 sentenceId 累积拼接。仅适合会议字幕 / 直播 / 同传等需要按句
 //                  独立 transcript 的无人值守场景。
 //    依据：~/.agents/skills/openloaf-saas-sdk/tools/OL-TL-RT-002-realtime-asr-llm.md
+//    入参 `vocabulary`：RT-005 即时热词（词 → 权重 1–5 / 50），前端 `buildAsrVocabulary()`
+//    拼、Rust 侧 `asr::vocabulary::sanitize` 再兜底。实测热词只在 **Final** 生效，
+//    partial 阶段仍可能是同音错字（「金正」→ Final「晶振」），属上游行为。
+//    入参 `context`：最近几条听写正文，作为 user 轮次进上游 `payload.input.context`
+//    （每条 ≤400 字、最多 5 条）。REALTIME 模式不走 refine（前端 isAiRefineActive 在
+//    该模式恒 false），所以这两个是这条链路上仅有的识别偏置入口。BYOK（腾讯 / 阿里）
+//    没有等价字段，打 warn 后丢弃。
 // 2. `stt_finalize` —— 前端在 hotkey 释放、录音 stop 之后调用。让 worker 调
 //    session.finish()，阻塞等最多 FINALIZE_WAIT_MS 拿 Final 事件里的最终文字。
 // 3. `stt_cancel` —— Esc / 误触时调用。让 worker 立即退出，不等 Final。
@@ -55,8 +66,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use openloaf_saas::v4_tools::{
-    RealtimeAsrLlmOlTlRt002Lang, RealtimeAsrLlmOlTlRt002Params, RealtimeAsrLlmOlTlRt002ServerVad,
-    RealtimeAsrLlmOlTlRt002Transcription,
+    RealtimeAsrLlmOlTlRt002Lang, RealtimeAsrOlTlRt005ContextMessage, RealtimeAsrOlTlRt005Lang,
+    RealtimeAsrOlTlRt005Params,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -104,6 +115,10 @@ const EVENT_DICTATION_FALLBACK: &str = "openspeech://dictation-fallback";
 /// send_finish 后等 Final 的最长时间。服务端典型 < 500ms，3s 能兜住抖动；
 /// 超时走空串，前端自行决定是否把 history 标 failed。
 const FINALIZE_WAIT_MS: u64 = 3000;
+
+/// RT-005 `context` 上游限制：每个角色最多 5 条，每轮 ≤400 字（SaaS 按官方文档收口）。
+const REALTIME_CONTEXT_MAX_TURNS: usize = 5;
+const REALTIME_CONTEXT_MAX_TURN_CHARS: usize = 400;
 /// worker 每轮 next_event_timeout 的超时。太短空转多，太长 stop 响应迟。
 const EVENT_POLL_MS: u64 = 30;
 /// 容忍连续 decode error 次数：超过则认定协议崩坏退出。
@@ -201,12 +216,16 @@ pub async fn stt_start<R: Runtime>(
     lang: Option<String>,
     mode: Option<String>,
     provider: Option<ProviderRef>,
+    vocabulary: Option<BTreeMap<String, u8>>,
+    context: Option<Vec<String>>,
 ) -> Result<(), String> {
     log::info!(
-        "[stt] stt_start request lang={:?} mode={:?} provider_mode={:?}",
+        "[stt] stt_start request lang={:?} mode={:?} provider_mode={:?} vocabulary_words={:?} context_turns={:?}",
         lang,
         mode,
-        provider.as_ref().map(|p| format!("{:?}", p.mode))
+        provider.as_ref().map(|p| format!("{:?}", p.mode)),
+        vocabulary.as_ref().map(BTreeMap::len),
+        context.as_ref().map(Vec::len)
     );
 
     // BYOK 路由：custom 模式先在前置 dispatch，避开 SaaS 鉴权流程
@@ -279,13 +298,67 @@ pub async fn stt_start<R: Runtime>(
         }
     }
 
-    tauri::async_runtime::spawn_blocking(move || stt_start_impl(app, lang, mode, backend))
-        .await
-        .map_err(|e| format!("stt_start join: {e}"))?
-        .map_err(|e| {
-            log::warn!("[stt] start failed: {e}");
-            e
-        })
+    tauri::async_runtime::spawn_blocking(move || {
+        stt_start_impl(app, lang, mode, backend, vocabulary, context)
+    })
+    .await
+    .map_err(|e| format!("stt_start join: {e}"))?
+    .map_err(|e| {
+        log::warn!("[stt] start failed: {e}");
+        e
+    })
+}
+
+/// BYOK 实时通道（腾讯 / 阿里直连）没有等价的热词 / 上下文字段，静默丢会让"词典明明配了
+/// 却不生效"变成无声失败，所以这里显式打一条 warn。
+fn warn_bias_ignored(
+    vocabulary: &Option<BTreeMap<String, u8>>,
+    context: &Option<Vec<String>>,
+    vendor: &str,
+) {
+    let words = vocabulary.as_ref().map_or(0, BTreeMap::len);
+    let turns = context.as_ref().map_or(0, Vec::len);
+    if words > 0 || turns > 0 {
+        log::warn!(
+            "[stt] {vendor} realtime ignores vocabulary/context (words={words} turns={turns})"
+        );
+    }
+}
+
+/// 历史正文 → RT-005 的 user 轮次。超 400 字的条目**整条丢弃**不截断（截半句的上下文
+/// 会误导上游补全），最多保留最近 5 条。
+fn build_rt005_context(
+    context: Option<Vec<String>>,
+) -> Option<Vec<RealtimeAsrOlTlRt005ContextMessage>> {
+    let turns: Vec<String> = context?
+        .into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && t.chars().count() <= REALTIME_CONTEXT_MAX_TURN_CHARS)
+        .collect();
+    // 前端按时间正序给（旧 → 新），超额时保留最新的几条。
+    let skip = turns.len().saturating_sub(REALTIME_CONTEXT_MAX_TURNS);
+    let msgs: Vec<_> = turns
+        .into_iter()
+        .skip(skip)
+        .map(RealtimeAsrOlTlRt005ContextMessage::user)
+        .collect();
+    if msgs.is_empty() { None } else { Some(msgs) }
+}
+
+/// 内部统一用 RT-002 的语种枚举（腾讯 / 阿里 BYOK 也在用），这里映射成 RT-005 的
+/// language_hints；auto 不传，让上游自己判定。
+fn rt005_language_hints(
+    lang: RealtimeAsrLlmOlTlRt002Lang,
+) -> Option<Vec<RealtimeAsrOlTlRt005Lang>> {
+    let hint = match lang {
+        RealtimeAsrLlmOlTlRt002Lang::Zh => RealtimeAsrOlTlRt005Lang::Zh,
+        RealtimeAsrLlmOlTlRt002Lang::En => RealtimeAsrOlTlRt005Lang::En,
+        RealtimeAsrLlmOlTlRt002Lang::Ja => RealtimeAsrOlTlRt005Lang::Ja,
+        RealtimeAsrLlmOlTlRt002Lang::Ko => RealtimeAsrOlTlRt005Lang::Ko,
+        RealtimeAsrLlmOlTlRt002Lang::Yue => RealtimeAsrOlTlRt005Lang::Yue,
+        _ => return None,
+    };
+    Some(vec![hint])
 }
 
 fn stt_start_impl<R: Runtime>(
@@ -293,6 +366,8 @@ fn stt_start_impl<R: Runtime>(
     lang: Option<String>,
     mode: Option<String>,
     backend: DictationBackend,
+    vocabulary: Option<BTreeMap<String, u8>>,
+    context: Option<Vec<String>>,
 ) -> Result<(), String> {
     // 兜底校验"stream 是否在跑"。新版 audio_level_start 已同步等到 stream_info
     // 写入才返回，理论上这里第一次读就有值；保留短自旋是为了覆盖：
@@ -327,25 +402,28 @@ fn stt_start_impl<R: Runtime>(
                 ERR_NOT_AUTHENTICATED.to_string()
             })?;
 
-            let params = RealtimeAsrLlmOlTlRt002Params {
-                input_audio_transcription: Some(RealtimeAsrLlmOlTlRt002Transcription {
-                    language: Some(language),
-                    context: None,
-                }),
-                turn_detection: if use_server_vad {
-                    Some(RealtimeAsrLlmOlTlRt002ServerVad::default())
-                } else {
-                    None
-                },
+            // RT-005 上游恒按 VAD 切句，没有 RT-002 那种关 VAD 的开关；manual 请求只记日志，
+            // 多段 Final 由 worker 按 sentence_id 累积，行为与 auto 一致。
+            if !use_server_vad {
+                log::info!("[stt] manual mode requested; OL-TL-RT-005 always segments by VAD");
+            }
+            let vocabulary = crate::asr::vocabulary::sanitize(vocabulary);
+            let context = build_rt005_context(context);
+            let params = RealtimeAsrOlTlRt005Params {
+                language_hints: rt005_language_hints(language),
+                vocabulary,
+                context,
                 ..Default::default()
             };
 
             log::debug!(
-                "[stt] saas realtime params variant=OL-TL-RT-002 lang={language:?} server_vad={use_server_vad}"
+                "[stt] saas realtime params variant=OL-TL-RT-005 lang={language:?} vocabulary_words={} context_turns={}",
+                params.vocabulary.as_ref().map_or(0, BTreeMap::len),
+                params.context.as_ref().map_or(0, Vec::len)
             );
             let sess = client
                 .tools_v4()
-                .realtime_asr_llm_ol_tl_rt_002(&params)
+                .realtime_asr_ol_tl_rt_005(&params)
                 .map_err(|e| {
                     let raw = e.to_string();
                     // realtime 不走 call_authed，401 由 WebSocket 握手返回，需要这里兜
@@ -362,7 +440,7 @@ fn stt_start_impl<R: Runtime>(
                     }
                 })?;
             log::info!(
-                "[stt] session started (variant=OL-TL-RT-002 lang={:?} server_vad={})",
+                "[stt] session started (variant=OL-TL-RT-005 lang={:?} server_vad={})",
                 language,
                 use_server_vad
             );
@@ -375,6 +453,7 @@ fn stt_start_impl<R: Runtime>(
             secret_key,
             name,
         } => {
+            warn_bias_ignored(&vocabulary, &context, "tencent");
             // 腾讯实时引擎按"language hint"挑：用户选的语言优先走对应模型；auto 路径
             // 落 `16k_zh`（腾讯文档枚举里最保守的合法值）——日语/韩语等非中英用户应
             // 在前端选具体 language。
@@ -403,6 +482,7 @@ fn stt_start_impl<R: Runtime>(
             Box::new(TencentRealtimeBackend::new(sess))
         }
         DictationBackend::AliyunRealtime { api_key, name } => {
+            warn_bias_ignored(&vocabulary, &context, "aliyun");
             let lang_str = aliyun_lang_code(language);
             log::debug!(
                 "[stt] aliyun realtime params name={name} language={lang_str} sample_rate=16000 server_vad={use_server_vad}"
@@ -836,6 +916,36 @@ mod tests {
 
     use super::*;
     use openloaf_saas::v4_tools::RealtimeEvent;
+
+    // 上游每角色最多 5 条：超额时保留最新的（前端按旧 → 新给）。
+    #[test]
+    fn rt005_context_keeps_latest_five_turns() {
+        let turns = (1..=7).map(|i| format!("turn{i}")).collect();
+        let msgs = build_rt005_context(Some(turns)).unwrap();
+        let texts: Vec<_> = msgs.iter().map(|m| m.content[0].text.as_str()).collect();
+        assert_eq!(texts, ["turn3", "turn4", "turn5", "turn6", "turn7"]);
+    }
+
+    // 超 400 字的条目整条丢弃，不截成半句；全被丢光就不传 context。
+    #[test]
+    fn rt005_context_drops_overlong_and_blank_turns() {
+        let long = "长".repeat(REALTIME_CONTEXT_MAX_TURN_CHARS + 1);
+        let msgs = build_rt005_context(Some(vec![long, "  ".into(), "ok".into()])).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content[0].text, "ok");
+        assert!(build_rt005_context(Some(vec!["  ".into()])).is_none());
+        assert!(build_rt005_context(None).is_none());
+    }
+
+    // auto 不传语种提示，交给上游判定；具体语种一一映射。
+    #[test]
+    fn rt005_language_hints_maps_and_skips_auto() {
+        assert!(rt005_language_hints(RealtimeAsrLlmOlTlRt002Lang::Auto).is_none());
+        assert_eq!(
+            rt005_language_hints(RealtimeAsrLlmOlTlRt002Lang::Zh),
+            Some(vec![RealtimeAsrOlTlRt005Lang::Zh])
+        );
+    }
 
     /// SDK 0.3.7 修复：服务端 internal 账号每分钟计费心跳里 `remainingCredits=Infinity`
     /// 被 JS `JSON.stringify` 写成 null。0.3.7 把 Credits 三个 f64 改成 Option<f64>，

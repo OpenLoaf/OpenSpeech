@@ -4437,9 +4437,9 @@ dependencies = [
 
 [[package]]
 name = "openloaf-saas"
-version = "0.3.20"
+version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75231f4c967f7b19f957eec5161a80e9aac7fc0789be3a8e7cf21807bcb183ff"
+checksum = "a775b112f3f2a92df2731b5027545528641baa5e8dfdff150cb9be4f97d33417"
 dependencies = [
  "serde",
  "serde_json",

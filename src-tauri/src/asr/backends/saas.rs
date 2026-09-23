@@ -1,8 +1,8 @@
 // SaaS 实时 ASR backend：把 SDK 的 RealtimeAsrSession 适配到 RealtimeAsrBackend trait。
 //
-// 协议路径：OL-TL-RT-002（Qwen3-ASR-Flash-Realtime），与之前 stt/mod.rs 直接持有
-// `RealtimeAsrSession` 的行为完全一致——仅事件壳从 SDK 的 `RealtimeEvent` 映射成
-// 抽象的 `RealtimeBackendEvent`。
+// 协议路径：OL-TL-RT-005（Qwen-Audio-3.1-ASR-Flash-Streaming，2026-09 起；此前是
+// RT-002）。V4 外壳下两者事件流同形（Ready → Partial/Final 按 sentence_id 递增 → Closed），
+// 这里只把 SDK 的 `RealtimeEvent` 映射成抽象的 `RealtimeBackendEvent`。
 
 use std::time::Duration;
 
