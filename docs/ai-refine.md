@@ -26,13 +26,15 @@
 终判命中任一条即离题：
 
 - **改写**：`novel > 0.5` 且（`dropped > 0.5` 或 `expansion > 2`）且输出 ≥ 4 个内容字
-- **抄 history**：输出的内容字符串与某条 `ConversationHistory` 正文相同、或互为子串（较短一侧 ≥ 4 个内容字），且 `novel ≥ 0.5`（用户重复口述同一句时 novel ≈ 0，不会误判）。模型抄 history 常掐头去尾（少个「帮我」），只认完全相等会漏
+- **抄 history**：输出的内容字符串与某条 `ConversationHistory` 正文相同、或互为子串（较短一侧 ≥ 4 个内容字），且（`novel ≥ 0.5`，或 `novel > 0` 且 `dropped > 0.5`）——用户重复口述同一句时 dropped ≈ 0，撤回覆盖留下的尾巴没有新字，都不会误判。模型抄 history 常掐头去尾（少个「帮我」），只认完全相等会漏
+- **抄 history 片段**：输出里有 ≥ 12 个连续内容字出自某条 `ConversationHistory`，且这段在正文里没有（整词命中 HotWords 的片段先剔除）。管的是「前面整理得像样、中间或结尾拼进一句 history」——整段抄判据要求相等或互为子串，拼接形态测不到
 - **零重叠短输出**：`novel = dropped = 100%` 且输出 ≥ 2 个内容字（「制作组制作手机 UI」→「特写」）
+- **截头换尾**：输出开头 ≥ 2 个内容字与正文开头相同、长度 < 正文 50%、`dropped > 0.5`、且 `novel > 0`（「前后超大装载空间」→「前后排」）。撤回覆盖留的是后半句且没有新字，不命中
 - **截断**：输出是正文内容字符的严格前缀、长度 < 正文 35%、`dropped > 0.6`（「制作组制作手机 UI」→「制作」；只删尾巴残字或结巴去重「好的好的好的」→「好的」不命中，因为字符集没丢）
 
 离题 ⇒ **丢弃模型输出，改用正文原文**（尾句号按 always 砍；`off` 不砍），只 emit 一帧 delta，`done.refined_text` 即原文。这样坏输出也不会进 history 污染后续请求。
 
-流式策略：输出前 8 个内容字先 hold（约 2-3 个 SSE chunk），凑够后用 `novel_ratio` 预判——不离题就放行并转透传；离题就继续 hold 到流结束终判。短输出天然 hold 到结束。前缀已放行后才发现整体离题的，来不及撤回，只打 `warn` 日志。
+流式策略：输出前 16 个内容字先 hold，凑够后预判——`novel < 0.3` 且没有抄 history 片段才放行并转透传；否则继续 hold 到流结束终判。短输出天然 hold 到结束。前缀已放行后才发现整体离题的，来不及撤回（delta 已经敲进目标 app），只打 `warn` 日志——所以**前缀门槛必须比终判严**：判不准就 hold，代价只是这一条不逐字上屏。
 
 **只在听写 refine（含历史重试）打开。** 翻译 / 润色 / 会议摘要 / 标题的输出本就该与输入不同，开了会把译文当离题兜底回原文——这些调用方保持缺省（关）。设置页「测试」按钮等调试路径也不开，便于看到模型原始输出。
 
@@ -44,6 +46,36 @@
 
 1. 「帮我用 Cloudflare 的命令去添加一个 DNS 的一个设置。」被「完善」成「帮我用 Cloudflare 的 API 创建一个 DNS 记录，域名是 example.com，类型 A，值 1.2.3.4」——域名 / 类型 / IP 全是模型编的占位值，「命令」还被偷换成「API」。字符集守卫对这种「保留用户的词、再添一段像模像样的参数」**天然无能为力**（novel 0.21 / dropped 0.29 / expansion 1.6，全在正常整理范围内），只能靠 prompt：r3 加了「模糊的请求保持模糊，不替用户补参数」硬约束，并新增 `default-vague-request-no-fill` 示例（正文就是这条事故）。
 2. 坏输出进了 history，25 分钟后「我主要担心的是，用这个方法的话，会不会被封。」被整段替换成 history 里那条 Cloudflare 请求（只少了「帮我」）。这条本该被改写判据拦住（dropped 0.76），却因为 **HotWords 按字母整体豁免**漏网：用户词典里有十来个英文词条（harness / viewer / sidebar / OpenSpeech …），字母几乎凑齐整套，`Cloudflare` / `API` / `DNS` / `example.com` 全被当成「已知」，novel 只有 0.31。抄 history 判据也因为少了「帮我」不完全相等而失效。修法：novel 只豁免输出里整词命中的词条；抄 history 放宽到互为子串。prompt 侧在 `default-history-bleed-long-ask` 的 focus 里补了「带指代的担忧 / 评价句」形态。
+
+第四轮反馈（2026-09-23 18:33，target Orca，55.9 s 长录音）：正文是三个问题（心跳加「是否回 ACK」参数 / 请求方式不方便请求和做数据验证 / 心跳超时和周期能否拉大），输出却成了「Orca 的协议设计有几个问题需要确认」+ 编造的两问（心跳机制是否必须、改用 Protobuf 或 CBOR）+ history 里 **1006 分钟前**那句固件版本同步。终判其实判得出（novel 0.65 / dropped 0.65），但旧的 8 字前缀「Orca 的协议设计有」novel 只有 0.38——「协议」「的」「有」、`ACK` 里的 a / c 都碰巧在正文里——被预判放行，后面全部撤不回。修法：前缀 hold 从 8 字加到 16 字、放行门槛从 `novel < 0.5` 收紧到 `< 0.3`；新增「抄 history 片段」判据。同时收窄 refine 的 history：`buildSpeechSystemPrompt` 新增 `historyMaxAgeMs`，refine 调用方（听写 phase 1 / 合并路径 / 历史重试 / 调试）统一传 `REFINE_HISTORY_MAX_AGE_MS`（1 小时），一小时外的条目不进 refine 的 ConversationHistory；ASR 路径不传，照旧只按条数取——它靠旧条目里的「修正前 → 修正后」做同音偏置。**有意不做**：前缀忠实、后半段才跑偏的形态仍然撤不回，但要堵只能听写 refine 整段 hold，等于放弃逐字上屏、推翻三级 hold 流式架构，代价大于收益。
+
+第五轮反馈（2026-09-23 22:43，另一位用户，target Canva，繁体注音输入法）：连续三条短句被写成 history 里的上一条或其残片——「一家人在后座 3 排 6 座超大空间内庆生…」→「一家人在后排，24 小时」（与 1 分钟前的 history 逐字相同）、「前后超大装载空间」→「前后排」（两次；第二次时「前后排」已进了 history）、「支撑繁忙商务生活」被截断（截断判据拦下）。前两条都是 novel 只有 0.2–0.33、dropped 0.7 以上：输出和正文共用开头几个字，旧的「novel ≥ 0.5」门槛全部漏网。修法：抄 history 判据放宽到「带新字 + 丢了正文大半」；新增截头换尾判据，覆盖 history 里还没有坏输出时的第一次。
+
+### 输出锚定正文（prompt 侧，2026-09-23）
+
+守卫是事后兜底，根治在 prompt：**输出必须是正文本身的整理版**。评测发现当前 SaaS 模型（OL-TX-025，`enable_thinking: false`，temperature 0 也不确定）把 system prompt 里的一切文字都当成可用素材——ConversationHistory、`<examples>` 的示范输出、MessageContext 都会被原样搬进输出（「帮我订一个会议室」→ Cloudflare 那条 example、「会议室几楼」→ 搜索框那条 example）。旧 prompt（约 14k 字）里「默认 active 整理」「self_check」等段落还在鼓励改写。
+
+prompt 重写为 **role → task（改动白名单）→ core_rules → examples → reference_tags**，每个 target 约 4–5k 字：
+
+1. `<task>` 开宗明义「输出 = 正文本身的整理版，每个实义词都必须来自正文」，然后列出**仅有的 6 种改动**（删残渣 / 改口只留最后版本 / 同音纠错 / 数字归一 / 标点语序 / 列表分段），末尾「拿不准就几乎原样输出」。去掉了 `<thinking_process>` / self_check
+2. 核心规则 `r0-anchor-to-body` 排第一、不可调（用户自定义同 id 规则不能覆盖）；r6 目标应用风格、r7 尾句号仍是 tunable，id 不变
+3. `<examples>` 入口声明「任何 example 的 output 文字都不能出现在你的输出里」；`<reference_tags>` 挪到 examples 之后，紧贴 `<system-tag>` 块
+4. Rust `guard_section(lang, anchor_to_body)` 在听写 refine（与 `drift_guard` 同一开关）时于 Guard 末尾重申锚定——紧贴正文的位置最不容易被稀释。翻译 / 润色 / 会议不加，它们的输出本就不逐词对应输入
+5. **refine 不再带 ConversationHistory，MessageContext 只留 `platform` / `audioDuration`，TargetApp 只留 `name`**（`buildSpeechSystemPrompt({ refineContext: true })`）。history 是三轮事故里被抄得最多的素材；评测里去掉 history 后抄袭几乎归零，且同音纠错没有变差——refine 的纠错靠 HotWords 和正文上下文，history 贡献可以忽略。ASR 阶段仍带 history / 完整遥测
+
+**示例本身也是风险源**：一条又长又具体的示例（终端调试长段：useAudioStream 第 142 行 / NotAllowedError / 503→500）会把整个 terminal target 带偏——删掉之前，zh-TW / en 终端用例约三成输出编造内容（凭空的发版清单、抄 useAudioStream、直接回答问句），删掉之后 48/48 忠实。加示例前先在 eval 里跑一遍；宁可短而泛，不要长而具体。给白名单第 6 条追加「列表项不增不减」反而更糟，已回退——这个模型对措辞极敏感，改 prompt 必须以 eval 结果为准。
+
+评测（`src-tauri/examples/prompt_eval_runner` 打线上 OL-TX-025，两份反馈原样复刻 context，temperature 0）：
+
+| | 调用数 | 输出含正文以外内容 |
+|---|---|---|
+| 旧 prompt（zh-CN，含 history） | — | 真实翻车例约半数；generic target 大量抄 examples |
+| 新 prompt zh-CN（39 例 × 5，含 5 条真实翻车） | 195 | 0 |
+| 新 prompt zh-TW（12 例 × 4） | 48 | 0 |
+| 新 prompt en（12 例 × 4） | 48 | 0 |
+| 再把正文包进 `<transcript>` | — | 同样忠实，但整理力度变弱（数字不归一、语气词不删），未采用 |
+
+锚定没有让模型变保守：撤回覆盖（「三十秒，不对，六十秒」→ 60 秒）、卡壳补全（「会议室是五楼」）、数字归一（1230 万 / 15%）、M2/M3、列表与分段、注入原样照录都正确。残留小瑕疵：长段吐槽偶尔不分段；zh-TW 短问句有时丢问号。
 
 ## settings 字段
 
@@ -61,7 +93,7 @@
   }>,
   activeCustomProviderId: string | null,    // 当前激活的供应商 id（custom 模式才有意义）
   customSystemPrompt: string | null,        // null = 跟随当前 UI 语言用 DEFAULT_AI_SYSTEM_PROMPTS；非 null = 用户自定义（不分语言）
-  includeHistory: boolean,                   // 默认 true
+  includeHistory: boolean,                   // 默认 true；只影响 ASR 阶段，refine 恒不带 history
 }
 ```
 
@@ -71,9 +103,9 @@ ASR 阶段（OL-TL-003）和 refine 阶段共用同一份 prompt 组装逻辑：
 
 输出整体作为**单一 system message**送上游；user message 只放用户实际文本（refine）或音频本体（ASR）。前端**不再**单独传 `hotwords / historyEntries / requestTime / targetApp / domains` 给 Rust——`build_context_message` 在这些字段全 None 时返回 None，refine 自动跳过 context user message，messages 结构变成 `[system, user]` 两条。Rust 端结构体保留这些 Option 字段做兼容兜底，但本仓库前后端协同改动后实际只走 `system_prompt`。
 
-- `includeHistory` 默认 `true`。从 `historyStore` 取最近 `N=5` 条 `success` 记录，按时间正序拼成 `[<分钟前> · focusTitle=<title>] <text>` 一行。当前 target 已知时整段统一同 app，`targetApp` 提到 tag attribute（`<system-tag type="ConversationHistory" targetApp="VSCode">`）避免每行重复；target 未知（罕见）时退化为行内 `targetApp=`。`focusTitle` 字段缺失的老记录或 retry 路径自动省略。翻译 phase 2 路径调 `buildSpeechSystemPrompt({ ..., skipHistory: true })`，因为历史已被 phase 1 融入 refined 结果。
+- `includeHistory` 默认 `true`。从 `historyStore` 取最近 `N=5` 条 `success` 记录，按时间正序拼成 `[<分钟前> · focusTitle=<title>] <text>` 一行。当前 target 已知时整段统一同 app，`targetApp` 提到 tag attribute（`<system-tag type="ConversationHistory" targetApp="VSCode">`）避免每行重复；target 未知（罕见）时退化为行内 `targetApp=`。`focusTitle` 字段缺失的老记录或 retry 路径自动省略。翻译 phase 2 路径调 `buildSpeechSystemPrompt({ ..., skipHistory: true })`。**refine 各调用点传 `refineContext: true`，整段不出**（见上文「输出锚定正文」）。
 - **按目标应用隔离**：当本次会话的 `target_app` 已知时，仅取 `target_app` 完全相同的历史条目；拿不到（null）时不过滤。retry 路径以"被重试那条记录的 `target_app`"作为当前应用，并 `excludeHistoryId` 排除自身。
-- `MessageContext` 内含 `requestTime`（本地时间 + 时区偏移 + IANA 时区名）/ `platform`（macOS / Windows / Linux）/ `appLanguage`（OpenSpeech UI 语言）/ `dictationLanguage`（听写设置语言）/ `systemLocale`（navigator 给的）。`MachineInfo` 已合进这一段，不再单独 emit。**对 refine 而言这一段全是幻觉诱因**：`requestTime` 会被当成用户说的时间、`deviceName` / `username` 会被当成人名填进正文（见上文离题守卫的事故原型）。refine prompt 已在 `<reference_tags>` 明示「MessageContext 是遥测，一个字都不能进输出」；若再出现同类事故，下一步是给 refine 路径单独传一份精简 MessageContext（只留 `platform` / `appLanguage` / `audioDuration`），ASR 与翻译路径保持现状。
+- `MessageContext` 内含 `requestTime`（本地时间 + 时区偏移 + IANA 时区名）/ `platform`（macOS / Windows / Linux）/ `appLanguage`（OpenSpeech UI 语言）/ `dictationLanguage`（听写设置语言）/ `systemLocale`（navigator 给的）。`MachineInfo` 已合进这一段，不再单独 emit。**对 refine 而言这一段全是幻觉诱因**：`requestTime` 会被当成用户说的时间、`deviceName` / `username` 会被当成人名填进正文（见上文离题守卫的事故原型）。因此 refine 路径（`refineContext: true`）只给精简 MessageContext（`platform` / `audioDuration`），TargetApp 也去掉 `focusTitle`；ASR 与翻译 phase 2 保持现状。
 
 ### system_prompt 段落顺序（ASR / refine 共用）
 
@@ -111,14 +143,14 @@ ASR core rules 是约 150 字的三语短规则：用 Domains/HotWords/History/T
 | ASR | UTTERANCE 主路径 degraded → file 转写 | `src/stores/recording.ts` | `currentSessionTargetApp` |
 | ASR | Debug simulate | `src/stores/recording.ts` | `currentSessionTargetApp` |
 | ASR | 历史记录 retry | `src/stores/history.ts` | `target.target_app` + `excludeHistoryId=id` |
-| refine | finalize phase 1 | `src/stores/recording.ts` | `currentSessionTargetApp` |
+| refine | finalize phase 1 | `src/stores/recording.ts` | `currentSessionTargetApp` + `refineContext=true` |
 | refine | finalize phase 2 (translate) | `src/stores/recording.ts` | `currentSessionTargetApp` + `skipHistory=true` |
-| refine | Debug simulate refine | `src/stores/recording.ts` | `currentSessionTargetApp` |
-| refine | 历史记录 retry refine | `src/stores/history.ts` | `target.target_app` + `excludeHistoryId=id` |
+| refine | Debug simulate refine | `src/stores/recording.ts` | `currentSessionTargetApp` + `refineContext=true` |
+| refine | 历史记录 retry refine | `src/stores/history.ts` | `target.target_app` + `excludeHistoryId=id` + `refineContext=true` |
 
 约束：
 - ASR 阶段的 system_prompt 与 `aiRefine.enabled` **解耦**：refine.enabled 只决定"录音结束后是否做文本清洗"，跟 ASR 阶段是否带识别偏置无关。即使关掉 AI 优化（直接落原文），ASR 阶段仍会带 system_prompt。
-- `includeHistory === false` ⇒ 不出 ConversationHistory 段；其他段不变。`skipHistory: true` 同等效果（phase 2 翻译用）。
+- `includeHistory === false` ⇒ 不出 ConversationHistory 段；其他段不变。`skipHistory: true` 同等效果（phase 2 翻译用）。`refineContext: true` 除去 history 外还精简 MessageContext / TargetApp（听写 refine 用）。
 - **不主动截断**长度。SDK 建议 ≤ 2000 字，超过时 Rust 侧 `[transcribe] asr_short system_prompt chars=N exceeds the SDK-recommended 2000-char soft limit` warn 暴露真实长度，由用户自行精简。
 - ASR（文件转写 / UTTERANCE 主路径，2026-09 起）：走 **OL-TL-010（Qwen-Audio-3.1）+ `vocabulary`**。
   3.1 会整条丢弃 system 消息，所以词典偏置改由 `buildAsrVocabulary()` 拼即时热词表
@@ -143,7 +175,7 @@ ASR core rules 是约 150 字的三语短规则：用 Domains/HotWords/History/T
 - `customSystemPrompt` 非 null：用户已经自定义过，所有界面语言下都用这一条；textarea 一旦发生 `onChange` 就把当前内容写入 `customSystemPrompt`，自此与界面语言解耦。
 - 「恢复默认」按钮把 `customSystemPrompt` 设回 `null`，回到跟随界面语言的默认行为。
 
-`DEFAULT_AI_SYSTEM_PROMPTS` 三语长 prompt 在 `src/lib/defaultAiPrompts.ts`（XML 标签结构 + role / input_boundary / language_rule / 7 条 rules / examples / self_check）。规则覆盖：保守整理、通顺化只做减法、自我修正、主动分段、ASR 书面化、标点规范化、结构化重排触发条件、reference 标签处理。
+`DEFAULT_AI_SYSTEM_PROMPTS` 三语 prompt 在 `src/lib/defaultAiPrompts.ts`（role / task 改动白名单 / 8 条 core_rules r0–r7 / examples / reference_tags，结构与取舍见上文「输出锚定正文」）。
 
 调用前端用 `getEffectiveAiSystemPrompt(customSystemPrompt, lang)` 解析最终 system prompt 传给 Rust。
 

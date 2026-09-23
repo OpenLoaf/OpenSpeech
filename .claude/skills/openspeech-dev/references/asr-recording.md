@@ -108,9 +108,11 @@
 
 `run_refine_core` 的 SSE 消费链是 **context-leak filter → drift guard → trailing-period stripper** 三级 hold 串联，任何新加的"输出先看一眼再放"逻辑都插到这条链里，不要另起一条独立缓冲——否则前端 `injectIncremental` 的 typedLen 前缀假设会被打破（已注入的字撤不回）。
 
-`RefineChatInput.driftGuard` 是**调用方契约**，Rust 不做默认开：听写 refine（`finalize.ts` phase 1 两处 + `history.ts` 重试）传 `true`；翻译 phase 2 / 润色 / 会议摘要 / 标题 / 设置页测试按钮 **不传**。开错地方的症状是"译文被换回原文"——译文与原文零字符重叠，守卫必判离题。
+`RefineChatInput.driftGuard` 是**调用方契约**，Rust 不做默认开：听写 refine（`finalize.ts` phase 1 两处 + `history.ts` 重试）传 `true`；翻译 phase 2 / 润色 / 会议摘要 / 标题 / 设置页测试按钮 **不传**。开错地方的症状是"译文被换回原文"——译文与原文零字符重叠，守卫必判离题。同一个开关还控制 Guard 末尾的「输出只能来自正文」锚定句（`guard_section(lang, anchor_to_body)`）——翻译路径误开会被 prompt 要求逐词对应原文，译不出来。
 
 `MessageContext.requestTime` 对 refine 是幻觉诱因（正文「下午的行程是点点点点点」被填成「上午九点十五分」= 当时的系统时钟），且坏输出会经 ConversationHistory 级联污染后续每条。守卫兜住的是"整段离题"；"前半句照录、后半句凭空补一个时间"这种局部幻觉守卫抓不到，只能靠 prompt r3 的「补全值只能来自正文」约束。细节见 `docs/ai-refine.md` 离题守卫一节。
+
+听写 refine 的 `buildSpeechSystemPrompt` 必须传 `refineContext: true`（不带 ConversationHistory、MessageContext 只留 platform / audioDuration、TargetApp 不带 focusTitle）。OL-TX-025 会把 system prompt 里任何文字当素材抄进输出，history 是被抄最多的；新增 refine 调用点漏传这个参数，就会重新打开「输出成上一条」的口子。同理，给 `defaultAiPrompts.ts` 加示例前先跑 eval——一条长而具体的示例曾让终端 target 三成输出编造内容。
 
 ## 隐私边界（呼应 `docs/privacy.md`）
 

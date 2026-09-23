@@ -170,8 +170,18 @@ fn normalize_system_tag(block: &str) -> String {
 }
 
 /// 输出前缀先 hold 多少个「内容字符」（字母 / 数字 / 汉字，不含标点空白）再做离题预判。
-/// 8 个字 ≈ 2-3 个 SSE chunk，用户感知不到；短于 8 个字的输出天然 hold 到流结束。
-const DRIFT_PREFIX_HOLD_CONTENT_CHARS: usize = 8;
+/// 第四轮反馈（2026-09-23）：原先 8 个字、novel < 0.5 就放行，「Orca 的协议设计有」
+/// 只有 0.38 被放过，整段终判 novel 0.65 / dropped 0.65 却已来不及撤回。前缀越短越容易
+/// 碰巧复用正文的字，16 个字才有区分度；短于 16 个字的输出天然 hold 到流结束。
+const DRIFT_PREFIX_HOLD_CONTENT_CHARS: usize = 16;
+/// 前缀预判放行门槛：novel 低于此值才转透传。忠实整理的前缀 novel 通常在 0.1 上下；
+/// 放行一旦出错就撤不回（delta 已敲进光标），所以门槛比终判严得多——判不准就 hold 到
+/// 流结束，代价只是这一条没有逐字上屏，不会放出错误内容。
+const DRIFT_PREFIX_RELEASE_MAX_NOVEL: f32 = 0.3;
+/// 抄 history 片段判据：输出里有连续这么多个内容字出自某条 history、而正文里没有 →
+/// 在拿 history 拼内容。第四轮反馈的第 3 条就是把 16 小时前的「一旦有一个设备的固件
+/// 版本比较新…」整句拼了进去。12 个字足以排除「一个」「是不是」这类常用短语的巧合。
+const DRIFT_HISTORY_FRAGMENT_MIN_CHARS: usize = 12;
 /// 输出内容字符里「正文从未出现过」的占比超过此值 → 在写正文没有的东西。
 /// 输出中**整词命中** HotWords term / alias 的片段先剔除再算（按词典还原品牌名不算 novel）；
 /// 只按词条豁免、不按字母豁免——词典一长，26 个字母很快被凑齐，任何拉丁文幻觉都测不出来。
@@ -192,6 +202,13 @@ const DRIFT_MIN_OUTPUT_CONTENT_CHARS_ZERO_OVERLAP: usize = 2;
 /// 「好的好的好的」→「好的」这类结巴去重字符集没丢，也不会命中。
 const DRIFT_TRUNCATION_MAX_EXPANSION: f32 = 0.35;
 const DRIFT_TRUNCATION_DROPPED_RATIO: f32 = 0.6;
+/// 截头换尾判据：输出开头与正文开头至少这么多个内容字一致、长度不到正文的
+/// DRIFT_SUBSTITUTION_MAX_EXPANSION、丢了正文一半以上、且带进了正文没有的字 → 模型只留了
+/// 开头，后半段换成了别的东西。第五轮反馈（2026-09-23 22:43，Canva）：「前后超大装载空间」→
+/// 「前后排」、「一家人在后座 3 排 6 座超大空间内庆生…」→「一家人在后排，24 小时」。
+/// 撤回覆盖留的是后半句、且新字为零，不会命中；「好的好的好的」→「好的」没有新字，也不命中。
+const DRIFT_SUBSTITUTION_MIN_SHARED_PREFIX: usize = 2;
+const DRIFT_SUBSTITUTION_MAX_EXPANSION: f32 = 0.5;
 /// 输出与某条 ConversationHistory 文本相同（或互为子串）、且与正文的重叠低于此值 → 抄 history。
 /// 用户重复口述同一句时 novel ≈ 0，不会误判。
 const DRIFT_HISTORY_ECHO_MIN_NOVEL: f32 = 0.5;
@@ -217,6 +234,7 @@ const DRIFT_HISTORY_ECHO_MIN_SUBSTRING_CHARS: usize = 4;
 ///   （「制作组制作手机 UI」→「特写」；「我主要担心的是…会不会被封」→ 抄走上一条只少了「帮我」）
 /// - 零重叠短输出：novel = dropped = 100% 时门槛从 4 字降到 2 字
 /// - 截断：输出是正文的严格前缀且只剩不到 35%（「制作组制作手机 UI」→「制作」）
+/// - 截头换尾：输出保留正文开头、长度不到一半、后面换成了正文没有的字（「前后超大装载空间」→「前后排」）
 ///
 /// 单看 novel 会误伤「克劳德 → Claude」这类音译还原；单看 dropped 会误伤撤回覆盖
 /// （「帮我写邮件…啊不对算了，发消息给项目群」→ 只留后半句）。数字形态归一到同一类，
@@ -227,9 +245,16 @@ const DRIFT_HISTORY_ECHO_MIN_SUBSTRING_CHARS: usize = 4;
 /// 「用 Cloudflare 的 API 创建一个 DNS 记录，域名是 example.com…」novel 只有 0.31 而漏网。
 /// 现在只豁免输出里**整词命中**的词条，其余字母一律按正文判。
 ///
-/// 流式策略：前 DRIFT_PREFIX_HOLD_CONTENT_CHARS 个内容字符先 hold；凑够后用 novel_ratio
-/// 预判——不离题就放行并转透传，离题就继续 hold 到流结束终判。终判离题且从未放行过
-/// 任何字符 → Fallback（调用方回退正文）；已放行过 → 来不及撤回，照常放行只记日志。
+/// 第四轮反馈（2026-09-23 18:33，Orca）：正文是心跳 ACK / 请求方式 / 心跳周期三个问题，
+/// 输出却是编造的「心跳机制是否必须 / 改用 Protobuf 或 CBOR」外加 history 里 16 小时前
+/// 那句固件版本。终判其实判得出离题，但 8 字前缀预判已放行、撤不回。于是：前缀 hold 到
+/// 16 字且 novel < 0.3 才放行；新增「抄 history 片段」判据（≥ 12 字连续片段出自 history
+/// 且正文没有），前缀预判与终判都用。
+///
+/// 流式策略：前 DRIFT_PREFIX_HOLD_CONTENT_CHARS 个内容字符先 hold；凑够后预判——novel 低于
+/// DRIFT_PREFIX_RELEASE_MAX_NOVEL 且没抄 history 片段才放行并转透传，否则继续 hold 到流结束
+/// 终判。终判离题且从未放行过任何字符 → Fallback（调用方回退正文）；已放行过 → 来不及撤回，
+/// 照常放行只记日志。
 pub struct StreamingDriftGuard {
     /// 正文的内容字符集合——dropped_ratio 的分母。
     source_chars: HashSet<char>,
@@ -342,7 +367,9 @@ impl StreamingDriftGuard {
             return String::new();
         }
         let (novel_ratio, _) = self.ratios(&self.pending);
-        if novel_ratio >= DRIFT_NOVEL_RATIO {
+        if novel_ratio >= DRIFT_PREFIX_RELEASE_MAX_NOVEL
+            || self.copies_history_fragment(&content_key(&self.pending))
+        {
             // 前缀已经在写正文没有的东西，继续 hold 到流结束再终判。
             // 每次 push 都重算：模型若先写了一段导语再接正文，比例回落后仍能放行。
             return String::new();
@@ -374,15 +401,33 @@ impl StreamingDriftGuard {
         let zero_overlap = output_content.len() >= DRIFT_MIN_OUTPUT_CONTENT_CHARS_ZERO_OVERLAP
             && novel_ratio >= 1.0
             && dropped_ratio >= 1.0;
+        // 抄 history：novel 高是典型形态；第五轮反馈里「一家人在后排，24 小时」与 history 逐字
+        // 相同，却因为和正文共用了「一家人在后排」novel 只有 0.2——所以「丢了正文大半 + 带进了
+        // 新字」同样算。用户重复口述同一句时 dropped ≈ 0，撤回覆盖留下的尾巴没有新字，都不命中。
         let history_echo = !output_content.is_empty()
-            && novel_ratio >= DRIFT_HISTORY_ECHO_MIN_NOVEL
+            && (novel_ratio >= DRIFT_HISTORY_ECHO_MIN_NOVEL
+                || (novel_ratio > 0.0 && dropped_ratio > DRIFT_DROPPED_RATIO))
             && self.echoes_history(&output_content.iter().collect::<String>());
         let truncated = !output_content.is_empty()
             && output_content.len() < self.source_content.len()
             && self.source_content.starts_with(&output_content)
             && expansion < DRIFT_TRUNCATION_MAX_EXPANSION
             && dropped_ratio > DRIFT_TRUNCATION_DROPPED_RATIO;
-        let drifted = rewritten || zero_overlap || history_echo || truncated;
+        let substituted = output_content.len() >= DRIFT_SUBSTITUTION_MIN_SHARED_PREFIX
+            && self.source_content.len() >= DRIFT_SUBSTITUTION_MIN_SHARED_PREFIX
+            && output_content[..DRIFT_SUBSTITUTION_MIN_SHARED_PREFIX]
+                == self.source_content[..DRIFT_SUBSTITUTION_MIN_SHARED_PREFIX]
+            && expansion < DRIFT_SUBSTITUTION_MAX_EXPANSION
+            && dropped_ratio > DRIFT_DROPPED_RATIO
+            && novel_ratio > 0.0;
+        let history_fragment =
+            self.copies_history_fragment(&output_content.iter().collect::<String>());
+        let drifted = rewritten
+            || zero_overlap
+            || history_echo
+            || history_fragment
+            || truncated
+            || substituted;
         if !drifted {
             self.emitted.push_str(&pending);
             return DriftFinalize::Release(pending);
@@ -421,6 +466,36 @@ impl StreamingDriftGuard {
             novel as f32 / out_chars.len() as f32,
             dropped as f32 / self.source_chars.len() as f32,
         )
+    }
+
+    /// 输出（内容字符串）里是否有连续 DRIFT_HISTORY_FRAGMENT_MIN_CHARS 个字出自某条 history、
+    /// 且这段在正文里没有。整词命中 HotWords 的片段先剔除——词典里的长专名可能同时出现在
+    /// history 和输出里，那是按词典还原，不是抄。用户重复口述 history 里的话时片段也在正文里，不算。
+    fn copies_history_fragment(&self, output_key: &str) -> bool {
+        if self.history_keys.is_empty() {
+            return false;
+        }
+        let mut residual = output_key.to_string();
+        for term in &self.hotword_terms {
+            if residual.contains(term.as_str()) {
+                residual = residual.replace(term.as_str(), "");
+            }
+        }
+        let chars: Vec<char> = residual.chars().collect();
+        if chars.len() < DRIFT_HISTORY_FRAGMENT_MIN_CHARS {
+            return false;
+        }
+        let source_key: String = self.source_content.iter().collect();
+        chars
+            .windows(DRIFT_HISTORY_FRAGMENT_MIN_CHARS)
+            .map(|w| w.iter().collect::<String>())
+            .any(|window| {
+                !source_key.contains(&window)
+                    && self
+                        .history_keys
+                        .iter()
+                        .any(|entry| entry.contains(&window))
+            })
     }
 
     /// 输出（内容字符串）是否抄自某条 history：完全相同不限长度；互为子串时较短一侧
@@ -979,15 +1054,19 @@ mod tests {
         assert!(matches!(verdict, DriftFinalize::Fallback(_)));
     }
 
-    // 正常整理：前 8 个内容字与正文一致 → 第三个 chunk 起放行，之后透传。
+    // 正常整理：前 16 个内容字与正文一致（「键」一个 novel，0.06）→ 凑够即放行，之后透传。
     #[test]
     fn drift_guard_releases_prefix_early_for_faithful_rewrite() {
         let mut guard =
             StreamingDriftGuard::new("那个搜索框现在支持的快捷见太少了啊，可以加一些快捷见。", []);
         assert_eq!(guard.push("搜索框"), "");
         assert_eq!(guard.push("现在支持"), "");
-        assert_eq!(guard.push("的快捷键"), "搜索框现在支持的快捷键");
-        assert_eq!(guard.push("太少了，"), "太少了，");
+        assert_eq!(guard.push("的快捷键"), "");
+        assert_eq!(
+            guard.push("太少了，可以加"),
+            "搜索框现在支持的快捷键太少了，可以加"
+        );
+        assert_eq!(guard.push("一些快捷键"), "一些快捷键");
         assert!(matches!(guard.finalize(), DriftFinalize::Release(ref rest) if rest.is_empty()));
     }
 
@@ -1139,14 +1218,129 @@ mod tests {
         assert!(matches!(verdict, DriftFinalize::Release(_)));
     }
 
+    // 第四轮反馈（2026-09-23 18:33，Orca）的真实正文与 history 块（只留被抄的那条）。
+    const FEEDBACK_ORCA_TEXT: &str = "心跳协议里面加一个参数，是否要回复ACK？如果是的话就回复。然后现在这个曲线。嗯，应该优化一下，现在这个请求方式不太方便请求，其次也不太方便做数据验证啊什么的。还有就是心跳现在是嗯超时时间和那个心跳的周期是不是可以拉大一点？";
+    const FEEDBACK_HISTORY_ORCA: &str = "<system-tag type=\"ConversationHistory\" targetApp=\"Orca\">\n\t[1079 分钟前] 我测试一下，现在怎么样\n\n\t[1006 分钟前] 我觉得这里没问题。还有一个关于固件版本的问题，一旦有一个设备的固件版本比较新，所有的设备都应该更新到那个版本\n\n\t[115 分钟前] 效果还好吧\n</system-tag>";
+    const FEEDBACK_ORCA_OUTPUT: &str = "Orca 的协议设计有几个问题需要确认：\n1. 心跳机制是否必须？如果设备离线，是否有其他检测手段（如 TCP keepalive）可以替代应用层心跳？\n2. 消息格式目前用 JSON，考虑到嵌入式设备的资源限制，是否应该改用更轻量的二进制协议（如 Protobuf 或 CBOR）？\n3. 关于固件版本同步，一旦有一个设备的固件版本比较新，所有的设备都应该更新到那个版本";
+
+    /// 按 SSE 的粒度把输出切成 3 字一块。
+    fn chunk3(text: &str) -> Vec<String> {
+        text.chars()
+            .collect::<Vec<_>>()
+            .chunks(3)
+            .map(|c| c.iter().collect())
+            .collect()
+    }
+
+    // 第四轮反馈：编造两问 + 拼 history 一句。旧实现 8 字前缀 novel 0.38 就放行，终判
+    // 离题却撤不回；现在前缀 novel 0.5 被 hold 住，终判离题 → 一个字都不放、兜底正文。
+    #[test]
+    fn drift_guard_falls_back_on_fabricated_questions_with_history_fragment() {
+        let chunks = chunk3(FEEDBACK_ORCA_OUTPUT);
+        let refs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+        let (released, verdict) = run_drift(
+            FEEDBACK_ORCA_TEXT,
+            &[FEEDBACK_HOTWORDS_LONG, FEEDBACK_HISTORY_ORCA],
+            &refs,
+        );
+        assert_eq!(released, "");
+        assert!(matches!(verdict, DriftFinalize::Fallback(_)));
+    }
+
+    // 同一反馈的忠实整理必须照常流式放行，不能因为 hold 变长就被兜底。
+    #[test]
+    fn drift_guard_releases_faithful_rewrite_of_orca_feedback() {
+        let output = "1. 心跳协议里加一个参数，表示是否要回复 ACK，如果是的话就回复\n2. 现在这个曲线应该优化一下，现在的请求方式不太方便请求，也不太方便做数据验证\n3. 心跳的超时时间和心跳周期是不是可以拉大一点？";
+        let mut guard = StreamingDriftGuard::new(
+            FEEDBACK_ORCA_TEXT,
+            [FEEDBACK_HOTWORDS_LONG, FEEDBACK_HISTORY_ORCA],
+        );
+        let chunks = chunk3(output);
+        // 前 16 个内容字凑齐后应当已经开始放行，而不是 hold 到流结束。
+        let early: String = chunks[..10].iter().map(|c| guard.push(c)).collect();
+        assert!(!early.is_empty(), "faithful prefix should stream");
+        let rest: String = chunks[10..].iter().map(|c| guard.push(c)).collect();
+        assert!(matches!(guard.finalize(), DriftFinalize::Release(ref r) if r.is_empty()));
+        assert_eq!(format!("{early}{rest}"), output);
+    }
+
+    // 只在结尾拼了一句 history、前面都忠实：主判据可能不到阈值，片段判据要能单独拦住。
+    #[test]
+    fn drift_guard_falls_back_when_output_appends_history_fragment() {
+        let guard = StreamingDriftGuard::new(
+            FEEDBACK_ORCA_TEXT,
+            [FEEDBACK_HOTWORDS_LONG, FEEDBACK_HISTORY_ORCA],
+        );
+        assert!(guard.copies_history_fragment(&content_key(
+            "心跳协议里加一个参数。一旦有一个设备的固件版本比较新，所有的设备都应该更新"
+        )));
+        // 常用短语与 history 撞上几个字不算。
+        assert!(!guard.copies_history_fragment(&content_key("心跳协议里加一个参数，还有一个问题")));
+    }
+
+    // 用户重复口述 history 里那句：片段在正文里也有 → 不算抄。
+    #[test]
+    fn drift_guard_history_fragment_ignores_text_the_user_repeated() {
+        let text = "一旦有一个设备的固件版本比较新，所有的设备都应该更新到那个版本。";
+        let (released, verdict) = run_drift(
+            text,
+            &[FEEDBACK_HISTORY_ORCA],
+            &chunk3(text).iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        assert_eq!(released, text);
+        assert!(matches!(verdict, DriftFinalize::Release(_)));
+    }
+
+    // 第五轮反馈（2026-09-23 22:43，Canva）的 history 块：最后一条本身就是上一次抄出来的坏输出。
+    const FEEDBACK_HISTORY_CANVA: &str = "<system-tag type=\"ConversationHistory\" targetApp=\"Canva（国际版）\">\n\t[4 分钟前] 24小时\n\n\t[3 分钟前] 饮料\n\n\t[2 分钟前] 一家人在后排，24小时\n\n\t[1 分钟前] 前后排\n</system-tag>";
+
+    // 输出与 history 逐字相同，但和正文共用「一家人在后排」，novel 只有 0.2——旧判据要求
+    // novel ≥ 0.5 漏网。丢了正文七成 + 带进「小时」→ 抄 history。
+    #[test]
+    fn drift_guard_falls_back_when_history_copy_shares_opening_with_source() {
+        let (released, verdict) = run_drift(
+            "一家人在后座3排6座超大空间内庆生，体现移动家庭客厅。",
+            &[FEEDBACK_HISTORY_CANVA],
+            &["一家人在", "后排，24小时"],
+        );
+        assert_eq!(released, "");
+        assert!(matches!(verdict, DriftFinalize::Fallback(_)));
+    }
+
+    // 首次出现时 history 里还没有「前后排」：只能靠截头换尾判据拦。
+    #[test]
+    fn drift_guard_falls_back_when_output_keeps_opening_and_substitutes_rest() {
+        let (released, verdict) = run_drift("前后超大装载空间。", &[], &["前后", "排"]);
+        assert_eq!(released, "");
+        assert!(matches!(verdict, DriftFinalize::Fallback(_)));
+    }
+
+    // 撤回覆盖且重说的开头与原句相同：丢了一半但没有新字 → 放行。
+    #[test]
+    fn drift_guard_passes_retraction_that_repeats_the_opening() {
+        let (released, verdict) = run_drift(
+            "发消息给张三，不对不对，发消息给李四。",
+            &[FEEDBACK_HISTORY_CANVA],
+            &["发消息给李四"],
+        );
+        assert_eq!(released, "发消息给李四");
+        assert!(matches!(verdict, DriftFinalize::Release(_)));
+    }
+
     // 前缀已放行后才发现整体离题：来不及撤回，照常放行剩余、只标记 drifted 供记日志。
-    // 构造：前 8 个内容字里 7 个是正文有的（「点点点点上午」+「点」），预判放行；
-    // 后面整段都是正文没有的字，且正文大半字从未出现 → 终判离题但 emitted 非空。
+    // 构造：前 16 个内容字全是正文有的，预判放行；后面整段都是正文没有的字，
+    // 且正文大半字从未出现 → 终判离题但 emitted 非空。
     #[test]
     fn drift_guard_reports_late_drift_without_fallback() {
         let mut guard = StreamingDriftGuard::new("上午行程结束后，下午的行程是点点点点点。", []);
-        assert_eq!(guard.push("点点点点上午九点"), "点点点点上午九点");
-        assert_eq!(guard.push("十五分开始拍摄"), "十五分开始拍摄");
+        assert_eq!(
+            guard.push("点点点点点点点点上午上午点点点点点点"),
+            "点点点点点点点点上午上午点点点点点点"
+        );
+        assert_eq!(
+            guard.push("九点十五分开始拍摄外景然后收工吃饭睡觉休息再去海边散步看日落"),
+            "九点十五分开始拍摄外景然后收工吃饭睡觉休息再去海边散步看日落"
+        );
         let verdict = guard.finalize();
         match verdict {
             DriftFinalize::ReleaseDrifted { pending, stats } => {
