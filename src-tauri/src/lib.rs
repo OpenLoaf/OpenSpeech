@@ -547,6 +547,18 @@ pub fn run() {
                     audio::force_stop();
                     stt::close_if_active();
                 }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { has_visible_windows } => {
+                    // 点击 Dock 图标会触发 applicationShouldHandleReopen。主窗口被
+                    // 隐藏到托盘时没有可见窗口，必须主动恢复 Regular policy 并显示主窗；
+                    // 已有可见窗口则交给 macOS 正常激活，避免多余抢焦点。
+                    if !has_visible_windows {
+                        log::info!(
+                            "[main_window] Dock reopen without visible windows; showing main window"
+                        );
+                        show_main_window(app_handle);
+                    }
+                }
                 _ => {}
             }
         });
