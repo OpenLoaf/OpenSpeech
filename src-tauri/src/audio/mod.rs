@@ -78,7 +78,7 @@ const MIC_SILENCE_THRESHOLD_MS: u64 = 3000;
 #[derive(Clone, Serialize)]
 struct MicStartFailedPayload {
     /// "no-input-device" | "permission-denied" | "device-busy" | "device-config-unsupported"
-    /// | "device-removed" | "generic"
+    /// | "device-removed" | "device-unavailable" | "generic"
     reason: &'static str,
     /// 原始 error 字符串（含 cpal 内部分类 / HAL 错误码），给开发者排查 / 日志用，
     /// 不直接展示给终端用户。
@@ -100,18 +100,19 @@ fn classify_mic_start_error(raw: &str) -> &'static str {
     if s.contains("busy") || s.contains("in use") || s.contains("exclusive") {
         return "device-busy";
     }
-    // 设备拔出 / 切走（USB / Bluetooth 断连）：cpal 在 build 阶段会报 DeviceNotAvailable。
+    // CPAL/CoreAudio 会把多种底层错误压成 DeviceNotAvailable，不能据此断言设备真的拔出。
+    // 明确的断开文案才分类为 removed；其余不可用情况给中性提示（可能独占、驱动故障等）。
+    if s.contains("device removed") || s.contains("device disconnected") {
+        return "device-removed";
+    }
     if s.contains("devicenotavailable")
         || s.contains("device not available")
         || s.contains("device is no longer available")
         || s.contains("device associated with the stream is no longer available")
     {
-        return "device-removed";
+        return "device-unavailable";
     }
-    if s.contains("default_input_config")
-        || s.contains("stream config")
-        || s.contains("unsupported")
-    {
+    if s.contains("stream config") || s.contains("unsupported") {
         return "device-config-unsupported";
     }
     // 初始化超时也可能是驱动卡住；没有明确证据时不能断言被其他应用独占。
@@ -128,10 +129,10 @@ mod mic_error_tests {
             "default_input_config: {}",
             cpal::DefaultStreamConfigError::DeviceNotAvailable
         );
-        assert_eq!(classify_mic_start_error(&error), "device-removed");
+        assert_eq!(classify_mic_start_error(&error), "device-unavailable");
         assert_eq!(
             classify_mic_start_error(&cpal::PlayStreamError::DeviceNotAvailable.to_string()),
-            "device-removed"
+            "device-unavailable"
         );
     }
 
@@ -152,6 +153,10 @@ mod mic_error_tests {
         assert_eq!(
             classify_mic_start_error("Permission denied"),
             "permission-denied"
+        );
+        assert_eq!(
+            classify_mic_start_error("input device disconnected"),
+            "device-removed"
         );
     }
 }
