@@ -615,6 +615,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 let payload = HotkeyEventPayload {
                     id,
                     phase: "pressed",
+                    event_at_unix_ms: super::event_at_unix_ms(),
                 };
                 if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
                     log::warn!("[modifier_only] emit pressed failed: {e:?}");
@@ -639,6 +640,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 let payload = HotkeyEventPayload {
                     id,
                     phase: "released",
+                    event_at_unix_ms: super::event_at_unix_ms(),
                 };
                 if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
                     log::warn!("[modifier_only] emit released failed: {e:?}");

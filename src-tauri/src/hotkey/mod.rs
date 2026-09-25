@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -23,6 +24,13 @@ pub use modifier_only::SharedModifierOnlyState;
 
 pub const HOTKEY_EVENT: &str = "openspeech://hotkey";
 pub const HOTKEY_BLOCKED_BY_MEETING_EVENT: &str = "openspeech://hotkey-blocked-by-meeting";
+
+pub(crate) fn event_at_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// 会议录制中需要拦的录音类绑定。
 pub(crate) fn is_recording_binding(id: BindingId) -> bool {
@@ -183,6 +191,7 @@ pub struct HotkeyConfigPayload {
 pub struct HotkeyEventPayload {
     pub id: BindingId,
     pub phase: &'static str, // "pressed" | "released"
+    pub event_at_unix_ms: u64,
 }
 
 /// active 表里每条 combo 同时携带"用户实际期望的 (mod, side) 集合"，handler
@@ -512,7 +521,11 @@ pub fn handler<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: Short
     // 先 emit 事件给前端 FSM——保证按键事件不被后续 overlay 操作阻塞。
     // 之前 overlay::show() 放在 emit 前面同步调用，在 rdev 回调线程上会 block
     // 主线程导致 webview 无法处理事件（空闲后首次按键前 2-3 次事件全部丢失）。
-    let payload = HotkeyEventPayload { id, phase };
+    let payload = HotkeyEventPayload {
+        id,
+        phase,
+        event_at_unix_ms: event_at_unix_ms(),
+    };
     if let Err(e) = app.emit(HOTKEY_EVENT, payload) {
         log::warn!("[hotkey] emit failed: {e:?}");
     }
@@ -676,4 +689,24 @@ pub fn esc_capture_stop<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     })?;
     log::debug!("[hotkey] esc_capture_stop: Esc returned to foreground");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hotkey_event_serializes_native_timestamp() {
+        let payload = HotkeyEventPayload {
+            id: BindingId::DictatePtt,
+            phase: "pressed",
+            event_at_unix_ms: 1234,
+        };
+
+        let value = serde_json::to_value(payload).expect("payload should serialize");
+
+        assert_eq!(value["event_at_unix_ms"], 1234);
+        assert_eq!(value["id"], "dictate_ptt");
+        assert_eq!(value["phase"], "pressed");
+    }
 }
