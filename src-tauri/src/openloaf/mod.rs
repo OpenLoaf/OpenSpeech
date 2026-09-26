@@ -524,6 +524,8 @@ fn clear_session(state: &OpenLoafState) {
 /// `AUTH_LOST_EVENT`，前端 auth store 监听到后切未登录态并由 UI 决定弹登录框。
 pub fn handle_session_expired<R: Runtime>(app: &AppHandle<R>, state: &OpenLoafState) {
     clear_session(state);
+    // 听写录音中登录失效：会话状态机立刻停录并保存音频，不再「一边弹登录框一边录」。
+    crate::dictation::on_auth_lost();
     if let Err(e) = app.emit(AUTH_LOST_EVENT, ()) {
         log::warn!("openloaf: emit auth-lost failed: {e}");
     }
@@ -697,8 +699,17 @@ pub async fn openloaf_try_recover(
     app: AppHandle,
     state: State<'_, SharedOpenLoaf>,
 ) -> Result<bool, String> {
-    let ol = state.inner().clone();
+    try_recover_session(&app, state.inner().clone()).await
+}
 
+/// 内存里是否持有 access token（听写开录的快速鉴权判定；过期由 SDK 调用时自动续）。
+pub(crate) fn has_session<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<SharedOpenLoaf>()
+        .is_some_and(|s| s.client.access_token().is_some())
+}
+
+/// 静默用 keychain 里的 refresh token 恢复登录态；供听写开录鉴权与前端命令共用。
+pub(crate) async fn try_recover_session(app: &AppHandle, ol: SharedOpenLoaf) -> Result<bool, String> {
     if ol.client.access_token().is_some() {
         return Ok(true);
     }

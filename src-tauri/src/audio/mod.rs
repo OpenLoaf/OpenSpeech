@@ -4,7 +4,7 @@
 // 1. 采集麦克风 peak 电平，~20Hz emit 到前端供 overlay 波形 + 设置页电平表消费。
 // 2. 录音会话（task #13 的第一步）：同一个 stream callback 内，在激活 session
 //    时把 PCM 归一化为 f32 [-1, 1] 累积到 Zeroizing<Vec<f32>>；
-//    `audio_recording_stop` 时编码为 OGG Vorbis 落到
+//    听写会话结束时编码为 OGG Vorbis 落到
 //    app_data_dir/recordings/<yyyy-MM-dd>/<id>.ogg（按本地日期分子目录，方便
 //    用户翻历史录音）。
 //    STT 和文本注入尚未接入；stop 返回 { audio_path, duration_ms, sample_rate,
@@ -240,35 +240,31 @@ pub fn current_stream_info() -> Option<(u32, u16)> {
     stream_info().lock().ok().and_then(|g| *g)
 }
 
-// ── dictation 采集单一所有权 ───────────────────────────────────────────────
-// 契约(见 hotkey 下沉修复):听写的 cpal stream ref 全生命周期只取一次、放一次。
-// Rust 在 hotkey 按下当帧「预开」采集(不等被 macOS 节流的隐藏主窗 webview),
-// 前端醒来后 adopt 同一个采集而非再开一个。`Some(id)` = 已有一次听写采集在跑、
-// Rust 持有那唯一的 +1 ref;`None` = 无。ref 由前端 stop/cancel 时的 audio_level_stop
-// 释放,flag 由 audio_recording_stop/cancel/force_stop 清除。
+// ── dictation 采集 ─────────────────────────────────────────────────────────
+// 所有权完全归 `dictation` 会话状态机：open / save / discard 成对，均由 Rust 调用，
+// 前端不再参与引用计数。`Some(id)` = 该会话持有听写采集那唯一的 +1 cpal ref。
+// 锁跨 start()/stop() 是有意的：open 未完成时到来的 discard 会等 open 结束再释放，
+// 不会漏放 ref。
 fn dictation_capture() -> &'static Mutex<Option<String>> {
     static CAP: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     CAP.get_or_init(|| Mutex::new(None))
 }
 
-// 是否允许 hotkey 预开采集:前端按 canRecord(已登录 SaaS 或已配 custom provider)
-// 推来。默认 false——未推到 / 未登录时不预开,避免"未登录按下快捷键也让麦克风闪一下"
-// 的隐私问题(前端 gate 仍会弹登录)。这只是隐私优化,gate 失败的 release 才是 ref 正确性兜底。
-static DICTATION_ENABLED: AtomicBool = AtomicBool::new(false);
-
-#[tauri::command]
-pub fn set_dictation_capture_enabled(enabled: bool) {
-    DICTATION_ENABLED.store(enabled, Ordering::SeqCst);
+// 生成与前端 `src/lib/ids.ts::newId` 完全同格式的本地时间 id:
+// `YYYYMMDDHHMMSSmmm-xxxx`(17 位本地时间到毫秒 + 4 位 base36 随机)。字典序==时间序，
+// 同时用作听写会话 id、录音文件名与历史记录 id。
+pub(crate) fn new_recording_id() -> String {
+    let now = chrono::Local::now();
+    format!("{}-{}", now.format("%Y%m%d%H%M%S%3f"), rand_base36_4())
 }
 
-// 生成与前端 `src/lib/ids.ts::newId` 完全同格式的本地时间 id + 日期:
-// id = `YYYYMMDDHHMMSSmmm-xxxx`(17 位本地时间到毫秒 + 4 位 base36 随机),
-// date = `YYYY-MM-DD`。字典序==时间序;落盘路径 recordings/<date>/<id>.ogg。
-fn new_local_recording_id() -> (String, String) {
-    let now = chrono::Local::now();
-    let id = format!("{}-{}", now.format("%Y%m%d%H%M%S%3f"), rand_base36_4());
-    let date = now.format("%Y-%m-%d").to_string();
-    (id, date)
+// 从录音 id 取本地日期 `YYYY-MM-DD`，决定落盘子目录 recordings/<date>/。
+fn date_from_recording_id(id: &str) -> Option<String> {
+    let d = id.get(0..8)?;
+    if !d.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8]))
 }
 
 // 4 位 base36 随机后缀(charset [0-9a-z]),熵取自 uuid v4——对齐前端随机段。
@@ -295,86 +291,69 @@ fn read_input_device_for_dictation<R: Runtime>(app: &AppHandle<R>) -> Option<Str
     (!dev.is_empty()).then_some(dev)
 }
 
-/// 单一原子入口:确保「听写采集」已在跑,返回它的 recordingId。
-///
-/// 并发安全:整个 check-then-act(读 flag → start → 起 session → 写 flag)在持有
-/// `dictation_capture` 锁期间完成。两个并发调用者(rdev 预开 + 前端 adopt 命令)里
-/// 只有一个真正 start(),另一个阻塞在锁上、拿到锁后看到 `Some` 直接 adopt——**ref 恒 +1**。
-/// 锁跨 `start()` 的 recv_timeout 阻塞是有意的(这是必须原子的临界区);本函数纯同步、
-/// 无 `.await`,不构成 async 持锁问题。
-pub fn ensure_dictation_capture<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
+/// 为听写会话打开采集：取一次 cpal ref 并开始累积样本。阻塞（cpal 冷启动可达 ~100ms），
+/// 调用方放后台线程。
+pub(crate) fn open_dictation_capture<R: Runtime>(
+    app: &AppHandle<R>,
+    session_id: &str,
+) -> Result<(), String> {
+    let date = date_from_recording_id(session_id)
+        .ok_or_else(|| format!("invalid recording id: {session_id}"))?;
     let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(id) = cap.as_ref() {
-        // 防御 finalize 竞态:flag=Some 但流已关(audio_level_stop 已减到 0、
-        // audio_recording_stop 还没清 flag 的 sub-ms 窗口),视为 stale 重开。
-        if current_stream_info().is_some() {
-            return Ok(id.clone());
-        }
-        log::warn!("[audio] dictation capture flag stale (stream gone) → reopen");
-        *cap = None;
+    if let Some(prev) = cap.take() {
+        // 状态机保证同一时刻只有一个会话；这里只是防御残留，放掉旧 ref 再开新的。
+        log::warn!("[audio] dictation capture {prev} still open → release before {session_id}");
+        let _ = recording_slot().lock().map(|mut slot| slot.take());
+        stop();
     }
     let device = read_input_device_for_dictation(app);
-    start(app.clone(), device)?; // +1 ref;失败直接返回,flag 未动、无 ref 泄漏
-    let (id, date) = new_local_recording_id();
-    if let Err(e) = audio_recording_start(id.clone(), date) {
+    start(app.clone(), device)?; // +1 ref;失败直接返回,无 ref 泄漏
+    if let Err(e) = recording_start(session_id.to_string(), date) {
         stop(); // 回滚刚取的 +1 ref
         return Err(e);
     }
-    *cap = Some(id.clone());
-    log::info!("[audio] dictation capture opened (id={id})");
-    Ok(id)
+    *cap = Some(session_id.to_string());
+    log::info!("[audio] dictation capture opened (id={session_id})");
+    Ok(())
 }
 
-/// hotkey 派发线程 fire-and-forget 预开采集:后台线程跑 ensure,**不阻塞 rdev**
-/// (start() 的 cpal 冷启动可达 ~100ms;阻塞 rdev 会拖慢后续按键——正是本次要修的病)。
-pub fn preopen_dictation_capture<R: Runtime>(app: &AppHandle<R>) {
-    if !DICTATION_ENABLED.load(Ordering::SeqCst) {
-        return; // 未登录/未配 provider:不预开,交给前端 gate 弹登录
-    }
-    let app = app.clone();
-    thread::spawn(move || {
-        if let Err(e) = ensure_dictation_capture(&app) {
-            log::warn!("[audio] preopen dictation capture failed: {e}");
-        }
-    });
-}
-
-/// 终态放弃(gate 未过 / preflight 失败 / adopt 出错)时释放预开的采集:
-/// 停流(释放 ensure 取的那唯一 +1 ref)+ 丢弃已采样本 + 清 flag。锁跨 stop() 与
-/// ensure 的锁跨 start() 同序(flag→monitor),互斥且无 ABBA;in-flight 的 ensure
-/// 会先跑完再让本函数拿锁,不会漏放。**只在无获胜 press 会 adopt 的终态调用**——
-/// epoch-stale(被后续 press 抢占)绝不能调,否则杀掉获胜 press 的采集。
-#[tauri::command]
-pub async fn release_dictation_capture() {
-    let _ = tauri::async_runtime::spawn_blocking(|| {
+/// 结束听写采集并落盘。会话不持有采集（已被释放 / 从未打开成功）时返回 None。
+/// 先 stop() 再取样本：stop 会 join 采集线程，保证最后一批 PCM 已写入 session。
+pub(crate) fn save_dictation_capture<R: Runtime>(
+    app: &AppHandle<R>,
+    session_id: &str,
+) -> Option<Result<RecordingResult, String>> {
+    {
         let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
-        if cap.take().is_some() {
-            let _ = recording_slot()
-                .lock()
-                .map(|mut slot| slot.take())
-                .ok();
-            stop();
-            log::info!("[audio] dictation capture released (terminal abort)");
+        if cap.as_deref() != Some(session_id) {
+            return None;
         }
-    })
-    .await;
+        *cap = None;
+        stop();
+    }
+    Some(recording_stop_impl(app))
 }
 
-/// 听写会话结束(finalize / cancel / 应急清场)时清 flag,使下一次按下重新开采集。
-pub(crate) fn clear_dictation_capture() {
+/// 结束听写采集并丢弃样本（Zeroizing 清零）。会话不持有采集时返回 false。
+pub(crate) fn discard_dictation_capture(session_id: &str) -> bool {
+    let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
+    if cap.as_deref() != Some(session_id) {
+        return false;
+    }
+    *cap = None;
+    let _ = recording_slot().lock().map(|mut slot| slot.take());
+    stop();
+    log::info!("[audio] dictation capture discarded (id={session_id})");
+    true
+}
+
+/// 应急清场（force_stop）时清掉采集所有权与样本。
+fn clear_dictation_capture() {
     let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
     if cap.take().is_some() {
+        let _ = recording_slot().lock().map(|mut slot| slot.take());
         log::info!("[audio] dictation capture flag cleared");
     }
-}
-
-/// 前端命令:醒来后 adopt(或在非 hotkey 触发时自己开)听写采集,拿 recordingId。
-/// 与 hotkey 预开走同一 `ensure_dictation_capture` 原子入口,谁先拿锁谁开、另一方 adopt。
-#[tauri::command]
-pub async fn adopt_dictation_capture<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || ensure_dictation_capture(&app))
-        .await
-        .map_err(|e| format!("adopt_dictation_capture join: {e}"))?
 }
 
 /// callback 内调用：若当前有激活 session 则追加归一化 f32 样本；try_lock
@@ -1093,10 +1072,13 @@ fn spawn_monitor_thread<R: Runtime>(
                     log::error!("[audio] cpal stream error: {e}");
                     fatal.store(true, Ordering::Relaxed);
                     let detail = e.to_string();
+                    let reason = classify_mic_start_error(&detail);
                     let _ = app_err.emit(AUDIO_STREAM_ERROR_EVENT, MicStartFailedPayload {
-                        reason: classify_mic_start_error(&detail),
+                        reason,
                         detail,
                     });
+                    // 听写录音中设备断开：会话状态机丢弃采集并转 Failed。
+                    crate::dictation::on_audio_stream_error(reason);
                 }
             };
 
@@ -1282,9 +1264,6 @@ fn spawn_monitor_thread<R: Runtime>(
                         };
                         let peak = (gated * PEAK_GAIN).clamp(0.0, 1.0);
                         let _ = app.emit(AUDIO_LEVEL_EVENT, peak);
-                        // 录音活跃期续约 cue ACTIVE_SET_AT_MS，避免长录音（>30s）结束
-                        // 时被 stale 守卫误判脏状态、强制 reset 后多播一声 start cue。
-                        crate::cue::keepalive_active();
                         // 静音兜底：stream 起来 >= 阈值时间且 VAD 从未触发过 → emit 一次
                         // hint。让前端在 overlay 加「似乎没拾到声音」提示。一旦 emit 过就
                         // 不再 emit；用户后来开始说话也不撤回——提示是「可能性」不是「正在」。
@@ -1350,7 +1329,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
     // 快速路径：已在运行且设备相同 → 只增引用计数（stream_info 已就绪，无需等待）
     // 必须同时检查线程是否还活着——audio 线程可能因 cpal stream error / panic 已退出，
     // 退出时清了 stream_info 但 MonitorState 的 thread/current_device 还残留，
-    // 不检查就会命中快速路径返回 Ok，后续 audio_recording_start 读到 stream_info=None
+    // 不检查就会命中快速路径返回 Ok，后续 recording_start 读到 stream_info=None
     // 报 "audio stream not running"。
     {
         let mut guard = monitor().lock().expect("monitor mutex poisoned");
@@ -1540,15 +1519,9 @@ pub struct RecordingResult {
     pub trimmed_tail_ms: u32,
 }
 
-/// 前端按下快捷键、进入 recording 前调用。传入的 id 就是 history.id，
-/// 也作为录音文件名（`recordings/<date>/<id>.ogg`）。`date` 由前端按本地时区
-/// 生成（`yyyy-MM-dd`），Rust 端只校验格式合法。
-///
-/// 要求调用方已经通过 `audio_level_start` 把 stream 拉起来（前端 recording
-/// store 的 startMic() 已经保证了这一点）；否则 session 创建了但 callback
-/// 不会跑，OGG 会是空的。
-#[tauri::command]
-pub fn audio_recording_start(id: String, date: String) -> Result<(), String> {
+/// 开始累积录音样本。调用方必须已经通过 `start()` 把 stream 拉起来。
+/// id 同时是历史记录 id 与文件名（`recordings/<date>/<id>.ogg`）。
+fn recording_start(id: String, date: String) -> Result<(), String> {
     if !is_valid_date_segment(&date) {
         return Err(format!("invalid date format (need yyyy-MM-dd): {date}"));
     }
@@ -1556,7 +1529,7 @@ pub fn audio_recording_start(id: String, date: String) -> Result<(), String> {
     let (sample_rate, channels) = stream_info()
         .lock()
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "audio stream not running; call audio_level_start first".to_string())?;
+        .ok_or_else(|| "audio stream not running".to_string())?;
 
     let mut slot = recording_slot().lock().map_err(|e| e.to_string())?;
     // 旧 session 未 stop 就又 start——丢弃旧 samples（Zeroizing 会清零）
@@ -1571,27 +1544,8 @@ pub fn audio_recording_start(id: String, date: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 前端 finalize 时调用。把 session 取出，编码 OGG Vorbis 写到
-/// recordings/<yyyy-MM-dd>/<id>.ogg，返回 RecordingResult 供前端写 history 记录。
-///
-/// 若无激活 session（用户快速双击误触 / 没调 start 就 stop）返回 Err；前端
-/// 据此走"不写历史"分支。
-///
-/// async + spawn_blocking：OGG 编码 + fs 写入少则几十 ms 多则几百 ms（大音频），
-/// 放 blocking 池避免跟 stt_finalize 挤 IPC 命令线程。
-#[tauri::command]
-pub async fn audio_recording_stop<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<RecordingResult, String> {
-    log::info!("[audio] audio_recording_stop command received from frontend");
-    tauri::async_runtime::spawn_blocking(move || audio_recording_stop_impl(app))
-        .await
-        .map_err(|e| format!("audio_recording_stop join: {e}"))?
-}
-
-fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingResult, String> {
-    // 听写会话结束:清采集所有权 flag,下一次按下重新开(ref 已由前端 audio_level_stop 释放)。
-    clear_dictation_capture();
+/// 取出录音 session，离线 VAD 裁掉首尾静音后编码 OGG Vorbis 落盘。
+fn recording_stop_impl<R: Runtime>(app: &AppHandle<R>) -> Result<RecordingResult, String> {
     let session = {
         let mut slot = recording_slot().lock().map_err(|e| e.to_string())?;
         slot.take()
@@ -1644,7 +1598,7 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
     let trimmed_duration_ms = (trimmed_frames as u64 * 1000) / session.sample_rate.max(1) as u64;
 
     // 按日期分子目录落盘：recordings/<yyyy-MM-dd>/<id>.ogg；目录不存在时 mkdir_p。
-    let day_dir = db::ensure_recordings_dir(&app)?.join(&session.date);
+    let day_dir = db::ensure_recordings_dir(app)?.join(&session.date);
     std::fs::create_dir_all(&day_dir).map_err(|e| format!("mkdir {}: {e}", day_dir.display()))?;
     let rel_path = format!("recordings/{}/{}.ogg", session.date, session.id);
     let abs_path = day_dir.join(format!("{}.ogg", session.id));
@@ -1674,16 +1628,6 @@ fn audio_recording_stop_impl<R: Runtime>(app: AppHandle<R>) -> Result<RecordingR
         trimmed_head_ms: head_trimmed_ms,
         trimmed_tail_ms: tail_trimmed_ms,
     })
-}
-
-/// 取消当前录音：丢弃 samples，不写文件。用户 Esc / 误触走这条。
-#[tauri::command]
-pub fn audio_recording_cancel() -> Result<(), String> {
-    clear_dictation_capture();
-    let mut slot = recording_slot().lock().map_err(|e| e.to_string())?;
-    // take → drop → Zeroizing 清零
-    let _ = slot.take();
-    Ok(())
 }
 
 /// 把交错 f32 PCM 编码成 OGG Vorbis 写到 path。

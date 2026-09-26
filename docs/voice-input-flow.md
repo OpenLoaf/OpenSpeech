@@ -13,25 +13,38 @@
 
 ## 状态机
 
+**听写会话状态只有一份，归 Rust 所有**（`src-tauri/src/dictation/`）。主窗页面、悬浮条都只渲染它的快照、只发意图，不自己推导状态。
+
 ```
-  Idle ──按下快捷键──▶ Recording ──松开快捷键──▶ Transcribing ──成功──▶ Injecting ──▶ Idle
-                           │                        │            │            │
-                           │                        │            └─[翻译]──▶ Translating ──▶ Idle
-                           │                        │
-                           │                        └── 失败 ─▶ Error ─(用户 × / Esc / 下次触发)─▶ Idle
-                           └── 用户取消 / Esc ─▶ Idle
+                 ┌─ 未登录 ─▶ Blocked 事件（弹登录 / 悬浮条提示），不开麦克风
+  Idle ──按键──┤
+                 └─ 通过 ─▶ Recording ──再按 / ✓──▶ Transcribing ─▶ Refining ─▶ Outputting ─▶ Idle
+                              │   │                   │            └▶ Translating ─┘
+                              │   └─ < 1.3s ─▶ Idle（误触丢弃）
+                              ├─ Esc / × ─▶ Idle（音频存历史，不转写）
+                              ├─ 麦克风中断 / 登录失效 / 余额不足 ─▶ Failed
+                              └─ 整段无人声 ─▶ Failed(silent)
+  处理中（Transcribing/Refining/Translating）× ─▶ Idle（保留原文进历史）；Esc ─▶ Idle（丢弃）
+  Failed ──2.5s / Esc / 下次按键──▶ Idle
 ```
 
-**Error 态是粘滞态**，状态机不会自动回 Idle；只有用户显式关闭悬浮条（点 ×、按 Esc）或发起下一次录音时才迁移。这既是 UI 规则也是状态机规则。
+| 模块 | 职责 |
+|---|---|
+| `dictation::machine` | 纯状态机：`Input` → 新状态 + `Effect`，无 I/O，全部转移有单测 |
+| `dictation::mod` | runtime：执行 effect（开关采集、提示音、托盘、ESC 吞键、悬浮条弹出），广播快照，暴露 `dictation_*` 命令 |
+| `dictation::output` | 按会话隔离的注入队列：带游标，流式文本整段传入、按游标算差量；收尾按游标补齐剩余部分 |
+| 前端 `stores/recording/worker.ts` | 接 Rust 会话事件，启动实时 ASR、跑管线、写历史、弹提示 |
+| 前端 `stores/recording/pipeline.ts` | 转写 → 整理 / 翻译 → 输出 → 历史；每步带 session_id，会话结束（AbortController）立即停手 |
+| 前端 `stores/recording/store.ts` | 快照投影：refining→transcribing、outputting→injecting、failed→error，供页面订阅 |
 
-| 状态 | 含义 | UI 表现 |
-|---|---|---|
-| Idle | 空闲 | 无悬浮条；托盘图标为普通色 |
-| Recording | 正在录音 | 悬浮条出现：左上角 mono 标签（`DICTATE`/`ASK`/`TRANSLATE`），红色呼吸圆点，中央实时波形，右侧计时（mono），最右 `×`；右下角小字 `HOLD` 或 `CLICK TO STOP` 标明模式；托盘图标变红 |
-| Transcribing | 已结束录音，等待大模型返回 | 悬浮条显示 spinner + `Transcribing via {模型名}...`，右侧 `Esc 取消` 提示；托盘图标变 accent 色 |
-| Injecting | 正在把文字写入目标应用 | 悬浮条短暂闪一下对钩 + `Inserted`，200 ms 后淡出 |
-| Translating | **仅翻译听写 phase 2**：refine 已完成，独立的 translation prompt 正在流式输出译文 | 悬浮条显示 `Translating…`（与 Injecting 共用进度容器，进度条不重启）；译文 token 一边到一边注入光标 |
-| Error | 网络错误 / API 失败 / 权限错误 | 悬浮条红底显示错误文案；**粘滞不自动淡出**，直到用户点 `×` 或发起下一次录音；整条可点击跳历史页查看详情与"重试"；历史中对应条目标记为 failed |
+事件（`openspeech://dictation/*`，广播所有 webview）：`state`（快照，带 seq）、`started`、`process`、`ended`、`blocked`、`skip-refine`、`mode-switched`。前端上报：`dictation_report_stage` / `dictation_output` / `dictation_finish` / `dictation_complete` / `dictation_fail`，**Rust 丢弃过期 session_id 的一切上报**。
+
+关键不变量：
+
+1. **开录鉴权在 Rust 做**：`自定义听写供应商已配齐 || 已有 SaaS 会话`，否则静默恢复登录（≤1.5s），仍失败则发 `blocked`，**绝不打开麦克风**。录音中登录失效 → 立刻停录、保存音频、标失败，登录回来自动重转。
+2. **会话配置开录瞬间冻结**（分段模式 / AI 整理 / 逐字注入 / 剪贴板），中途改设置不影响本轮。
+3. **输出只有一个出口**：Rust 输出队列。流式 delta 按 `taskId === session_id` 严格配对；AI 整理取消（跳过 / 取消）由 Rust `ai_refine::cancel_task` 中止 SSE 流。
+4. **Failed 自动回收**：2.5s 后回 Idle，Esc 或下一次按键立即回收。
 
 ### 悬浮条显隐策略（与主窗口焦点联动）
 
@@ -63,15 +76,11 @@ Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idl
 2. 当 OpenSpeech 主窗口处于焦点时，快捷键依然生效。
 3. 当麦克风权限未授予时，触发快捷键必须引导用户前往系统权限设置，不得静默失败。
 4. **必须存在可写入的光标焦点**才会开始录音；若系统焦点在不可编辑的区域（桌面、菜单栏、只读窗口），触发时给出轻提示"当前位置无输入框"，不进入 Recording。
-5. **后端可用性 Gate（Idle → Preparing 之前）**：必须存在至少一条可用的转写后端，否则**不进入 Recording**。判定：
-   - `saasReady = isAuthenticated`（`dictationSource=SAAS` 默认走 OpenLoaf SaaS realtime ASR，需登录）
-   - `byoReady  = dictationSource === "BYO" && endpoint.trim() !== ""`（用户自带 REST STT 端点，不经云端）
-   - `!saasReady && !byoReady` ⇒ 拦截，按主窗激活与否分两条路径：
-     - **主窗激活**（`isFocused() || (isVisible() && !isMinimized())`，覆盖 input focus 在子 dialog / 边栏控件 / 拖拽时短暂失焦的情况）⇒ `useUIStore.openLogin()` 直接弹 LoginDialog，同时 `invoke("show_main_window_cmd")` 兜底拉前台。
-     - **主窗已隐藏到 tray 或最小化** ⇒ 走悬浮条 toast + "去登录"动作按钮，避免用户在别的 app 里输入时被强行拉前台打扰。
-   LoginDialog 内除两个 OAuth 入口外，提供一个"使用自己的 STT 端点"按钮，点击后关闭登录窗、`openSettings("MODEL")` 跳到设置→大模型 tab 让用户填 endpoint+API Key。Toggle 模式"再按一次停止"路径不受 Gate 影响（已经在录音中，只走停止逻辑）。
+5. **后端可用性 Gate（Rust `dictation::on_hotkey`）**：已登录 SaaS，或自定义听写供应商已选中且存在（前端经 `dictation_set_config` 推 `customDictationReady`），否则先静默恢复登录；仍不通过则不进入 Recording、不开麦克风，发 `openspeech://dictation/blocked`。前端按主窗是否激活分两条路径：
+   - **主窗激活**（`isFocused() || (isVisible() && !isMinimized())`）⇒ `useUIStore.openLogin()` 直接弹 LoginDialog。
+   - **主窗已隐藏到 tray 或最小化** ⇒ 悬浮条 toast + "去登录"动作按钮，不强行拉前台。
 
-快捷键按下时，悬浮窗直接消费原生 `openspeech://hotkey` 事件，先显示“正在启动麦克风…”的即时反馈；Rust 同时预开采集流，主窗随后 adopt 这条流，并由 `recording-phase` 权威状态覆盖预览。成功路径不再串行查询麦克风权限和枚举输入设备：这些结果只是可能过期的快照，不能代替打开采集流。若打开失败，Rust 发出结构化 `mic-start-failed` 事件，提示权限、设备缺失、占用或暂不可用等具体原因；设置页仍可枚举设备供用户选择。启动失败 toast 收掉预览。该预览只解决主窗 WebView 后台调度延迟，不代表录音已经就绪，也不启动或停止录音。
+快捷键按下后 Rust 在同一帧推进状态机并广播快照，悬浮条直接渲染 Recording（没有「启动麦克风中」的乐观预览）；采集在后台线程打开，打不开时 Rust 发结构化 `mic-start-failed`（权限、设备缺失、占用等具体原因）并回到 Idle。
 
 转写与 AI 整理期间，悬浮条每秒更新已等待时长，不展示虚假的百分比；收到流式文字后显示已整理字数。模型尚未返回首段文字时，内容本身无法提前更新，用户可通过现有“跳过 AI 优化”按钮立即使用原始转写。
 
@@ -84,7 +93,7 @@ Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idl
 6. **松开事件丢失兜底**：PTT 模式下若用户按下后立即 Cmd+Tab 切走应用，`tauri-plugin-global-shortcut` 的 Released 事件可能丢失。应用在进入 Recording 时，全局键事件监听线程（`rdev`）同时订阅所有已注册快捷键的修饰键 keystate；每 200 ms 查询一次当前物理键状态，若检测到原组合已全部释放则主动触发"松开"逻辑。无客户端时长硬上限，松开事件兜底只靠 keystate 轮询 + 服务端 2h max-duration。
 7. **录音设备变更**：录音中若系统默认输入设备切换（拔耳机 / 切蓝牙），cpal 会发出 device change 事件；静默 rebind 到新默认设备，悬浮条闪一下 `DEVICE SWITCHED` 提示，录音不中断；若 rebind 失败则进入 Error。
 8. **麦克风不可用 / 被其他应用抢占**：共享使用不拦截；启动失败时按已知原因提示占用、权限或设备断开，并引导停止其他应用录音或切换麦克风。初始化超时不能直接判定为独占。录音中 cpal stream error → 立即进入 Error，提示麦克风连接中断及已知原因；未知原因不推断为占用。约 3 秒未检测到人声时仅提醒检查静音、输入音量及所选设备，录音继续。
-9. **连续触发与慢预检**：快捷键事件按到达顺序串行处理。首次启动仍在麦克风预检或采集 adopt 时，同一绑定的重复按下合并为一次启动重试；启动完成后，同一绑定的下一次按下按 toggle 语义结束录音。录音时长按 Rust 原生快捷键事件时间计算，避免 WebView 延迟派发造成过短误判。
+9. **连续触发**：处理中（转写 / 整理 / 输出）的按键一律忽略；鉴权检查进行中的按键丢弃；100ms 内的重复按下视为系统重复事件。录音时长按 Rust 原生快捷键事件时间计算。
 
 ### 录音中切换模式（听写 ↔ 翻译）
 
@@ -142,8 +151,8 @@ Home 页 Live 面板与 OS 悬浮条**不共享淡出策略**：状态机回 Idl
 
 | 情况 | 规则 |
 |---|---|
-| 录音时长 < 300 ms | 视为误触，直接回到 Idle，不调用大模型；悬浮条 fade out 时补一行 mono 小字 `HOLD LONGER` 教育 300ms 规则 |
-| 录音期间麦克风断开 | 立即结束录音，进入 Error |
+| 录音时长 < 1.3 s | 视为误触，直接回到 Idle，不转写、不留文件、不写历史 |
+| 录音期间麦克风断开 | 立即丢弃采集，进入 Failed(mic_interrupted)，写一条失败历史 |
 | 录音期间网络断开 | 录音完成后在 Transcribing 阶段失败 |
 | 焦点应用消失（被关闭） | 注入降级为写入剪贴板并提示 |
 | 用户在 Transcribing 阶段再次按下快捷键 | 忽略，当前任务继续（不开启并发录音） |

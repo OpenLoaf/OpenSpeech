@@ -20,6 +20,7 @@ mod audio;
 mod commands;
 mod cue;
 mod db;
+mod dictation;
 mod dictionary_agent;
 mod events;
 mod focus_check;
@@ -189,6 +190,9 @@ pub fn run() {
             // ---- 清理超过保留期的滚动日志 ------------------------------------
             purge_old_log_files();
 
+            // ---- 听写会话 runtime（快捷键 / ESC / 托盘直接驱动，不经 webview）----
+            dictation::init(app.handle());
+
             // ---- 主窗口尺寸自适应屏幕 ----------------------------------------
             // 初始尺寸（tauri.conf.json）是上限值；小屏 / 高 DPI 时按主显示器
             // work area 缩小，留出任务栏和边距。每次创建主窗口时只设置一次，
@@ -346,8 +350,8 @@ pub fn run() {
                     }
                     match id {
                         "tray::stop_recording" => {
-                            // 兜底退路：不唤出主窗、不依赖听写热键，直接让前端 FSM 结束录音。
-                            let _ = app.emit(TRAY_STOP_RECORDING_EVENT, ());
+                            // 兜底退路：不唤出主窗、不依赖听写热键，直接让听写会话结束录音。
+                            dictation::on_tray_stop();
                         }
                         "tray::feedback" => {
                             show_main_window(app);
@@ -435,7 +439,6 @@ pub fn run() {
             window::show_main_window_cmd,
             tray::tray_refresh,
             tray::update_tray_labels,
-            tray::tray_set_recording,
             commands::fn_usage_type,
             commands::open_network_settings,
             commands::open_sound_settings,
@@ -470,21 +473,22 @@ pub fn run() {
             audio::audio_level_start,
             audio::audio_level_stop,
             audio::audio_list_input_devices,
-            audio::adopt_dictation_capture,
-            audio::release_dictation_capture,
-            audio::set_dictation_capture_enabled,
-            audio::audio_recording_start,
-            audio::audio_recording_stop,
-            audio::audio_recording_cancel,
             audio::audio_recording_load,
             audio::audio_recording_export,
             audio::audio_recording_resolve,
             audio::audio_recording_delete,
             cue::cue_set_enabled,
-            cue::cue_set_active,
-            cue::cue_reset_active,
             cue::cue_diagnose_and_test,
             cue::cue_play,
+            dictation::dictation_snapshot,
+            dictation::dictation_set_config,
+            dictation::dictation_intent,
+            dictation::dictation_report_stage,
+            dictation::dictation_output,
+            dictation::dictation_finish,
+            dictation::dictation_complete,
+            dictation::dictation_fail,
+            dictation::dictation_debug_simulate,
             stt::stt_start,
             stt::stt_finalize,
             stt::stt_cancel,

@@ -52,6 +52,34 @@ const EVENT_DELTA: &str = "openspeech://ai-refine:delta";
 const EVENT_DONE: &str = "openspeech://ai-refine:done";
 const EVENT_ERROR: &str = "openspeech://ai-refine:error";
 
+/// 被取消的 task_id 集合：听写会话取消 / 跳过 AI 优化时登记，SSE 循环下一帧检查到即中止，
+/// 不再继续消耗 credits、也不再 emit delta。每条只命中一次，命中后移除。
+fn cancelled_tasks() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// 中止 task_id 对应的 refine 流（若在跑）。重复调用无副作用。
+pub fn cancel_task(task_id: &str) {
+    if let Ok(mut set) = cancelled_tasks().lock() {
+        // 集合只在流仍在跑时被消费；设上限防止大量已结束的 id 堆积。
+        if set.len() > 64 {
+            set.clear();
+        }
+        set.insert(task_id.to_string());
+    }
+}
+
+fn take_cancelled(task_id: Option<&str>) -> bool {
+    let Some(id) = task_id else { return false };
+    cancelled_tasks()
+        .lock()
+        .map(|mut set| set.remove(id))
+        .unwrap_or(false)
+}
+
+const ERR_CANCELLED: &str = "cancelled";
 const ERR_NOT_AUTHENTICATED: &str = "not authenticated";
 /// SaaS 不可达（网络断开 / 服务器宕机 / 5xx）。**保留登录态**，前端只展示网络错误提示。
 const ERR_NETWORK_UNAVAILABLE: &str = "network_unavailable";
@@ -792,6 +820,11 @@ pub(crate) async fn run_refine_core<R: Runtime>(
     let mut full = String::new();
     let mut credits_consumed: f64 = 0.0;
     while let Some(chunk) = stream.next().await {
+        if take_cancelled(task_id.as_deref()) {
+            log::info!("[ai_refine] cancelled by session task_id={task_id:?}");
+            emit_error(&app, task_id.as_deref(), ERR_CANCELLED, ERR_CANCELLED);
+            return Err(ERR_CANCELLED.to_string());
+        }
         let chunk = match chunk {
             Ok(c) => c,
             Err(e) => {

@@ -27,7 +27,7 @@
 
 use std::io::Cursor;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -42,14 +42,6 @@ static CANCEL_WAV: &[u8] = include_bytes!("../resources/cues/cancel.wav");
 static ARMED_WAV: &[u8] = include_bytes!("../resources/cues/armed.wav");
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
-// 录音活跃中。hotkey 按下时若 active=true，说明这是 toggle off 路径，
-// 不该播 start cue（前端会在状态进 transcribing/idle 时调对应 stop/cancel）。
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-// ACTIVE 上一次被置 true 的毫秒时戳。play_start_internal 命中守卫时若超
-// ACTIVE_STALE_MS 视为 FSM 没复位的脏状态，强制 reset 并照常播——否则一旦
-// 异常路径让 ACTIVE 卡 true，所有后续 hotkey 都静默无日志。
-static ACTIVE_SET_AT_MS: AtomicU64 = AtomicU64::new(0);
-const ACTIVE_STALE_MS: u64 = 30_000;
 
 /// sink 持有时间到达此阈值后，下一次播放强制重建——覆盖 macOS CoreAudio HAL
 /// 在长时间 idle 后默默 pause output stream 这类"看不见的死亡"。
@@ -204,30 +196,13 @@ fn play_bytes(bytes: &'static [u8], kind: &'static str) {
     }
 }
 
-/// 内部统一播 start：`respect_active=true` 时遵守 ACTIVE 守卫（hotkey 自动
-/// 派发用，避免 toggle off 路径重播 start）；`false` 时无视 ACTIVE，给前端
-/// "录音中跨模式切换"这类显式声学反馈用。
-fn play_start_internal(respect_active: bool) {
+/// 听写会话真正进入录音时播放（由 dictation 状态机调用，toggle off 路径不会走到这里）。
+pub fn play_start() {
     if !ENABLED.load(Ordering::Relaxed) {
         log::info!("[cue] start suppressed: enabled=false");
         return;
     }
-    if respect_active && ACTIVE.load(Ordering::Relaxed) {
-        let age = now_ms().saturating_sub(ACTIVE_SET_AT_MS.load(Ordering::Relaxed));
-        if age <= ACTIVE_STALE_MS {
-            log::info!("[cue] start suppressed: active guard (age={age}ms)");
-            return;
-        }
-        log::warn!("[cue] active guard stale (age={age}ms) → force reset and play");
-        ACTIVE.store(false, Ordering::Relaxed);
-    }
     play_bytes(START_WAV, "start");
-}
-
-/// hotkey 按下瞬间从 Rust 侧直接调；ACTIVE/ENABLED 守卫由本函数承担，
-/// 调用方不必判断。
-pub fn play_start() {
-    play_start_internal(true);
 }
 
 pub fn play_stop() {
@@ -262,41 +237,9 @@ pub fn cue_set_enabled(enabled: bool) {
     }
 }
 
-#[tauri::command]
-pub fn cue_set_active(active: bool) {
-    let prev = ACTIVE.swap(active, Ordering::Relaxed);
-    if prev != active {
-        log::info!("[cue] set_active prev={prev} next={active}");
-    }
-    if active {
-        ACTIVE_SET_AT_MS.store(now_ms(), Ordering::Relaxed);
-    }
-}
-
-/// 兜底：前端进 idle 状态时调一次，清残留的 ACTIVE=true（如果有的话）。
-#[tauri::command]
-pub fn cue_reset_active() {
-    let prev = ACTIVE.swap(false, Ordering::Relaxed);
-    if prev {
-        log::info!("[cue] reset_active: was true, now false");
-    }
-}
-
-/// 录音活跃期由 audio level emit 路径（20Hz）持续调用以续约 ACTIVE_SET_AT_MS。
-/// 否则一旦单次录音超过 ACTIVE_STALE_MS（30s），结束时再按一下 PTT/toggle
-/// 会被 play_start_internal 的"脏状态"分支误判，导致先播 start 再播 stop（两声）。
-/// ACTIVE=false 时本函数 no-op，对设置页的电平表预览路径无副作用。
-pub fn keepalive_active() {
-    if ACTIVE.load(Ordering::Relaxed) {
-        ACTIVE_SET_AT_MS.store(now_ms(), Ordering::Relaxed);
-    }
-}
-
 #[derive(serde::Serialize)]
 pub struct CueDiagnose {
     pub enabled: bool,
-    pub active: bool,
-    pub active_age_ms: u64,
     pub mixer_ready: bool,
 }
 
@@ -304,23 +247,13 @@ pub struct CueDiagnose {
 #[tauri::command]
 pub fn cue_diagnose_and_test() -> CueDiagnose {
     let enabled = ENABLED.load(Ordering::Relaxed);
-    let active = ACTIVE.load(Ordering::Relaxed);
-    let active_age_ms = if active {
-        now_ms().saturating_sub(ACTIVE_SET_AT_MS.load(Ordering::Relaxed))
-    } else {
-        0
-    };
     ensure_thread();
     let mixer_ready = SINK_READY.load(Ordering::Relaxed);
-    log::info!(
-        "[cue] diagnose enabled={enabled} active={active} age={active_age_ms}ms mixer_ready={mixer_ready}"
-    );
-    // 测试播放：无视 ACTIVE 守卫，但仍受 ENABLED 控制——开关关了应该静默。
-    play_start_internal(false);
+    log::info!("[cue] diagnose enabled={enabled} mixer_ready={mixer_ready}");
+    // 测试播放仍受 ENABLED 控制——开关关了应该静默。
+    play_start();
     CueDiagnose {
         enabled,
-        active,
-        active_age_ms,
         mixer_ready,
     }
 }
@@ -329,9 +262,7 @@ pub fn cue_diagnose_and_test() -> CueDiagnose {
 pub fn cue_play(kind: String) {
     log::info!("[cue] cue_play invoke kind={kind}");
     match kind.as_str() {
-        // 显式 invoke 来源（subscribe 状态边沿 + 跨模式切换）意图明确，绕开
-        // ACTIVE 守卫直接播——否则录音中"听写↔翻译"切换会因 ACTIVE=true 静音。
-        "start" => play_start_internal(false),
+        "start" => play_start(),
         "stop" => play_stop(),
         "cancel" => play_cancel(),
         "armed" => play_armed(),

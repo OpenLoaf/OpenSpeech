@@ -1,13 +1,16 @@
-// 离线渲染听写提示音 WAV，参数与原 src/stores/recording.ts 中 ding() 一致：
-// 两个 sine partial（基频 + 二次谐波）→ RBJ biquad lowpass（cutoff = freq*2.2, Q=0.4）
-// → 30ms linear attack + exponential decay 到 0.0001。
-// 输出 mono 16-bit PCM @ 48kHz，嵌入 src-tauri 二进制。
+// 离线渲染听写提示音 WAV（`node scripts/gen-cue-wavs.mjs`），嵌入 src-tauri 二进制。
+// 音色：近纯正弦（二次谐波仅 5%）→ RBJ biquad lowpass（cutoff = freq*1.4, Q=0.5）
+// → 40ms 余弦 S 形渐入 + 指数衰减到 0.0001。
+// 2026-09 调柔：原版 440→659Hz 五度上行 + 18% 二次谐波 + 30ms 线性渐入，
+// 用户反馈「尖锐、不够柔」；整体降音高、去泛音、起音改 S 曲线、音量 0.09→0.075。
+// 输出 mono 16-bit PCM @ 48kHz。
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SR = 48000;
+const ATTACK_SEC = 0.04;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(__dirname, "../src-tauri/resources/cues");
 mkdirSync(OUT_DIR, { recursive: true });
@@ -47,10 +50,11 @@ function biquadLowpass(input, freq, Q) {
 
 function envelope(t, durSec, peak) {
   if (t < 0) return 0;
-  if (t < 0.03) return peak * (t / 0.03);
+  // 余弦 S 形渐入：起点斜率为 0，没有线性渐入开头那一下「棱角」。
+  if (t < ATTACK_SEC) return peak * 0.5 * (1 - Math.cos((Math.PI * t) / ATTACK_SEC));
   if (t < durSec) {
-    const T = durSec - 0.03;
-    const u = (t - 0.03) / T;
+    const T = durSec - ATTACK_SEC;
+    const u = (t - ATTACK_SEC) / T;
     return peak * Math.exp(u * Math.log(0.0001 / peak));
   }
   return 0;
@@ -59,7 +63,7 @@ function envelope(t, durSec, peak) {
 function synthDing(freq, durationMs, delayMs, peakGain) {
   const partials = [
     { ratio: 1, gain: 1 },
-    { ratio: 2, gain: 0.18 },
+    { ratio: 2, gain: 0.05 },
   ];
   const durSec = durationMs / 1000;
   const totalSec = (delayMs + durationMs + 80) / 1000;
@@ -82,7 +86,7 @@ function synthDing(freq, durationMs, delayMs, peakGain) {
       partialBuf[i] = Math.sin(phase) * env;
       phase += dPhase;
     }
-    const filtered = biquadLowpass(partialBuf, freq * 2.2, 0.4);
+    const filtered = biquadLowpass(partialBuf, freq * 1.4, 0.5);
     for (let i = 0; i < total; i++) out[i] += filtered[i];
   }
   return out;
@@ -99,7 +103,7 @@ function mix(dings) {
       d.freq,
       d.durationMs,
       d.delayMs ?? 0,
-      d.peakGain ?? 0.09,
+      d.peakGain ?? 0.075,
     );
     for (let i = 0; i < buf.length && i < total; i++) out[i] += buf[i];
   }
@@ -136,14 +140,15 @@ function writeWav(path, samples) {
 }
 
 const cues = {
+  // G4 → C5 四度上行（原 A4 → E5 五度，第二个音偏亮）。
   start: [
-    { freq: 440, durationMs: 280, delayMs: 0 },
-    { freq: 659.25, durationMs: 420, delayMs: 160 },
+    { freq: 392, durationMs: 300, delayMs: 0 },
+    { freq: 523.25, durationMs: 460, delayMs: 150 },
   ],
-  stop: [{ freq: 523.25, durationMs: 460, delayMs: 0 }],
+  stop: [{ freq: 440, durationMs: 480, delayMs: 0 }],
   cancel: [
-    { freq: 659.25, durationMs: 260, delayMs: 0 },
-    { freq: 440, durationMs: 460, delayMs: 160 },
+    { freq: 523.25, durationMs: 280, delayMs: 0 },
+    { freq: 392, durationMs: 480, delayMs: 150 },
   ],
 };
 

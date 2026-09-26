@@ -15,8 +15,8 @@
 //   - 通过 `active_ids` 记录"已经触发过 pressed 但还没触发 released"的绑定，
 //     确保每次状态转移恰好 emit 一次（state-transition debounce，对齐 FreeFlow
 //     `ShortcutMatcher.swift:159-176` 的做法）。
-//   - 与 tauri-plugin-global-shortcut 的 combo 路径 emit 相同的 `HOTKEY_EVENT`
-//     payload，前端 FSM 不需要区分两个来源。
+//   - 与 tauri-plugin-global-shortcut 的 combo 路径一样直接驱动 `dictation::on_hotkey`，
+//     听写会话不需要区分两个来源。
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,9 +27,7 @@ use rdev::{Event, EventType, Key};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::hotkey::{
-    BindingId, HOTKEY_EVENT, HotkeyBinding, HotkeyEventPayload, ModSide, Side, binding_to_mod_sides,
-};
+use crate::hotkey::{BindingId, HotkeyBinding, ModSide, Side, binding_to_mod_sides};
 
 /// 录入模式下，HotkeyField 订阅此事件拿到 press/release，代替 WebView DOM keydown
 /// （macOS 上 Fn 键不会产生 DOM 事件，所以 DOM 监听器录不到）。
@@ -458,6 +456,10 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 } else {
                     false
                 };
+                // ESC 取消听写：Rust 直接处理，不经 webview（主窗后台被节流也能立即生效）。
+                if key == Key::Escape && is_press && !is_repeat {
+                    crate::dictation::on_esc();
+                }
                 let preview = KeyPreviewEvent {
                     code: rdev_key_to_code(key),
                     phase: if is_press { "pressed" } else { "released" },
@@ -602,49 +604,14 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>, state: SharedModifierOnlySt
                 if super::maybe_block_for_meeting(&app_clone, id, "pressed") {
                     continue;
                 }
-                // 采集下沉:录音类绑定按下当帧后台预开 cpal 采集,不等被 macOS 节流的
-                // 隐藏主窗 webview(前端醒来后 adopt 同一采集)。fire-and-forget,不阻塞 rdev。
                 if super::is_recording_binding(id) {
-                    crate::audio::preopen_dictation_capture(&app_clone);
-                }
-                crate::cue::play_start();
-                // 先 emit 事件给前端 FSM——保证按键事件不被后续 overlay 操作阻塞。
-                // 之前 overlay::show() 放在 emit 前面，rdev 回调线程上同步调窗口操作
-                // 会 block 住主线程，导致 webview JS 无法处理 emit 出的事件：空闲后
-                // 首次按快捷键前 2-3 次事件全部丢失，积压后 burst 到前端引发 FSM 乱跳。
-                let payload = HotkeyEventPayload {
-                    id,
-                    phase: "pressed",
-                    event_at_unix_ms: super::event_at_unix_ms(),
-                };
-                if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
-                    log::warn!("[modifier_only] emit pressed failed: {e:?}");
-                }
-                // 非阻塞：run_on_main_thread 把 overlay::show 调度到主线程异步执行，
-                // 不阻塞 rdev 回调线程，后续 release 事件能立刻处理。
-                // overlay 仍会在主线程空闲后尽快 show，感知延迟 < 1 event loop tick。
-                let app_for_overlay = app_clone.clone();
-                if let Err(e) = app_clone.run_on_main_thread(move || {
-                    if let Err(e) = crate::overlay::show(&app_for_overlay) {
-                        log::warn!("[overlay] show failed: {e:?}");
-                    }
-                }) {
-                    log::warn!("[overlay] schedule show failed: {e:?}");
+                    crate::dictation::on_hotkey(id, true, super::event_at_unix_ms());
                 }
             }
             for (id, id_str) in newly_released_ids {
                 log::warn!("[modifier_only] released: {id_str} id={id:?}");
-                if super::maybe_block_for_meeting(&app_clone, id, "released") {
-                    continue;
-                }
-                let payload = HotkeyEventPayload {
-                    id,
-                    phase: "released",
-                    event_at_unix_ms: super::event_at_unix_ms(),
-                };
-                if let Err(e) = app_clone.emit(HOTKEY_EVENT, payload) {
-                    log::warn!("[modifier_only] emit released failed: {e:?}");
-                }
+                // 会议拦截的按下已记在 set 里，这里一并吞掉对应的松开。
+                let _ = super::maybe_block_for_meeting(&app_clone, id, "released");
             }
         });
         if let Err(e) = result {
