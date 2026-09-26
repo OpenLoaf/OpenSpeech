@@ -326,13 +326,15 @@ pub fn run() {
             // ---- 系统托盘 ---------------------------------------------------
             // 菜单项详见 build_tray_menu。切换麦克风 / 插拔设备时通过
             // tray_refresh invoke 或 on_menu_event 末尾的重建触发刷新。
-            // 托盘图标专用 PNG，独立于 bundle / 窗口图标，便于单独换样。
-            let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+            // 托盘图标用单色图，按平台 / 任务栏主题选择，见 tray::tray_icon_image。
+            let icon = tray::tray_icon_image()?;
             let initial_menu = build_tray_menu(&app.handle())?;
 
             TrayIconBuilder::with_id("main")
                 .tooltip("OpenSpeech")
                 .icon(icon)
+                // macOS：模板图由系统按菜单栏深浅自动着色（其它平台忽略此设置）。
+                .icon_as_template(true)
                 .menu(&initial_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
@@ -399,6 +401,8 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            #[cfg(target_os = "windows")]
+            tray::spawn_taskbar_theme_watcher(app.handle().clone());
 
             // ---- 主窗口关闭拦截（包括 Cmd+Q / 红叉 / Alt+F4） ----------------
             // 在 Rust 层 prevent_close 是同步生效的，避免前端 JS 回调的时序竞争。

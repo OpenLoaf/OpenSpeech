@@ -104,6 +104,10 @@ pub async fn transcribe_and_refine<R: Runtime>(
     let mut credits_refine = 0.0;
     if let Some(mut input) = refine {
         input.user_text = raw_text.clone();
+        // ASR 已出结果、LLM 整理开始：切到整理阶段，悬浮条据此从「识别」文案换到「整理」文案。
+        if let Some(session_id) = input.task_id.clone() {
+            crate::dictation::dictation_report_stage(session_id, crate::dictation::Stage::Refining);
+        }
         match run_refine_core(app.clone(), input).await {
             Ok(rr) => {
                 refined_text = Some(rr.refined_text);

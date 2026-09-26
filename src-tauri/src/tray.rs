@@ -217,3 +217,87 @@ fn rebuild_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) {
         Err(e) => log::warn!("[tray] rebuild menu failed: {e:?}"),
     }
 }
+
+// ---- 托盘图标 ------------------------------------------------------------
+// 彩色图（黑描边 + 黄三角）在浅色菜单栏 / 任务栏上很突兀，在深色任务栏上黑描边又几乎看不见。
+// 改用单色图：macOS 用模板图交给系统按菜单栏深浅着色；Windows 按任务栏主题选黑 / 白，
+// 切主题时后台跟随；Linux 面板多为深色，固定白色。
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const TRAY_ICON_BLACK: &[u8] = include_bytes!("../icons/tray-icon-black.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON_WHITE: &[u8] = include_bytes!("../icons/tray-icon-white.png");
+
+/// macOS 返回黑色模板图（需配合 `icon_as_template(true)`）；其它平台按当前任务栏主题选。
+pub(crate) fn tray_icon_image() -> tauri::Result<tauri::image::Image<'static>> {
+    #[cfg(target_os = "macos")]
+    let bytes = TRAY_ICON_BLACK;
+    #[cfg(target_os = "windows")]
+    let bytes = icon_bytes_for_taskbar(windows_taskbar_is_light());
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let bytes = TRAY_ICON_WHITE;
+    tauri::image::Image::from_bytes(bytes)
+}
+
+#[cfg(target_os = "windows")]
+fn icon_bytes_for_taskbar(light: bool) -> &'static [u8] {
+    if light {
+        TRAY_ICON_BLACK
+    } else {
+        TRAY_ICON_WHITE
+    }
+}
+
+/// 读 `SystemUsesLightTheme`（任务栏 / 开始菜单的深浅，区别于应用的 AppsUseLightTheme）。
+/// 读不到按深色处理——Win10 / Win11 默认任务栏都是深色。
+#[cfg(target_os = "windows")]
+fn windows_taskbar_is_light() -> bool {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let name = wide("SystemUsesLightTheme");
+    let mut value: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: 所有指针都指向本函数内存活的缓冲区，size 与 value 的大小一致。
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut value as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    status == 0 && value == 1
+}
+
+/// Windows：后台每隔几秒读一次任务栏主题，变了就换图标。主题切换没有可靠的
+/// 任务栏专属事件（tao 的 ThemeChanged 只看应用主题），读一个注册表 DWORD 的开销可忽略。
+#[cfg(target_os = "windows")]
+pub(crate) fn spawn_taskbar_theme_watcher<R: Runtime>(app: tauri::AppHandle<R>) {
+    const POLL: std::time::Duration = std::time::Duration::from_secs(3);
+    std::thread::spawn(move || {
+        let mut light = windows_taskbar_is_light();
+        loop {
+            std::thread::sleep(POLL);
+            let now = windows_taskbar_is_light();
+            if now == light {
+                continue;
+            }
+            light = now;
+            let Some(tray) = app.tray_by_id("main") else {
+                continue;
+            };
+            match tauri::image::Image::from_bytes(icon_bytes_for_taskbar(light)) {
+                Ok(icon) => {
+                    if let Err(e) = tray.set_icon(Some(icon)) {
+                        log::warn!("[tray] set_icon failed: {e}");
+                    }
+                }
+                Err(e) => log::warn!("[tray] decode icon failed: {e}"),
+            }
+        }
+    });
+}
