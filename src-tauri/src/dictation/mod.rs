@@ -467,12 +467,14 @@ fn stop_for_processing(app: &AppHandle, session_id: String) {
         dispatch(Input::Stopped {
             session_id,
             voiced: false,
+            audio_ms: 0,
         });
         return;
     }
     dispatch(Input::Stopped {
         session_id: session_id.clone(),
         voiced: true,
+        audio_ms: rec.duration_ms,
     });
     let Some((binding, config, phase)) = session_info(&session_id) else {
         return;
