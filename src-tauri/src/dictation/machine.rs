@@ -14,10 +14,6 @@ use crate::hotkey::BindingId;
 
 /// 录音净时长低于该值视为误触：直接丢弃，不转写、不写历史。
 pub const TOO_SHORT_MS: u64 = 1300;
-/// 听写录音（落盘后的有效时长）短于该值时跳过 AI 整理、直接输出转写原文：句子太短，
-/// 整理前后几乎一样，白等一次 LLM 往返。翻译会话不受影响（短句也要翻）。
-/// 不用按键时长判断：按下到松手还包含麦克风启动的一两百毫秒，7.9 秒的录音会被算成 8 秒以上。
-pub const SKIP_REFINE_BELOW_MS: u64 = 8_000;
 /// 翻译键在部分平台会被 OS / WebView 注入一次「按下-松开-按下」，<100ms 的二连发不可能是真人。
 pub const OS_DUPLICATE_PRESS_MS: u64 = 100;
 /// Failed 态停留时长，到点自动回 Idle。
@@ -154,8 +150,8 @@ pub enum Input {
     },
     CaptureReady { session_id: String },
     CaptureFailed { session_id: String },
-    /// 录音已落盘：voiced=false 表示整段无人声；audio_ms 为裁掉首尾静音后的有效时长。
-    Stopped { session_id: String, voiced: bool, audio_ms: u64 },
+    /// 录音已落盘：voiced=false 表示整段无人声。
+    Stopped { session_id: String, voiced: bool },
     StopFailed { session_id: String, message: String },
     Esc,
     Intent { intent: Intent, at_ms: u64 },
@@ -458,17 +454,9 @@ impl Machine {
             Input::Stopped {
                 session_id,
                 voiced,
-                audio_ms,
             } => {
-                if self.is_current(&session_id) && self.phase == Phase::Transcribing {
-                    if !voiced {
-                        self.enter_failed(ErrorInfo::code("silent"), now_ms, &mut fx);
-                    } else if audio_ms < SKIP_REFINE_BELOW_MS
-                        && let Some(s) = self.session.as_mut().filter(|s| !s.is_translate())
-                    {
-                        // 在前端管线开跑前关掉整理：管线与悬浮条（uses_ai）都读这份会话配置。
-                        s.config.refine_enabled = false;
-                    }
+                if self.is_current(&session_id) && self.phase == Phase::Transcribing && !voiced {
+                    self.enter_failed(ErrorInfo::code("silent"), now_ms, &mut fx);
                 }
             }
             Input::StopFailed {
@@ -862,7 +850,6 @@ mod tests {
             Input::Stopped {
                 session_id: "s1".into(),
                 voiced: false,
-                audio_ms: 0,
             },
             5_100,
         );
@@ -925,48 +912,35 @@ mod tests {
         );
     }
 
-    fn stop_with_audio(m: &mut Machine, id: &str, audio_ms: u64) {
+    fn stop_voiced(m: &mut Machine, id: &str) {
         m.handle(
             Input::Stopped {
                 session_id: id.into(),
                 voiced: true,
-                audio_ms,
             },
             20_000,
         );
     }
 
-    // 不到 8 秒的听写直接输出原文：整理几乎不改短句，省一次 LLM 往返。
-    // 按实际音频时长判：按键时长 8.2 秒、音频只有 7.9 秒也算短句。
+    // 短句也照常走 AI 整理：曾经按时长跳过（5s / 8s），实测本地识别短句错字不少，
+    // 省下的那次 LLM 往返不值得，已取消。
     #[test]
-    fn short_dictation_skips_refine() {
+    fn short_dictation_still_refines() {
         let mut m = Machine::new();
         recording_with_refine(&mut m, BindingId::DictateToggle, "s1");
-        press(&mut m, BindingId::DictateToggle, 9_200, "x");
-        assert!(m.snapshot().uses_ai);
-        stop_with_audio(&mut m, "s1", SKIP_REFINE_BELOW_MS - 62);
+        press(&mut m, BindingId::DictateToggle, 3_000, "x");
+        stop_voiced(&mut m, "s1");
         assert_eq!(m.phase(), Phase::Transcribing);
-        assert!(!m.session().unwrap().config.refine_enabled);
-        assert!(!m.snapshot().uses_ai);
-    }
-
-    #[test]
-    fn long_dictation_keeps_refine() {
-        let mut m = Machine::new();
-        recording_with_refine(&mut m, BindingId::DictateToggle, "s1");
-        press(&mut m, BindingId::DictateToggle, 9_200, "x");
-        stop_with_audio(&mut m, "s1", SKIP_REFINE_BELOW_MS);
         assert!(m.session().unwrap().config.refine_enabled);
         assert!(m.snapshot().uses_ai);
     }
 
-    // 翻译不受短句阈值影响：短句也必须翻译。
     #[test]
     fn short_translation_still_uses_ai() {
         let mut m = Machine::new();
         recording_with_refine(&mut m, BindingId::Translate, "s1");
         press(&mut m, BindingId::Translate, 3_000, "x");
-        stop_with_audio(&mut m, "s1", 1_900);
+        stop_voiced(&mut m, "s1");
         assert_eq!(m.phase(), Phase::Transcribing);
         assert!(m.snapshot().uses_ai);
     }

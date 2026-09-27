@@ -20,6 +20,9 @@ use tauri_plugin_store::StoreExt;
 #[serde(rename_all = "snake_case")]
 pub(crate) struct TrayLabels {
     pub feedback: String,
+    // 「最近识别」卡片入口（托盘左键同款）；Linux 不发托盘点击事件，只能靠这一项。
+    #[serde(default)]
+    pub open_recent: String,
     pub open_home: String,
     /// `show_main_window` 当前 binding 的 muda accelerator 字符串（如 "CmdOrCtrl+Shift+O"）。
     /// 空字符串 = 不显示快捷键。前端 i18n-sync 在 binding 变动 / 切语言时一起 push。
@@ -44,6 +47,7 @@ impl Default for TrayLabels {
     fn default() -> Self {
         Self {
             feedback: "Feedback".into(),
+            open_recent: "Recent transcripts".into(),
             open_home: "Open home".into(),
             open_home_accel: String::new(),
             open_toolbox: "AI Tools".into(),
@@ -130,6 +134,12 @@ pub(crate) fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::R
     let labels = current_tray_labels();
 
     let feedback = MenuItemBuilder::with_id("tray::feedback", &labels.feedback).build(app)?;
+    let recent_label = if labels.open_recent.is_empty() {
+        "Recent transcripts"
+    } else {
+        labels.open_recent.as_str()
+    };
+    let recent = MenuItemBuilder::with_id("tray::open_recent", recent_label).build(app)?;
     let mut home_builder = MenuItemBuilder::with_id("tray::open_home", &labels.open_home);
     if !labels.open_home_accel.is_empty() {
         home_builder = home_builder.accelerator(&labels.open_home_accel);
@@ -186,11 +196,13 @@ pub(crate) fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::R
     let mut builder = MenuBuilder::new(app);
     // 录音中：顶部插入「停止录音」+ 分隔线，让兜底退路第一眼可见。
     if tray_recording_active() {
-        let stop = MenuItemBuilder::with_id("tray::stop_recording", &labels.stop_recording)
-            .build(app)?;
+        let stop =
+            MenuItemBuilder::with_id("tray::stop_recording", &labels.stop_recording).build(app)?;
         builder = builder.item(&stop).separator();
     }
     builder
+        .item(&recent)
+        .separator()
         .item(&home)
         .item(&toolbox)
         .item(&history)

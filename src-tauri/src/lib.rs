@@ -364,6 +364,11 @@ pub fn run() {
                             // 兜底退路：不唤出主窗、不依赖听写热键，直接让听写会话结束录音。
                             dictation::on_tray_stop();
                         }
+                        "tray::open_recent" => {
+                            if let Err(e) = quick_panel::toggle_from_tray(app, None) {
+                                log::warn!("[tray] open recent-records panel failed: {e:?}");
+                            }
+                        }
                         "tray::feedback" => {
                             show_main_window(app);
                             let _ = app.emit(TRAY_OPEN_FEEDBACK_EVENT, ());
@@ -399,15 +404,36 @@ pub fn run() {
                         _ => {}
                     }
                 })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
+                // 左键：贴着图标弹出「最近识别」卡片，直接看 / 改刚才识别出的字——比记
+                // Cmd+E 之类的快捷键好找。主窗入口挪到右键菜单「打开首页」与卡片内按钮；
+                // Windows 保留双击托盘打开主窗的习惯。
+                .on_tray_icon_event(|tray, event| match event {
+                    TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
+                        rect,
                         ..
-                    } = event
-                    {
+                    } => {
+                        let anchor = quick_panel::TrayAnchor::from_rect(&rect);
+                        if let Err(e) =
+                            quick_panel::toggle_from_tray(tray.app_handle(), Some(anchor))
+                        {
+                            log::warn!("[tray] toggle recent-records panel failed: {e:?}");
+                        }
+                    }
+                    TrayIconEvent::Enter { rect, .. } => {
+                        quick_panel::remember_tray_anchor(quick_panel::TrayAnchor::from_rect(
+                            &rect,
+                        ));
+                    }
+                    TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    } => {
+                        let _ = quick_panel::hide(tray.app_handle());
                         show_main_window(tray.app_handle());
                     }
+                    _ => {}
                 })
                 .build(app)?;
             #[cfg(target_os = "windows")]
