@@ -1,6 +1,5 @@
 # 前端 npm 包发布（必读，否则发的版本会"空版本"）
 
-> **这一节是这次发版踩了大坑后补的——0.2.39 版本发出去的 desktop bundle 里跑的是 0.2.38 前端，changelog 里承诺的修复全没生效**。
 > 后端发版前，前端 npm 包必须先到 npm registry，否则 CI 在 `pnpm install --frozen-lockfile` 时会拿到老 frontend 包，构出来的 desktop 就是个**空版本**。
 
 ---
@@ -149,7 +148,7 @@ npm view @openloaf/openspeech-frontend@0.2.40 --registry https://registry.npmjs.
 | `npm error EPUBLISHCONFLICT` / `cannot publish over the previously published versions` | 这个版本号已经发过了 | 改 `src/package.json` bump 一档再试 |
 | Claude Code 报「Create Public Surface hard block」 | `.claude/settings.local.json` 没加 `Bash(npm *)` 白名单 | 加上（§3.3） |
 | `npm ERR! 404` 在 `pnpm install` 时（主仓） | 主仓 package.json 引用了 npm 上还不存在的 frontend 版本 | 顺序搞反了，**先回到 src/ 跑 publish**，再回主仓 `pnpm install` |
-| 在 `src/` 下跑 pnpm 却打出 `Scope: all 2 workspace projects`，随后 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` / `ERR_PNPM_IGNORED_BUILDS`，且主仓 `pnpm-workspace.yaml` 被塞进 `allowBuilds:` 占位行 | `src/` 没有自己的 `pnpm-workspace.yaml`，pnpm 向上找到主仓 workspace root，把 `prepublishOnly` 里的 `pnpm install` 当成**主仓**安装在跑（还会因 pnpm 大版本与 `node_modules/.modules.yaml` 记录的不一致要求 purge） | `src/` 里的 pnpm 命令一律加 `--ignore-workspace`；publish 拆成三步：`pnpm install --frozen-lockfile --ignore-workspace` → `./node_modules/.bin/vite build` → `pnpm publish --no-git-checks --ignore-scripts --ignore-workspace`（等价于 hook，只是显式绕开 workspace）；事后 `git checkout -- pnpm-workspace.yaml` 还原主仓被误改的配置。2026-09-22 踩过 |
+| 在 `src/` 下跑 pnpm 却打出 `Scope: all 2 workspace projects`，随后 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` / `ERR_PNPM_IGNORED_BUILDS`，且主仓 `pnpm-workspace.yaml` 被塞进 `allowBuilds:` 占位行 | `src/` 没有自己的 `pnpm-workspace.yaml`，pnpm 向上找到主仓 workspace root，把 `prepublishOnly` 里的 `pnpm install` 当成**主仓**安装在跑（还会因 pnpm 大版本与 `node_modules/.modules.yaml` 记录的不一致要求 purge） | `src/` 里的 pnpm 命令一律加 `--ignore-workspace`；publish 拆成三步：`pnpm install --frozen-lockfile --ignore-workspace` → `./node_modules/.bin/vite build` → `pnpm publish --no-git-checks --ignore-scripts --ignore-workspace`（等价于 hook，只是显式绕开 workspace）；事后 `git checkout -- pnpm-workspace.yaml` 还原主仓被误改的配置 |
 | 本机 `pnpm --version` 与 `node_modules/.modules.yaml` 里 `packageManager` 大版本不一致（如 10.x vs 11.x） | corepack shim 跟随 Node 版本切换，pnpm 10 / 11 store 目录不同（`store/v3` vs `store/v11`），互相看到对方装的 node_modules 就要求 purge | 用与 `.modules.yaml` 一致的版本：`corepack pnpm@<ver> ...`（缓存在 `~/.cache/node/corepack/v1/pnpm/`）；只需改 lockfile 时用 `pnpm install --lockfile-only` 不碰 node_modules |
 
 ---
@@ -174,7 +173,7 @@ echo "npm registry 最新:      $REMOTE_VER"
   || echo "❌ 不一致，先把前端发版顺序补齐"
 ```
 
-`prepublishOnly` 拉 `--frozen-lockfile` 时如果 lockfile 锁的版本和 package.json 引用的不一致会直接 fail，但 lockfile 锁的版本与 **npm registry 最新版本** 不一致 CI 不会主动报错——会成功构建出**带老前端的 desktop bundle**，这就是 0.2.39 那个坑。**所以必须三方对齐**。
+`prepublishOnly` 拉 `--frozen-lockfile` 时如果 lockfile 锁的版本和 package.json 引用的不一致会直接 fail，但 lockfile 锁的版本与 **npm registry 最新版本** 不一致 CI 不会主动报错——会成功构建出**带老前端的 desktop bundle**。**所以必须三方对齐**。
 
 ---
 

@@ -108,6 +108,15 @@
 
 **4. capability 必加 `core:window:allow-start-dragging`。** drag region 才工作。
 
+### 托盘卡片（mode = `recent-records`）
+
+- 托盘左键 → `quick_panel::toggle_from_tray`，复用同一个 quick panel 窗口，按 mode 在 show 时 `set_size`（两个 mode 尺寸不同，别在 ensure 里写死）。
+- 定位用 `TrayIconEvent::Click` 的 `rect`（物理像素、左上原点）：图标在屏幕上半 → 卡片在图标下方（macOS 菜单栏），否则在上方（Windows 底部任务栏）；视觉卡片夹在 work area 内。
+- **贴图标那一侧透明边距必须为 0**：四周统一 40px 时，顶部边距压到菜单栏上，macOS 会把整个窗口往下推，卡片被推低正好 40px（踩过）；Windows 底部边距盖住任务栏会吃掉任务栏点击。Rust 按方向算边距，经 `openspeech://quick-panel-insets` 在 mode 事件前推给前端设 padding。
+- **失焦 hide 与托盘点击的竞态**：面板可见时点托盘图标，先到 `Focused(false)` 把面板 hide，Click 随后才到——若不处理会立刻重新弹出。`LAST_BLUR_HIDE_MS` 记录失焦 hide 时刻，400ms 内的托盘点击视为「关」。菜单项触发（anchor=None）不走这个守卫。
+- 菜单项「最近识别」没有 rect，用 `Enter` / `Click` 记下的上次图标位置；Linux 不发托盘事件 → 居中。
+- 卡片内「打开主窗口」必须**先** `quick_panel_hide` 再 `show_main_window_cmd`：hide 会把前台还给原 app，顺序反了主窗刚激活就被抢走前台。
+
 ### 视觉：transparent 圆角窗口的 shadow
 
 - `.shadow(true)`（NSWindow 系统 shadow）+ transparent + 圆角内容 → 底部圆角外露出**矩形 shadow 角**，看起来像两个直角。

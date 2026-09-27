@@ -3,8 +3,8 @@
 > 用户问「国内下载慢」「manifest 指哪儿」「CDN」「R2」「updater 日志」「为什么走这个域名」时读这份文档；
 > 改 `.github/workflows/release.yml` 的上传段、`update_channel.rs` 的 endpoints 也读这份文档。
 >
-> 自 `v0.2.30-beta.3` 起，分发主链路从「单写腾讯云 COS」改为「单写 Cloudflare R2 + 腾讯云 CDN 回源」。
-> COS 仅保留 `latest.json` / `latest-beta.json` 两个 manifest 给老客户端兜底，二进制不再镜像。
+> 分发主链路 = 单写 Cloudflare R2 + 腾讯云 CDN 回源。原 COS manifest 兜底已从 release.yml 移除，
+> COS 上的 manifest 冻结在 v0.2.29 / v0.2.30-beta.16，不用再查。
 
 ---
 
@@ -16,11 +16,6 @@
                                  ├─ Custom Domain: openspeech-r2.hexems.com（海外口）
                                  │
                                  └─ 腾讯云 CDN 回源 ──▶ openspeech-cdn.hexems.com（国内口）
-
-[release.yml]  ──coscli cp───▶  COS bucket: openspeech-1329813561
-                                 仅同步 latest.json / latest-beta.json
-                                 给 ≤ v0.2.30-beta.2 老客户端兜底
-                                 （manifest.url 已指向 R2，老客户端按 url 直下 R2）
 
 [客户端 update_channel.rs::endpoints_for(channel)]
    stable + CN  ──▶  CDN latest.json    + R2 latest.json    + GitHub fallback
@@ -73,9 +68,9 @@
 
 5. **manifest 头部**：`--content-type application/json --cache-control "no-cache,max-age=0"`，与历史 COS 行为对齐。
 
-### COS legacy 兜底（`Mirror manifests to COS (legacy clients)` step）
+### COS legacy 兜底（已移除）
 
-仅 `coscli cp latest.json` / `latest-beta.json`，**不**再 `coscli sync staging/`。预计两到三个 stable 版本后老客户端基本升级完，整段可删；同时清理 `TENCENT_*` Secrets。
+release.yml 已无 COS step，`TENCENT_*` Secrets 不再被引用，可清理。
 
 ### Bundle targets
 
@@ -145,12 +140,7 @@ curl -sI https://openspeech-cdn.hexems.com/latest-beta.json | grep -i etag
 curl -sI https://openspeech-cdn.hexems.com/v${TAG#v}/OpenSpeech-${TAG#v}-macOS-arm64.dmg
 curl -sI https://openspeech-cdn.hexems.com/v${TAG#v}/OpenSpeech-${TAG#v}-macOS-arm64.dmg
 
-# 5. COS 老客户端兜底 manifest 内容应与 R2 一致
-curl -s https://openspeech-1329813561.cos.accelerate.myqcloud.com/latest-beta.json \
-  | jq '{version, sample: .platforms["darwin-aarch64"].url}'
-# 期待 url 指向 https://openspeech-r2.hexems.com/...
-
-# 6. GitHub channel-beta 滚动指针
+# 5. GitHub channel-beta 滚动指针
 curl -sL https://github.com/OpenLoaf/OpenSpeech/releases/download/channel-beta/latest-beta.json \
   | jq '{version, urls: (.platforms | map_values(.url))}'
 ```
@@ -197,7 +187,6 @@ gh release upload v0.x.y latest.fallback.json --repo OpenLoaf/OpenSpeech --clobb
 | 在 Cloudflare DNS 上对 `openspeech-cdn` 开了橙云（proxy） | 必须灰云（仅 DNS），否则 Cloudflare 劫持请求，永远到不了腾讯云 CDN |
 | 改 `update_channel.rs` 的 endpoint 常量后忘了发版 | endpoint 编进二进制，必须发新版才生效 |
 | 改 `is_cn_runtime()` 判定逻辑后只在英文系统测 | 至少跑一次中文系统（设 `LANG=zh_CN.UTF-8`）+ `LC_ALL=en_US` 验各分支 |
-| 删掉 COS legacy step 时机太早（< 2 个月） | 至少观察一到两个 stable 版本完成、老客户端日志能看到大部分已升到 0.2.30-beta.3+，再断 |
 | 没把 manifest 设 `cache-control: no-cache` | CDN 缓存陈旧 manifest，发版半小时用户拿不到；R2 上传时必须显式带这个 header |
 | 看 manifest url 是 cos 还是 r2 来诊断"加速生效" | 加速生效与否看 endpoints 数组顺序（来自 `is_cn_runtime`） + updater 日志的 `endpoints=[...]` 行；manifest url 现在永远是 R2 |
 | `bundle.targets: "all"` 发 beta | Windows MSI 拒收 SemVer pre-release（`-beta.N`）→ build fail。`bundle.targets` 必须显式列表，去掉 `msi` |

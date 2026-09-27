@@ -2,7 +2,7 @@
 
 > 何时读：改录音、改 STT、调 SaaS realtime ASR 集成、改触发录音的 gate 逻辑、加新 provider、**新增任何直连 SaaS（realtime / file 转写 / chat completions / V4 tools）的链路**。
 > 真相来源：`src-tauri/src/stt/mod.rs` + `src-tauri/src/local_asr/` + `src-tauri/src/audio/` + `src-tauri/src/transcribe/mod.rs` + `src-tauri/src/ai_refine/mod.rs` + `src-tauri/src/openloaf/mod.rs` + `src/lib/stt.ts` + `src/stores/recording.ts`。事件名 / 命令名 / payload 直接读源码。
-> 用法权威 = 同目录软链 `openloaf-saas-sdk-rust` skill。
+> 用法权威 = 全局 `hex-openloaf-saas-sdk` skill（含 Rust crate）。
 
 ---
 

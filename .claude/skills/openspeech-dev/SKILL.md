@@ -32,7 +32,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 | 改 UI / 加文案 / 改样式 / 新建组件 / 新建 Dialog | i18n、文案、TE 风、样式、Logo、drag region、Dialog | 私仓 OpenSpeech-Frontend 的 `openspeech-frontend` skill（src/.claude/skills/openspeech-frontend/） |
 | 改窗口 / 托盘 / 关闭行为 / 加 invoke / 加系统权限 / 改开机自启 / 加新 quick panel 模式 | 窗口、托盘、关闭、Cmd+Q、Dock、capability、autostart、overlay、quick panel、Spotlight、nonactivating panel、drag region | `references/desktop-runtime.md` |
 | 改录音 / STT / 调 SaaS realtime ASR / 改触发录音 gate / 新增直连 SaaS 链路 | 录音、STT、ASR、PCM、SaaS、未登录、saas-file、chat completions、token 过期、401、被踢登录 | `references/asr-recording.md` |
-| 发版 / 改签名 / 测 updater / 加 NSIS 语言 | 发版、签名、updater、NSIS、entitlement | `references/release.md`（执行流程走 `openspeech-release` skill） |
+| 发版 / 改签名 / 测 updater / 加 NSIS 语言 | 发版、签名、updater、NSIS、entitlement | `references/release.md`（执行流程走 `openspeech-update` skill） |
 | 让 Claude 自己看 / 操作运行中的 UI | 截图、看一下界面、控制 UI、读 console | `references/tauri-mcp.md` |
 | 改业务规则 / 实现新功能 | 录音状态机、快捷键策略、词典、历史、隐私、订阅 | 见下方"业务规则索引" |
 
@@ -45,7 +45,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 | 项目变更 | 更新位置 |
 |---|---|
 | 升降级 / 增删 **前端依赖** 或 **Rust crate / Tauri 插件** | 本文"技术栈关键约束" |
-| 变更 **目录结构**（新增 src 子目录、移动文件） | 本文"目录索引" |
+| 变更 **目录结构**（新增 src 子目录、移动文件） | `references/layout.md` |
 | 变更 **构建脚本 / 包管理器 / 工具链** | 本文"包管理与脚本" |
 | **新增 / 重命名 / 删除 `docs/*.md`** | 本文"业务规则索引" |
 | 出现一条新的、源码读不出的决策 / 跨文件协作 / 踩坑 | 找最贴近的 reference 加一行；若无对应 reference 再开 |
@@ -82,7 +82,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
   - Windows 只有 `static-MT` 预编译库 → 仓库根 `.cargo/config.toml` 给 msvc 目标开 `crt-static`，**不能删**，否则全链路 /MD vs /MT 混链 LNK2038。放根目录是因为 `src-tauri/.cargo/` 被 gitignore（留给本机 SaaS 地址覆盖）。
 - **`reqwest` 走 `rustls`**（关 default-features，避免拖入 native-tls）
 - **`tauri` 启用 `tray-icon` feature**（托盘依赖，不可移除）
-- **`openloaf-saas` 跟随 `@openloaf-saas/sdk` Node 包对齐版本号**
+- **`openloaf-saas` crate 必须 `=` 精确锁版本**；前端目前不直接依赖 `@openloaf-saas/sdk`，若再引入须与 crate 版本等值（见 `r-saas-sdk-pin`）
 - **桌面前端依赖必须在 `src/package.json` 独立声明**：仅加到主仓不能保证私仓 npm 包构建成功；会议虚拟列表依赖曾因此漏装。
 
 ### 添加依赖的规范动作
@@ -99,41 +99,13 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 
 - shadcn `base-nova` 风格、`neutral` 基色
 - 正文 `@fontsource-variable/inter`，mono `@fontsource/space-mono`
-- 视觉语言 = **TE 工业风**（详细规则在私仓 `openspeech-frontend` skill 与软链 `te-industrial-frontend` skill）
+- 视觉语言 = **TE 工业风**（详细规则在私仓 `openspeech-frontend` skill）
 
 ---
 
 ## 目录索引
 
-```
-docs/                           业务规则 SSoT（见"业务规则索引"）
-src/                            前端源码（私仓 OpenSpeech-Frontend，公开仓 .gitignore；见私仓
-                                openspeech-frontend skill 取详细约定）
-src-tauri/
-├── src/
-│   ├── lib.rs                  tauri::Builder + 插件注册 + setup（纯装配壳，业务已外溢）
-│   ├── {events,logging,macos_native,commands,window,tray}.rs  lib.rs 装配辅助（事件常量/日志生命周期/objc/零散命令/窗口显隐/托盘菜单）
-│   ├── audio/                  cpal 采集 + WAV 落盘 + PCM16 喂 stt
-│   ├── stt/                    realtime ASR worker（SaaS / BYOK / 本地共用，按 RealtimeAsrBackend 分派）
-│   ├── local_asr/              本地离线模型：清单 / 下载安装 / 推理引擎 / 推理子进程 host（加模型只改 catalog.rs）
-│   ├── hotkey/                 combo / modifierOnly / doubleTap 三路编排
-│   ├── permissions/            macOS 系统权限检测 / 请求 / 跳转
-│   ├── secrets/                keyring 包装
-│   ├── inject/                 文本注入（剪贴板 + 粘贴）
-│   ├── openloaf/               SaaS 登录 / token / 用户档案 / 支付
-│   └── db/                     SQLite 迁移 + recordings_dir 帮手
-├── capabilities/               权限声明（default.json + desktop.json）
-├── examples/                   离线诊断脚本（如 test_realtime_asr）
-└── tauri.conf.json
-.claude/skills/
-├── openspeech-dev/             本技能
-│   ├── SKILL.md                入口（本文）
-│   └── references/             按任务类别拆分的细则
-├── te-industrial-frontend/     软链：TE 风实现指南
-└── openloaf-saas-sdk-rust/     软链：SaaS SDK 用法
-```
-
-> 子模块的具体函数 / 字段 / 事件名 **直接读对应文件**，不在本技能复述。
+`docs/` 业务规则、`src/` 前端私仓、`src-tauri/src/` 各 Rust 模块的一行用途 → `references/layout.md`。子模块的函数 / 字段 / 事件名直接读对应文件。
 
 ---
 
@@ -178,6 +150,10 @@ src-tauri/
 | 首次启动向导 | `docs/onboarding.md` |
 | 计费 / 试用 / 账户（MVP 暂缓） | `docs/subscription.md` |
 | 多 Provider / Adapter / 不登录可用 / 开源接入 | `docs/speech-providers.md` |
+| AI 改写（AI_REFINE 模式） | `docs/ai-refine.md` |
+| 云接口调用点 × 供应商能力矩阵（增删云接口必须同步） | `docs/cloud-endpoints.md` |
+| 悬浮条 / 听写卡片的交互提示气泡 | `docs/hints.md` |
+| 未落地的方案提案 | `docs/proposals/` |
 
 新增或重命名 `docs/*.md` 时回来更新此表。
 
@@ -199,8 +175,7 @@ src-tauri/
 ## 协作技能
 
 - **`openspeech-frontend`**（私仓 OpenSpeech-Frontend `.claude/skills/`，仅本机 src/ 在时可见）—— 前端规约（i18n / TE 样式 / Drag region / Dialog / Logo），做 UI / 改文案 / 调样式时先加载。
-- **`te-industrial-frontend`**（软链）—— TE 工业风实现指南，做 UI 时优先激活。
-- **`openloaf-saas-sdk-rust`**（软链）—— 任何登录 / 用户档案 / AI 工具 / realtime ASR 实现先读它。
-- **`openspeech-release`** —— 发版执行流程入口（本技能 `references/release.md` 只讲"为什么这样"）。
+- **`hex-openloaf-saas-sdk`**（全局）—— 任何登录 / 用户档案 / AI 工具 / realtime ASR 实现先读它（含 Rust crate）。
+- **`openspeech-update`** —— 发版 / OTA 执行流程入口（本技能 `references/release.md` 只讲"为什么这样"）。
 - 写 PRD / 提案 → `create-prd` / `create-proposal`，但 OpenSpeech 业务规则主位 `docs/`。
 - Tauri / Claude API / 前端通用最佳实践 → `claude-api` / `vercel-react-best-practices` / `document-skills:frontend-design`，**本技能优先**。

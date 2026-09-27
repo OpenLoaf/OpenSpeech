@@ -2,7 +2,7 @@
 
 > 何时读：要发版 / 改 CI / 改签名证书 / 本地测 updater 包 / 加 NSIS 语言。
 > 真相来源：`package.json`、`tauri.conf.json`、`scripts/sync-version.mjs`、`.github/workflows/release.yml`、`src-tauri/entitlements.plist`。
-> **发版执行流程**走同名 skill `openspeech-release`，本文只写"为什么这样选"。
+> **发版执行流程**走 `openspeech-update` skill，本文只写"为什么这样选"。
 
 ---
 

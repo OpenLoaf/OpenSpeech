@@ -15,8 +15,8 @@
 | 主分发存储 | Cloudflare R2，bucket `openspeech` |
 | 海外加速 host | R2 自定义域 `openspeech-r2.hexems.com`（硬编码于 release.yml + update_channel.rs） |
 | 国内加速 host | 腾讯云 CDN `openspeech-cdn.hexems.com`，回源 `openspeech-r2.hexems.com`（硬编码于 update_channel.rs） |
-| 老客户端兜底 | 腾讯云 COS `openspeech-1329813561.cos.accelerate.myqcloud.com`，仅同步 `latest.json` / `latest-beta.json`（≤ v0.2.30-beta.2 客户端 endpoints 写死，需保留 1~2 个月过渡） |
-| Bundle targets | `tauri.conf.json` `bundle.targets` = `["dmg","app","deb","rpm","appimage","nsis"]`（**无 msi** —— MSI 不接受 SemVer pre-release，且 Tauri 2 updater for Windows 走 NSIS） |
+| 老客户端兜底（已停） | 腾讯云 COS `openspeech-1329813561.cos.accelerate.myqcloud.com`：release.yml 已不再写 COS，上面的 manifest 冻结在 v0.2.29 / v0.2.30-beta.16 |
+| Bundle targets | `tauri.conf.json` `bundle.targets` = `["app","deb","rpm","appimage","nsis"]`（**无 msi** —— MSI 不接受 SemVer pre-release，且 Tauri 2 updater for Windows 走 NSIS） |
 | 远程仓库 | `git@github.com:OpenLoaf/OpenSpeech.git` |
 | CI workflow | `.github/workflows/release.yml`（tag `v*` 触发） |
 
@@ -33,7 +33,6 @@
 - `src-tauri/src/update_channel.rs` 的六个 endpoint 常量、`is_cn_runtime()` 判定逻辑
 - Cloudflare R2 链路（bucket / 自定义域 / API token / Secret 名）
 - 腾讯云 CDN 链路（加速域名 / 回源 HOST / DNS）
-- COS 老客户端兜底链路（bucket / 镜像哪些文件 / 何时下线）
 
 ---
 
@@ -77,9 +76,8 @@
 | `TENCENT_COS_BUCKET` | 桶名（含 APPID 后缀，如 `openspeech-1329813561`） |
 | `TENCENT_COS_REGION` | COS 地域，如 `ap-shanghai`（上传 endpoint 由 `cos.accelerate.myqcloud.com` 覆盖） |
 
-> `R2_*` 是当前主链路；`TENCENT_*` 仅为 ≤ v0.2.30-beta.2 老客户端 manifest 兜底。
-> 老客户端基本升完后（约 1~2 个月）整套 `TENCENT_*` Secrets 与 release.yml 中
-> `Mirror manifests to COS` step 一并清理。
+> `R2_*` 是当前主链路；`TENCENT_*` 原为老客户端 COS manifest 兜底，release.yml 已不再引用，
+> 可从 GitHub Secrets 清理。
 > 旧的 `OPENSPEECH_CDN_HOST` Secret 已停用（CDN host 改为 release.yml 中硬编码 `https://openspeech-r2.hexems.com`），可删。
 
 ---
@@ -107,8 +105,7 @@ GitHub Actions（.github/workflows/release.yml）：
       ├─ 读 docs/changelogs/{ver}/zh.md 作为 Release body
       ├─ 创建 draft Release（softprops/action-gh-release，附 latest.json + download-*.json）
       ├─ 更新 channel-beta 滚动指针 release（latest-beta.json + download-beta.json）
-      ├─ aws s3 sync 上传到 Cloudflare R2（产物 + 6 个 manifest，AWS_ENDPOINT_URL = R2_ENDPOINT）
-      └─ coscli cp 镜像 latest.json / latest-beta.json 到腾讯云 COS（仅 manifest 兜底）
+      └─ aws s3 sync 上传到 Cloudflare R2（产物 + 6 个 manifest，AWS_ENDPOINT_URL = R2_ENDPOINT）
 
 人工：去 https://github.com/OpenLoaf/OpenSpeech/releases 点 Publish
   ↓
@@ -127,8 +124,7 @@ tauri-plugin-updater 走 update_channel.rs 注入的 endpoints
   ↓ minisign 校验 → 替换 → relaunch
 
 老客户端（≤ v0.2.30-beta.2）endpoints 写死 cos.accelerate.myqcloud.com：
-  ↓ 拉 COS 上的 manifest（CI 同步过来的，内容指 R2）
-  ↓ 按 manifest.url 直下 R2 海外 → minisign 校验 → 替换 → relaunch
+  COS manifest 已冻结（CI 不再同步），不随新版本更新
 ```
 
 历史耗时参考（看 build 矩阵的瓶颈）：
