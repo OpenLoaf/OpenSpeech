@@ -505,12 +505,15 @@ fn stop_for_processing(app: &AppHandle, session_id: String) {
     let target_app = target_app_of(&session_id);
     let dest_app = match config.segment_mode {
         SegmentMode::Realtime => target_app.clone(),
-        // 松手时重取前台窗口不再查项目（又一次 IPC）：还在同一个 app 里就沿用起点的项目。
+        // 松手时重取前台窗口：还在同一个 app 里就沿用起点的项目，省一次 IPC；
+        // 中途切了 app（如从 OpenSpeech 主窗口开录、松手前切到 Orca）才重新查。
+        // 本函数跑在独立线程上，最坏 300ms 的同步 IPC 不卡主线程。
         SegmentMode::Utterance => match output::active_window() {
             Some(mut dest) => {
-                if let Some(t) = target_app.as_ref().filter(|t| t.app_id == dest.app_id) {
-                    dest.project = t.project.clone();
-                }
+                dest.project = match target_app.as_ref().filter(|t| t.app_id == dest.app_id) {
+                    Some(t) => t.project.clone(),
+                    None => crate::active_app::resolve_project(&dest),
+                };
                 Some(dest)
             }
             None => target_app.clone(),
