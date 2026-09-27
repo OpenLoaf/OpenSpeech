@@ -342,6 +342,7 @@ mod tests {
             name: name.into(),
             title: String::new(),
             app_id: id.map(Into::into),
+            project: None,
         }
     }
 

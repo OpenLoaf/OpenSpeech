@@ -1,5 +1,7 @@
 use active_win_pos_rs::get_active_window;
 
+pub mod orca;
+
 #[derive(Debug, serde::Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveWindowInfo {
@@ -15,6 +17,17 @@ pub struct ActiveWindowInfo {
     /// 前端 AppOverride（按 appId 精确匹配某软件做规则覆盖）拿这个字段当 key。
     /// 拿不到（无 bundle_id / system process / 权限不足）= None，回落到 name 分类。
     pub app_id: Option<String>,
+    /// 前台 app 里当前打开的项目目录（绝对路径）。目前只有 Orca 能查到（见 orca.rs）；
+    /// 历史按它分组，ASR / 整理的上下文只取同项目的历史。查不到 = None。
+    pub project: Option<String>,
+}
+
+/// 查前台 app 当前的项目目录。会做本机 IPC（最坏约 300ms），不要在主线程调。
+pub fn resolve_project(info: &ActiveWindowInfo) -> Option<String> {
+    match info.app_id.as_deref() {
+        Some(orca::BUNDLE_ID) => orca::active_project(),
+        _ => None,
+    }
 }
 
 /// 返回前台窗口的应用名 + 标题。任何失败（无权限、无窗口、平台不支持）返回 None，
@@ -31,6 +44,7 @@ pub fn get_active_window_info() -> Option<ActiveWindowInfo> {
                 name,
                 title: w.title.trim().to_string(),
                 app_id,
+                project: None,
             })
         }
         Err(_) => None,

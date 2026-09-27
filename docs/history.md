@@ -22,10 +22,11 @@
 | refined_text | AI 优化后的书面化文本；仅 UTTERANCE + `aiRefine.enabled` 时产生。**判断"是否做过 AI 优化"必须看 `segment_mode` + `aiRefine.enabled` 配合**，不能仅凭 `refined_text != null` 反推（refine 失败时也会是 null，会误判） |
 | segment_mode | 该次记录使用的分段模式：`REALTIME` / `UTTERANCE`。schema v4 之前的老记录为 NULL |
 | provider_kind | 实际承载本次转写的供应商通道。命名规则 `<vendor>-<channel>`：`saas-realtime` / `saas-file` / `tencent-realtime` / `tencent-file` / `aliyun-realtime` / `aliyun-file`。schema v4 之前的老记录为 NULL |
-| debug_payload | DEV 构建下捕获的 LLM 请求快照（URL / model / body 的 pretty JSON 字符串；refine + 翻译 phase2 累积成 JSON 数组）。仅在 `import.meta.env.DEV` 路径写入；正式版恒为 NULL。复制 Debug 信息按钮直接读这一列，不再实时拼接。schema v10 之前的老记录为 NULL |
+| debug_payload | DEV 构建或 beta 通道下捕获的 LLM 请求快照（URL / model / body 的 pretty JSON 字符串；refine + 翻译 phase2 累积成 JSON 数组）。门槛是 `isDebugCaptureEnabled()`（`src/lib/debugCapture.ts`：DEV 或更新通道 = beta）；stable 通道的正式版恒为 NULL，只存本地不上传。复制 Debug 信息按钮直接读这一列，不再实时拼接。schema v10 之前的老记录为 NULL |
 | text_edited | 用户在历史详情里手动改写后的最终文本；NULL = 没改过。**与 `text` / `refined_text` 并存不互覆盖**：原始 ASR 与原 refine 结果作为 diff 基线保留下来，便于后续异步词典分析任务比对。schema v11 之前的老记录为 NULL |
 | text_edited_at | 上次手动编辑时间戳（ms）。后续异步 AI 词典分析任务挑"近期编辑"喂模型时按这列排序。NULL = 未编辑过 |
 | focus_title | **落点**前台窗口标题（如 "main.rs — vscode"），与 `target_app` 同源（成功路径取松手瞬间，无注入路径回退录音起点）；拼到 ConversationHistory 段每条历史里给模型做窗口/任务级偏置。schema v12 之前的老记录、retry、拿不到 title 时为 NULL |
+| project | 录音时前台 app 里打开的**项目目录**（绝对路径）。目前只有 Orca 能查到（其自带 CLI 的本机 RPC `worktree.ps`，见 `src-tauri/src/active_app/orca.rs`），查不到 / 其它 app = NULL。有值时 ASR 与 AI 优化上下文里的历史**按项目取**（跨 app 也算同项目），不再按 `target_app` 取——Orca 一个窗口装着多个项目、标题恒为 "Orca"。完整路径只存本机，发给模型的只有最后一段目录名。schema v21 起 |
 
 **不保存**：模型请求/响应的完整内容（仅保留最终 `text`）。
 
@@ -40,6 +41,7 @@
 | v10 | 加 `debug_payload` | `src-tauri/src/db/mod.rs` |
 | v11 | 加 `text_edited` / `text_edited_at` | 同上 |
 | v12 | 加 `focus_title` | 同上 |
+| v21 | 加 `project` | 同上 |
 
 老记录这两列回填策略：保持 NULL，UI 详情页按 i18n key `history.detail.{segment_mode,provider_kind}.<value>` 翻译，命中 NULL 时显示 "—"。
 

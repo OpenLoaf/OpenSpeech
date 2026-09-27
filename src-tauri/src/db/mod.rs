@@ -370,5 +370,14 @@ CREATE INDEX IF NOT EXISTS idx_history_starred ON history(starred_at DESC) WHERE
             sql: "ALTER TABLE history ADD COLUMN refine_context TEXT;",
             kind: MigrationKind::Up,
         },
+        // v21：录音时前台 app 里打开的项目目录（绝对路径，目前只有 Orca 能查到）。
+        // Orca 一个窗口装着几十个项目、标题恒为「Orca」，按 target_app 取的历史会把不同
+        // 项目混在一起；有 project 时 ASR / 整理的上下文只取同项目的历史。NULL = 查不到。
+        Migration {
+            version: 21,
+            description: "history_add_project",
+            sql: "ALTER TABLE history ADD COLUMN project TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -114,6 +114,8 @@
 
 听写 refine 的 `buildSpeechSystemPrompt` 必须传 `refineContext: true`（不带 ConversationHistory、MessageContext 只留 platform / audioDuration、TargetApp 不带 focusTitle）。OL-TX-025 会把 system prompt 里任何文字当素材抄进输出，history 是被抄最多的；新增 refine 调用点漏传这个参数，就会重新打开「输出成上一条」的口子。同理，给 `defaultAiPrompts.ts` 加示例前先跑 eval——一条长而具体的示例曾让终端 target 三成输出编造内容。
 
+**项目上下文（Orca）**：Orca 窗口标题恒为「Orca」、一个窗口装几十个项目，按 target_app 取历史会串项目；所以开录时查 Orca 本机 RPC 拿选中项目目录，历史按 `history.project` 取。查询和开麦克风并行、STARTED 前 join（实时 ASR 上下文在 STARTED 时组装），松手时不再查（沿用起点项目）。只走 RPC 不读它的 profile-state.db：库里 `activeWorkspaceKey` 是陈旧值，`activeWorktreeId` 也有 1–5s 延迟。
+
 ## 本地离线模型（mode=local，2026-09-27）
 
 产品规则见 `docs/settings.md`「本地模型」+ `docs/privacy.md`；这里只记实现层的取舍。

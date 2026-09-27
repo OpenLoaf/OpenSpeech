@@ -394,7 +394,12 @@ fn end_session(
 
 fn open_capture(app: &AppHandle, session_id: String) {
     // 全局快捷键不改变前台焦点，此刻就是用户正在用的 app。
-    let target_app = output::active_window();
+    let mut target_app = output::active_window();
+    // 项目目录要走本机 IPC（Orca RPC，最坏 300ms）：和开麦克风并行，不推迟录音起点。
+    // STARTED 之前 join 回来，前端组实时 ASR 上下文时就能按项目取历史。
+    let project_probe = target_app.clone().map(|info| {
+        std::thread::spawn(move || crate::active_app::resolve_project(&info))
+    });
     if let Ok(mut c) = ctx().lock() {
         *c = Some(SessionCtx {
             session_id: session_id.clone(),
@@ -402,7 +407,23 @@ fn open_capture(app: &AppHandle, session_id: String) {
         });
     }
     let debug = is_debug(&session_id);
-    if !debug && let Err(e) = crate::audio::open_dictation_capture(app, &session_id) {
+    let capture = if debug {
+        Ok(())
+    } else {
+        crate::audio::open_dictation_capture(app, &session_id)
+    };
+    if let (Some(info), Some(Ok(project))) = (
+        target_app.as_mut(),
+        project_probe.map(std::thread::JoinHandle::join),
+    ) {
+        info.project = project;
+        if let Ok(mut c) = ctx().lock()
+            && let Some(c) = c.as_mut().filter(|c| c.session_id == session_id)
+        {
+            c.target_app = target_app.clone();
+        }
+    }
+    if let Err(e) = capture {
         log::warn!("[dictation] open capture failed: {e}");
         dispatch(Input::CaptureFailed { session_id });
         return;
@@ -484,7 +505,16 @@ fn stop_for_processing(app: &AppHandle, session_id: String) {
     let target_app = target_app_of(&session_id);
     let dest_app = match config.segment_mode {
         SegmentMode::Realtime => target_app.clone(),
-        SegmentMode::Utterance => output::active_window().or_else(|| target_app.clone()),
+        // 松手时重取前台窗口不再查项目（又一次 IPC）：还在同一个 app 里就沿用起点的项目。
+        SegmentMode::Utterance => match output::active_window() {
+            Some(mut dest) => {
+                if let Some(t) = target_app.as_ref().filter(|t| t.app_id == dest.app_id) {
+                    dest.project = t.project.clone();
+                }
+                Some(dest)
+            }
+            None => target_app.clone(),
+        },
     };
     emit(
         app,
