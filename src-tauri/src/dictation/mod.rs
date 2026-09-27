@@ -55,7 +55,8 @@ const GATE_RECOVER_TIMEOUT: Duration = Duration::from_millis(1500);
 pub struct DictationConfig {
     #[serde(flatten)]
     session: SessionConfig,
-    /// 自定义听写供应商已配置完整（endpoint + key）：不需要 OpenLoaf 登录也能录。
+    /// 听写通道不依赖 OpenLoaf 登录且已就绪：自定义供应商配置完整（endpoint + key），
+    /// 或本地模型已安装。为 true 时热键门禁直接放行，不走登录检查。
     custom_dictation_ready: bool,
 }
 

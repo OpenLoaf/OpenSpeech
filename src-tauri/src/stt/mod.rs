@@ -78,6 +78,7 @@ use crate::asr::aliyun::realtime_session::{
     AliyunRealtimeSession, ConnectParams as AliyunConnectParams,
 };
 use crate::asr::backends::aliyun::AliyunRealtimeBackend;
+use crate::asr::backends::local::LocalRealtimeBackend;
 use crate::asr::backends::saas::SaasRealtimeBackend;
 use crate::asr::backends::tencent::TencentRealtimeBackend;
 use crate::asr::byok::{
@@ -115,6 +116,9 @@ const EVENT_DICTATION_FALLBACK: &str = "openspeech://dictation-fallback";
 /// send_finish 后等 Final 的最长时间。服务端典型 < 500ms，3s 能兜住抖动；
 /// 超时走空串，前端自行决定是否把 history 标 failed。
 const FINALIZE_WAIT_MS: u64 = 3000;
+/// 本地模型的收尾上限：尾句解码在本机，不存在网络丢包；低配机器解码可能落后于实时，
+/// 3s 截断会丢尾句。有 EndOfStream 提前返回兜着，正常情况远用不到这么久。
+const LOCAL_FINALIZE_WAIT_MS: u64 = 30_000;
 
 /// RT-005 `context` 上游限制：每个角色最多 5 条，每轮 ≤400 字（SaaS 按官方文档收口）。
 const REALTIME_CONTEXT_MAX_TURNS: usize = 5;
@@ -148,6 +152,10 @@ struct SessionState {
     /// 服务端 Closed 帧给的本次会话累计 credits（SaaS 路径才有；BYOK / 未到 Closed = None）。
     /// worker 收到 Closed 时写入；finalize 在 worker join 之后读出来一并返回。
     total_credits: Arc<Mutex<Option<f64>>>,
+    /// worker 因服务端/引擎收尾（EndOfStream / Closed / Error）退出：此时所有 Final 已入
+    /// final_segments，finalize 可立即返回，不必等尾包窗口。
+    stream_ended: Arc<AtomicBool>,
+    finalize_wait_ms: u64,
 }
 
 fn slot() -> &'static Mutex<Option<SessionState>> {
@@ -238,6 +246,7 @@ pub async fn stt_start<R: Runtime>(
         tencent_region: None,
         tencent_cos_bucket: None,
         custom_provider_name: None,
+        local_model_id: None,
     };
     let provider_ref = provider.unwrap_or_else(saas_default);
     let backend = match dispatch(&provider_ref, DictationModality::Realtime) {
@@ -270,7 +279,8 @@ pub async fn stt_start<R: Runtime>(
     match &backend {
         DictationBackend::SaasRealtime
         | DictationBackend::TencentRealtime { .. }
-        | DictationBackend::AliyunRealtime { .. } => {}
+        | DictationBackend::AliyunRealtime { .. }
+        | DictationBackend::LocalRealtime { .. } => {}
         // dispatch(Realtime) 不会返回 *File，但保险起见兜一手。
         other => {
             log::error!("[stt] dispatch returned unexpected backend for realtime: {other:?}");
@@ -390,6 +400,10 @@ fn stt_start_impl<R: Runtime>(
 
     let language = parse_language(lang.as_deref());
     let use_server_vad = parse_use_server_vad(mode.as_deref());
+    let finalize_wait_ms = match &backend {
+        DictationBackend::LocalRealtime { .. } => LOCAL_FINALIZE_WAIT_MS,
+        _ => FINALIZE_WAIT_MS,
+    };
 
     let backend_box: Box<dyn RealtimeAsrBackend> = match backend {
         DictationBackend::SaasRealtime => {
@@ -511,6 +525,21 @@ fn stt_start_impl<R: Runtime>(
             );
             Box::new(AliyunRealtimeBackend::new(sess))
         }
+        DictationBackend::LocalRealtime { model_id } => {
+            warn_bias_ignored(&vocabulary, &context, "local");
+            // 未安装同步快速失败；拉起推理子进程 + 加载（命中常驻即时，冷启动约 1.5s）放进会话 worker，
+            // 会话先进 slot 收音频，见 asr/backends/local.rs 顶部说明。
+            crate::local_asr::engine::check_installed(&app, &model_id).map_err(|e| {
+                log::warn!("[stt] local engine unavailable: {e}");
+                e.code().to_string()
+            })?;
+            log::info!("[stt] session started (vendor=local model={model_id} lang={language:?})");
+            let load_app = app.clone();
+            Box::new(LocalRealtimeBackend::new(Box::new(move || {
+                crate::local_asr::host::HostSession::open(&load_app, &model_id)
+                    .map(|s| Box::new(s) as Box<dyn crate::local_asr::host::StreamSession>)
+            }))?)
+        }
         // dispatch 已经把 *File 拒掉，但保留分支保 trait 兜底。
         other => {
             log::error!("[stt] unexpected backend in start_impl: {other:?}");
@@ -523,8 +552,10 @@ fn stt_start_impl<R: Runtime>(
     let final_segments: Arc<Mutex<BTreeMap<i64, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
     let final_count = Arc::new(AtomicI64::new(0));
     let total_credits: Arc<Mutex<Option<f64>>> = Arc::new(Mutex::new(None));
+    let stream_ended = Arc::new(AtomicBool::new(false));
 
     let stop_worker = stop_signal.clone();
+    let ended_worker = stream_ended.clone();
     let final_worker = final_segments.clone();
     let count_worker = final_count.clone();
     let credits_worker = total_credits.clone();
@@ -541,6 +572,7 @@ fn stt_start_impl<R: Runtime>(
                 final_worker,
                 count_worker,
                 credits_worker,
+                ended_worker,
             )
         })
         .map_err(|e| format!("spawn stt worker: {e}"))?;
@@ -552,6 +584,8 @@ fn stt_start_impl<R: Runtime>(
         final_count,
         stop_signal,
         total_credits,
+        stream_ended,
+        finalize_wait_ms,
     });
     Ok(())
 }
@@ -583,6 +617,8 @@ fn engine_for_tencent(lang: RealtimeAsrLlmOlTlRt002Lang) -> &'static str {
     }
 }
 
+// 参数都是 SessionState 里与 worker 共享的句柄，逐个传比再包一层结构更直观。
+#[allow(clippy::too_many_arguments)]
 fn run_worker<R: Runtime>(
     app: AppHandle<R>,
     mut sess: Box<dyn RealtimeAsrBackend>,
@@ -591,6 +627,7 @@ fn run_worker<R: Runtime>(
     final_segments: Arc<Mutex<BTreeMap<i64, String>>>,
     final_count: Arc<AtomicI64>,
     total_credits: Arc<Mutex<Option<f64>>>,
+    stream_ended: Arc<AtomicBool>,
 ) {
     // 退出原因：用于决定是否要给前端发 worker_dead 信号。
     // - Stop:        Control::Stop / stop_signal / 通道断开 —— 是上层主动收尾，
@@ -662,6 +699,9 @@ fn run_worker<R: Runtime>(
 
     // sess 随局部变量 drop → RealtimeAsrSession::drop 发 Close 帧 + 关 socket。
     log::info!("[stt] worker loop ended");
+    if matches!(exit_reason, ExitReason::ServerEnd) {
+        stream_ended.store(true, Ordering::Relaxed);
+    }
 
     if let ExitReason::WorkerDead(reason) = exit_reason {
         // 前端 asr-closed 的 reason="worker_dead" 分支会立刻 stopMic + 切 error。
@@ -848,6 +888,15 @@ fn stt_finalize_impl() -> Result<SttFinalizeResult, String> {
         }
         let stable_for = elapsed_ms.saturating_sub(last_change_ms);
         let waited_enough = elapsed_ms >= MIN_TAIL_WAIT_MS;
+        // 流已收尾（本地引擎 EndOfStream / 云端 Closed）：Final 已全部落表，直接返回。
+        if state.stream_ended.load(Ordering::Relaxed) {
+            let snapshot = state
+                .final_segments
+                .lock()
+                .map(|g| merge_segments(&g))
+                .unwrap_or_default();
+            break snapshot;
+        }
         if waited_enough && last_seg_count > 0 && stable_for >= LAST_FINAL_QUIET_MS {
             let snapshot = state
                 .final_segments
@@ -856,7 +905,7 @@ fn stt_finalize_impl() -> Result<SttFinalizeResult, String> {
                 .unwrap_or_default();
             break snapshot;
         }
-        if elapsed_ms > FINALIZE_WAIT_MS as u128 {
+        if elapsed_ms > state.finalize_wait_ms as u128 {
             log::warn!(
                 "[stt] finalize timeout after {}ms (segs={})",
                 elapsed_ms,

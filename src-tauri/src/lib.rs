@@ -29,6 +29,7 @@ mod http;
 mod idle;
 mod ime;
 mod inject;
+mod local_asr;
 mod logging;
 #[cfg(target_os = "macos")]
 mod mac_main_thread;
@@ -61,6 +62,14 @@ use tray::build_tray_menu;
 #[cfg(target_os = "macos")]
 use window::apply_dock_icon_policy;
 pub(crate) use window::{show_main_window, toggle_main_window};
+
+/// Command-line switch that makes the binary run as the local ASR inference host.
+pub const LOCAL_ASR_HOST_ARG: &str = local_asr::host::HOST_ARG;
+
+/// Entry point of the local ASR inference child process; returns the exit code.
+pub fn run_local_asr_host() -> i32 {
+    local_asr::host::child::run()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -516,6 +525,12 @@ pub fn run() {
             transcribe::transcribe_long_audio_url,
             transcribe_refine::transcribe_and_refine,
             asr::test_provider::dictation_test_provider,
+            local_asr::local_asr_list_models,
+            local_asr::local_asr_download,
+            local_asr::local_asr_cancel_download,
+            local_asr::local_asr_delete,
+            local_asr::local_asr_preload,
+            local_asr::local_asr_unload,
             inject::inject_paste,
             inject::inject_type,
             permissions::permission_check_microphone,

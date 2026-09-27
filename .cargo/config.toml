@@ -1,0 +1,14 @@
+# Windows 统一静态链接 MSVC CRT（/MT）。
+#
+# 放仓库根而不是 src-tauri/.cargo/：后者被 gitignore（留给开发者本机的 SaaS 地址覆盖），
+# 放那里 CI 拿不到。cargo 从 src-tauri 向上查找配置，两处会合并生效。
+#
+# sherpa-onnx（本地离线 ASR，见 src-tauri/src/local_asr/）在 Windows 只提供 `static-MT` 预编译库；
+# Rust 默认 /MD，cc 编译的 C 依赖（sqlite / vorbis / zstd 等）也跟着 /MD，混链会报
+# LNK2038 RuntimeLibrary mismatch。开 crt-static 后 cc crate 同步改用 /MT，全链路一致，
+# 顺带去掉安装包对 VC++ Redistributable 的依赖。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

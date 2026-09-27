@@ -137,6 +137,7 @@ fn default_saas_provider_ref() -> ProviderRef {
         tencent_region: None,
         tencent_cos_bucket: None,
         custom_provider_name: None,
+        local_model_id: None,
     }
 }
 
@@ -285,6 +286,29 @@ pub async fn transcribe_recording_file<R: Runtime>(
                     provider_kind: kind,
                 })
                 .map_err(|e| e.to_string())
+        }
+        DictationBackend::LocalFile { model_id } => {
+            if system_prompt.is_some() {
+                log::info!("[transcribe] local file ignores system_prompt");
+            }
+            warn_vocabulary_ignored(&vocabulary, "local file");
+            let sub = audio::validated_recording_subpath(&audio_path)?;
+            let abs = db::recordings_dir(&app)?.join(sub);
+            tauri::async_runtime::spawn_blocking(move || {
+                crate::local_asr::transcribe_file(&app, &model_id, &abs)
+            })
+            .await
+            .map_err(|e| format!("local transcribe join: {e}"))?
+            .map(|text| TranscribeFileResult {
+                text: crate::text_normalize::normalize_asr_punctuation(&text),
+                variant: "localFile".into(),
+                credits_consumed: 0.0,
+                provider_kind: kind,
+            })
+            .map_err(|e| {
+                log::warn!("[transcribe] local file failed: {e}");
+                e.code().to_string()
+            })
         }
         other => {
             log::error!("[transcribe] dispatch returned unexpected backend for file: {other:?}");

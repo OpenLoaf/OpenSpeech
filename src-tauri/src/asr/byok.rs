@@ -4,6 +4,7 @@
 // dispatch() 把它解析成 DictationBackend：
 //   mode=saas      ⇒ SaasRealtime / SaasFile（保持现有 OpenLoaf 链路）
 //   mode=custom    ⇒ 从 keyring 拼出 TencentRealtime / TencentFile / Aliyun*
+//   mode=local     ⇒ LocalRealtime / LocalFile（离线模型，见 local_asr/）
 //
 // PR-3 只搭骨架：Saas* 仍走原 SaaS 实现，Custom 分支由调用方返回
 // `byok_not_implemented_yet`。腾讯 / 阿里实现见后续 PR-4 / 5 / 6 / 7。
@@ -22,6 +23,7 @@ use crate::secrets::{DictationCredentials, load_dictation_provider_credentials_f
 pub enum ProviderMode {
     Saas,
     Custom,
+    Local,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -61,6 +63,9 @@ pub struct ProviderRef {
     /// UI 上的别名（写日志 / 错误文案兜底用，可空）。
     #[serde(default)]
     pub custom_provider_name: Option<String>,
+    /// mode=local 时选中的本地模型 id（local_asr::catalog）。
+    #[serde(default)]
+    pub local_model_id: Option<String>,
 }
 
 // PR-4 起 TencentRealtime 字段被 stt/mod.rs 消费；File / Aliyun 分支由 PR-5 / 6 / 7
@@ -96,6 +101,12 @@ pub enum DictationBackend {
         api_key: String,
         name: String,
     },
+    LocalRealtime {
+        model_id: String,
+    },
+    LocalFile {
+        model_id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +120,9 @@ pub enum BackendDispatchError {
     MissingCredentials { provider_id: Option<String> },
     /// keyring 读取层异常（解码失败 / OS 钥匙串报错）。
     KeyringError(String),
+    /// 选了本地通道但没选模型。不 fallback 到 SaaS：用户明确要求离线，悄悄把录音
+    /// 送上云违背隐私预期，宁可报错让前端引导去下载模型。
+    LocalModelNotSelected,
 }
 
 impl BackendDispatchError {
@@ -118,6 +132,7 @@ impl BackendDispatchError {
             BackendDispatchError::ProviderNotConfigured { .. } => "byok_provider_not_configured",
             BackendDispatchError::MissingCredentials { .. } => "byok_missing_credentials",
             BackendDispatchError::KeyringError(_) => "byok_keyring_error",
+            BackendDispatchError::LocalModelNotSelected => "local_model_not_selected",
         }
     }
 
@@ -139,6 +154,7 @@ impl std::fmt::Display for BackendDispatchError {
                 None => write!(f, "byok_missing_credentials"),
             },
             BackendDispatchError::KeyringError(msg) => write!(f, "byok_keyring_error: {msg}"),
+            BackendDispatchError::LocalModelNotSelected => f.write_str("local_model_not_selected"),
         }
     }
 }
@@ -160,6 +176,18 @@ pub fn dispatch(
             DictationModality::Realtime => DictationBackend::SaasRealtime,
             DictationModality::File => DictationBackend::SaasFile,
         }),
+        ProviderMode::Local => {
+            // 只解析选择；模型是否已安装在 acquire 引擎时校验（local_model_not_installed）。
+            let model_id = provider_ref
+                .local_model_id
+                .clone()
+                .filter(|s| !s.is_empty())
+                .ok_or(BackendDispatchError::LocalModelNotSelected)?;
+            Ok(match modality {
+                DictationModality::Realtime => DictationBackend::LocalRealtime { model_id },
+                DictationModality::File => DictationBackend::LocalFile { model_id },
+            })
+        }
         ProviderMode::Custom => {
             let provider_id = provider_ref
                 .active_custom_provider_id
@@ -249,6 +277,8 @@ pub fn provider_kind_str(b: &DictationBackend) -> &'static str {
         DictationBackend::TencentFile { .. } => "tencent-file",
         DictationBackend::AliyunRealtime { .. } => "aliyun-realtime",
         DictationBackend::AliyunFile { .. } => "aliyun-file",
+        DictationBackend::LocalRealtime { .. } => "local-realtime",
+        DictationBackend::LocalFile { .. } => "local-file",
     }
 }
 
@@ -271,6 +301,7 @@ mod tests {
             tencent_region: None,
             tencent_cos_bucket: None,
             custom_provider_name: None,
+            local_model_id: None,
         }
     }
 
@@ -292,6 +323,7 @@ mod tests {
             tencent_region: None,
             tencent_cos_bucket: None,
             custom_provider_name: None,
+            local_model_id: None,
         };
         let err = dispatch(&pr, DictationModality::Realtime).unwrap_err();
         assert_eq!(err.code(), "byok_provider_not_configured");
@@ -308,6 +340,7 @@ mod tests {
             tencent_region: None,
             tencent_cos_bucket: None,
             custom_provider_name: None,
+            local_model_id: None,
         };
         let err = dispatch(&pr, DictationModality::Realtime).unwrap_err();
         assert_eq!(err.code(), "byok_provider_not_configured");
@@ -350,5 +383,42 @@ mod tests {
             "saas-realtime"
         );
         assert_eq!(provider_kind_str(&DictationBackend::SaasFile), "saas-file");
+    }
+
+    fn local_ref(model_id: Option<&str>) -> ProviderRef {
+        ProviderRef {
+            local_model_id: model_id.map(str::to_string),
+            mode: ProviderMode::Local,
+            ..pr_saas()
+        }
+    }
+
+    #[test]
+    fn local_mode_dispatches_to_local_backends() {
+        let r = local_ref(Some("xasr"));
+        assert!(matches!(
+            dispatch(&r, DictationModality::Realtime),
+            Ok(DictationBackend::LocalRealtime { ref model_id }) if model_id == "xasr"
+        ));
+        let file = dispatch(&r, DictationModality::File).unwrap();
+        assert_eq!(provider_kind_str(&file), "local-file");
+    }
+
+    // 用户明确选了离线：没选模型时必须报错，绝不能悄悄 fallback 把录音送上云。
+    #[test]
+    fn local_mode_without_model_never_falls_back_to_saas() {
+        for id in [None, Some("")] {
+            let err = dispatch(&local_ref(id), DictationModality::Realtime).unwrap_err();
+            assert_eq!(err.code(), "local_model_not_selected");
+            assert!(!err.should_fallback_to_saas());
+        }
+    }
+
+    #[test]
+    fn provider_ref_accepts_local_mode_json() {
+        let r: ProviderRef =
+            serde_json::from_str(r#"{"mode":"local","localModelId":"xasr"}"#).unwrap();
+        assert!(matches!(r.mode, ProviderMode::Local));
+        assert_eq!(r.local_model_id.as_deref(), Some("xasr"));
     }
 }

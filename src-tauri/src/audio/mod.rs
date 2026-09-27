@@ -1314,6 +1314,14 @@ pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Resu
         device_name
     );
 
+    // 整个 start 串行化：两个并发调用（如设置页电平表连发两次 audio_level_start）会都
+    // 看到「无线程」各自 spawn，后写者覆盖 stop_tx → 先起的线程因 Disconnected 退出并把
+    // 全局 stream_info 清成 None；存活线程仍让快速路径判 alive，之后每次开录都报
+    // "audio stream not running" 直到重启。串行后第二个调用必然落到快速路径。
+    // stop / force_stop 不取这把锁，start 内部调 force_stop 不会死锁。
+    static START_LOCK: Mutex<()> = Mutex::new(());
+    let _serial = START_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     // 僵尸自愈：thread 已 finished 但 ref_count > 0，是上轮 audio 线程因 cpal error /
     // panic 提前退出后状态没回滚的残留——直接 force_stop 清零，避免下面快速路径漏掉
     // 已死线程导致 stream_info=None 后续报 "audio stream not running"。

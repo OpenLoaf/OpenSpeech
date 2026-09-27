@@ -65,8 +65,9 @@ jobs:
           } END { for (g in objs) printf "%s\t%d\t%d\n", g, objs[g], bytes[g] }' \
             all_objects.txt | sort > groups.txt
 
-          # 正式版列表（非 root、非 beta），按 semver 升序
-          awk -F'\t' '$1 != "(root)" && $1 !~ /-beta/ {print $1}' groups.txt | sort -V > stable.txt
+          # 正式版列表（v<semver> 且非 beta），按 semver 升序。
+          # 必须按版本号格式白名单：bucket 里还有 models/ 等非版本前缀，不能被当成「最老正式版」删掉。
+          awk -F'\t' '$1 ~ /^v[0-9]+\.[0-9]+\.[0-9]+/ && $1 !~ /-beta/ {print $1}' groups.txt | sort -V > stable.txt
           n_stable=$(wc -l < stable.txt)
           newest_stable=""
           [[ "$n_stable" -gt 0 ]] && newest_stable=$(tail -1 stable.txt)
@@ -87,6 +88,8 @@ jobs:
             tag=""
             if [[ "$g" == "(root)" ]]; then
               tag="[ROOT-KEEP]"
+            elif [[ ! "$g" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              tag="[NON-VERSION-KEEP]"
             elif [[ "$g" == *-beta* ]]; then
               tag="[BETA -> DELETE]"
             elif grep -qxF "$g" drop_stable.txt; then

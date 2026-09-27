@@ -1,7 +1,7 @@
 # 录音 / realtime ASR 协作约定
 
 > 何时读：改录音、改 STT、调 SaaS realtime ASR 集成、改触发录音的 gate 逻辑、加新 provider、**新增任何直连 SaaS（realtime / file 转写 / chat completions / V4 tools）的链路**。
-> 真相来源：`src-tauri/src/stt/mod.rs` + `src-tauri/src/audio/` + `src-tauri/src/transcribe/mod.rs` + `src-tauri/src/ai_refine/mod.rs` + `src-tauri/src/openloaf/mod.rs` + `src/lib/stt.ts` + `src/stores/recording.ts`。事件名 / 命令名 / payload 直接读源码。
+> 真相来源：`src-tauri/src/stt/mod.rs` + `src-tauri/src/local_asr/` + `src-tauri/src/audio/` + `src-tauri/src/transcribe/mod.rs` + `src-tauri/src/ai_refine/mod.rs` + `src-tauri/src/openloaf/mod.rs` + `src/lib/stt.ts` + `src/stores/recording.ts`。事件名 / 命令名 / payload 直接读源码。
 > 用法权威 = 同目录软链 `openloaf-saas-sdk-rust` skill。
 
 ---
@@ -113,6 +113,21 @@
 `MessageContext.requestTime` 对 refine 是幻觉诱因（正文「下午的行程是点点点点点」被填成「上午九点十五分」= 当时的系统时钟），且坏输出会经 ConversationHistory 级联污染后续每条。守卫兜住的是"整段离题"；"前半句照录、后半句凭空补一个时间"这种局部幻觉守卫抓不到，只能靠 prompt r3 的「补全值只能来自正文」约束。细节见 `docs/ai-refine.md` 离题守卫一节。
 
 听写 refine 的 `buildSpeechSystemPrompt` 必须传 `refineContext: true`（不带 ConversationHistory、MessageContext 只留 platform / audioDuration、TargetApp 不带 focusTitle）。OL-TX-025 会把 system prompt 里任何文字当素材抄进输出，history 是被抄最多的；新增 refine 调用点漏传这个参数，就会重新打开「输出成上一条」的口子。同理，给 `defaultAiPrompts.ts` 加示例前先跑 eval——一条长而具体的示例曾让终端 target 三成输出编造内容。
+
+## 本地离线模型（mode=local，2026-09-27）
+
+产品规则见 `docs/settings.md`「本地模型」+ `docs/privacy.md`；这里只记实现层的取舍。
+
+- **选型依据**：`scripts/local-asr-bench/bench.py` 用本机真实听写录音（150 条，按时长分层）对比云端结果测差异率 / 延迟 / **真实峰值内存**。catalog 的 `memory_mb` 就是这个脚本的实测值，UI 直接展示；换模型必须重测，不许拿权重大小代替（Fun-ASR-Nano 权重 < 1GB 但峰值 2.5GB）。产品硬约束：峰值内存 ≤ 1GB。
+- **绝不静默回退 SaaS**：`byok::dispatch` 对 local 缺模型返回 `local_model_not_selected`（`should_fallback_to_saas() == false`），与 custom 未配置时自动回退相反——用户选离线就是不想上传。
+- **推理放子进程，按需启动**：同一个二进制带 `--local-asr-host` 启动（`main.rs` 在 Tauri 之前分流），stdin 二进制帧 / stdout JSON 行通信。不放进程内的原因是实测：macOS 上 onnxruntime 释放的内存留在 malloc 池不还系统，反复加载卸载后稳定占 200~290MB，「闲置卸载」省不下；子进程退出则全额归还，还顺带隔离 onnxruntime 崩溃。闲置 5 分钟无会话 kill；主进程死了子进程 stdin EOF 自退。
+- **加载期间不能丢音频**：冷启动约 1.5s。会话必须先进 stt slot 再加载（`LocalRealtimeBackend` 在 worker 线程里 `HostSession::open`），否则 `try_send_audio_pcm16` 把这 1.5s 的帧当「无会话」丢掉；host 的 writer 线程配无界队列，子进程 stdin 管道满了也不反压录音链路。
+- **一次一路流**：实时听写与历史重试共用一个子进程，`SessionGate` 串行化；reaper 只在 gate 空闲时回收。
+- **尾部静音 1.0s**：0.5s 不够，X-ASR（160ms chunk 带 look-ahead）句尾会丢最后一个字。
+- **整句模式也走流式**：本地推理无网络成本，`worker.onStarted` 对 local 无视 segmentMode 开实时会话（`session.localStream` 开录冻结），松键只剩尾句要算；是否逐段注入仍只看 REALTIME。
+- **finalize 提前返回**：`stt/mod.rs` 的 `stream_ended` 在 worker 因 EndOfStream/Closed/Error 退出时置位，`stt_finalize` 见到即返回，不再死等 800ms 尾包窗口（云端也受益）。本地收尾上限放宽到 30s（低配机解码落后于实时时，3s 截断会丢尾句）。
+- **离线 + SaaS 整理 + 未登录**：`pushConfig` 直接把 refineEnabled 置 false——否则整理 401 会弹登录框打断刻意离线的用户。
+- **模型下载源**：R2 bucket `openspeech` 的 `models/asr/<归档原名>`，顺序为腾讯 CDN（国内）→ R2 自定义域 → GitHub Release 兜底（国内直连 GitHub 实测 100~200KB/s 且常断流，所以断点续传必须保留）。对象永不覆盖：换归档就换文件名，同时更新 sha256。`models/` 不是版本前缀，`r2-cleanup-beta.yml` 按 `v<semver>` 白名单识别版本，否则 `sort -V` 会把 `models` 排成「最老正式版」删掉。R2 下行免费，只按 Class B 请求计费，模型分发几乎零成本。
 
 ## 隐私边界（呼应 `docs/privacy.md`）
 

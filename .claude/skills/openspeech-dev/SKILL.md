@@ -78,6 +78,8 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
   - crate 改名因上游名 `rdev` 被 Narsil 占着；业务代码里仍 `use rdev::...`，不用动。
   - `rdev::listen` **进程内只能调一次** —— 新订阅扩展 `src-tauri/src/hotkey/modifier_only.rs`，不要另起 listen。
   - **Windows 上双修饰键同时释放（Win+Ctrl 等）OS 会吞 KEYUP**：这是 Windows 抑制开始菜单的副作用，rdev 忠实转发，所以 hook 队列里就缺那条 release。`modifier_only.rs` 的 OS sync correction 就是兜这个，不是兜 rdev。看到 "OS sync removed stale modifier" 不是 bug。
+- **`sherpa-onnx` 必须 `=` 精确锁版本**（本地离线 ASR 推理）：build.rs 首次构建按 crate 版本号从 GitHub Release 下载对应的预编译静态库（走 `https_proxy`；离线构建用 `SHERPA_ONNX_ARCHIVE_DIR` 指向预下载目录），版本漂移 = 原生库 ABI 不匹配。
+  - Windows 只有 `static-MT` 预编译库 → 仓库根 `.cargo/config.toml` 给 msvc 目标开 `crt-static`，**不能删**，否则全链路 /MD vs /MT 混链 LNK2038。放根目录是因为 `src-tauri/.cargo/` 被 gitignore（留给本机 SaaS 地址覆盖）。
 - **`reqwest` 走 `rustls`**（关 default-features，避免拖入 native-tls）
 - **`tauri` 启用 `tray-icon` feature**（托盘依赖，不可移除）
 - **`openloaf-saas` 跟随 `@openloaf-saas/sdk` Node 包对齐版本号**
@@ -112,7 +114,8 @@ src-tauri/
 │   ├── lib.rs                  tauri::Builder + 插件注册 + setup（纯装配壳，业务已外溢）
 │   ├── {events,logging,macos_native,commands,window,tray}.rs  lib.rs 装配辅助（事件常量/日志生命周期/objc/零散命令/窗口显隐/托盘菜单）
 │   ├── audio/                  cpal 采集 + WAV 落盘 + PCM16 喂 stt
-│   ├── stt/                    OpenLoaf SaaS realtime ASR worker
+│   ├── stt/                    realtime ASR worker（SaaS / BYOK / 本地共用，按 RealtimeAsrBackend 分派）
+│   ├── local_asr/              本地离线模型：清单 / 下载安装 / 推理引擎 / 推理子进程 host（加模型只改 catalog.rs）
 │   ├── hotkey/                 combo / modifierOnly / doubleTap 三路编排
 │   ├── permissions/            macOS 系统权限检测 / 请求 / 跳转
 │   ├── secrets/                keyring 包装
