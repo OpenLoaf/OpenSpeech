@@ -348,22 +348,33 @@ mod tests {
 
     #[test]
     fn detects_blocking_ime() {
-        assert!(ime_blocks_unicode(Some("im.rime.inputmethod.Squirrel.Hans")));
+        assert!(ime_blocks_unicode(Some(
+            "im.rime.inputmethod.Squirrel.Hans"
+        )));
         assert!(!ime_blocks_unicode(Some("com.apple.keylayout.ABC")));
         assert!(!ime_blocks_unicode(None));
     }
 
     #[test]
     fn detects_ax_unreliable_apps() {
-        assert!(is_ax_unreliable(Some(&app("WeChat", Some("com.tencent.xinWeChat")))));
+        assert!(is_ax_unreliable(Some(&app(
+            "WeChat",
+            Some("com.tencent.xinWeChat")
+        ))));
         assert!(is_ax_unreliable(Some(&app("微信", None))));
-        assert!(!is_ax_unreliable(Some(&app("Ghostty", Some("com.mitchellh.ghostty")))));
+        assert!(!is_ax_unreliable(Some(&app(
+            "Ghostty",
+            Some("com.mitchellh.ghostty")
+        ))));
     }
 
     #[test]
     fn app_change_prefers_bundle_id() {
         let a = app("Chrome", Some("com.google.Chrome"));
-        assert!(same_app(&a, &app("Google Chrome", Some("com.google.Chrome"))));
+        assert!(same_app(
+            &a,
+            &app("Google Chrome", Some("com.google.Chrome"))
+        ));
         assert!(!same_app(&a, &app("Chrome", Some("com.apple.Safari"))));
         assert!(same_app(&app("Code", None), &app("Code", None)));
     }

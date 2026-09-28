@@ -709,7 +709,10 @@ pub(crate) fn has_session<R: Runtime>(app: &AppHandle<R>) -> bool {
 }
 
 /// 静默用 keychain 里的 refresh token 恢复登录态；供听写开录鉴权与前端命令共用。
-pub(crate) async fn try_recover_session(app: &AppHandle, ol: SharedOpenLoaf) -> Result<bool, String> {
+pub(crate) async fn try_recover_session(
+    app: &AppHandle,
+    ol: SharedOpenLoaf,
+) -> Result<bool, String> {
     if ol.client.access_token().is_some() {
         return Ok(true);
     }

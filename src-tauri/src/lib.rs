@@ -598,7 +598,8 @@ pub fn run() {
                 }
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen {
-                    has_visible_windows, ..
+                    has_visible_windows,
+                    ..
                 } => {
                     // 点击 Dock 图标会触发 applicationShouldHandleReopen。主窗口被
                     // 隐藏到托盘时没有可见窗口，必须主动恢复 Regular policy 并显示主窗；

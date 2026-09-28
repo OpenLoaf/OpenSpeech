@@ -62,7 +62,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     fs::write(&session_path, serde_json::to_vec_pretty(&out)?)?;
 
-    eprintln!("[refresh] ok via family_exchange → {}", session_path.display());
+    eprintln!(
+        "[refresh] ok via family_exchange → {}",
+        session_path.display()
+    );
     eprintln!("[refresh] user={}", new.user.id.unwrap_or_default());
     Ok(())
 }

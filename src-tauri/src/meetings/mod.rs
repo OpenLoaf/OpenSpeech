@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::asr::byok::{
-    dispatch as dispatch_dictation_backend, DictationBackend, DictationModality, ProviderRef,
+    DictationBackend, DictationModality, ProviderRef, dispatch as dispatch_dictation_backend,
 };
 use crate::asr::meeting::saas::SaasMeetingProvider;
 use crate::asr::meeting::tencent_speaker::TencentSpeakerProvider;
@@ -34,7 +34,7 @@ use crate::asr::meeting::{MeetingAsrProvider, MeetingEvent, MeetingSession, Meet
 use crate::audio::is_valid_date_segment;
 use crate::db;
 use crate::meetings::writers::{MeetingAudioWriter, MeetingTranscriptAppender};
-use crate::openloaf::{handle_session_expired, RefreshOutcome, SharedOpenLoaf};
+use crate::openloaf::{RefreshOutcome, SharedOpenLoaf, handle_session_expired};
 
 mod writers;
 
@@ -739,8 +739,7 @@ async fn persist_meeting_history<R: Runtime>(
     // 只开了 sqlite feature 时 DbPool 只有一个变体，这个 let-else 是不可反驳的；
     // 保留分支是为了将来插件多开一种 driver 时不用回头改这里。
     #[allow(irrefutable_let_patterns)]
-    let tauri_plugin_sql::DbPool::Sqlite(pool) = pool
-    else {
+    let tauri_plugin_sql::DbPool::Sqlite(pool) = pool else {
         return Err("unexpected non-sqlite pool".into());
     };
 

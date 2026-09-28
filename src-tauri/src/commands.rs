@@ -166,7 +166,12 @@ pub(crate) fn open_sound_settings() {
     let result = {
         const MODERN: &str = "x-apple.systempreferences:com.apple.Sound-Settings.extension";
         const LEGACY: &str = "/System/Library/PreferencePanes/Sound.prefPane";
-        let open = |target: &str| Command::new("open").arg(target).status().map(|s| s.success());
+        let open = |target: &str| {
+            Command::new("open")
+                .arg(target)
+                .status()
+                .map(|s| s.success())
+        };
         let modern_first = macos_major_version().is_none_or(|v| v >= 13);
         let (first, second) = if modern_first {
             (MODERN, LEGACY)

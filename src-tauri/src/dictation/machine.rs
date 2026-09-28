@@ -148,22 +148,50 @@ pub enum Input {
         config: SessionConfig,
         new_session_id: String,
     },
-    CaptureReady { session_id: String },
-    CaptureFailed { session_id: String },
+    CaptureReady {
+        session_id: String,
+    },
+    CaptureFailed {
+        session_id: String,
+    },
     /// 录音已落盘：voiced=false 表示整段无人声。
-    Stopped { session_id: String, voiced: bool },
-    StopFailed { session_id: String, message: String },
+    Stopped {
+        session_id: String,
+        voiced: bool,
+    },
+    StopFailed {
+        session_id: String,
+        message: String,
+    },
     Esc,
-    Intent { intent: Intent, at_ms: u64 },
-    Stage { session_id: String, phase: Phase },
-    Output { session_id: String, chars: u32 },
-    Done { session_id: String },
-    Fail { session_id: String, error: ErrorInfo },
+    Intent {
+        intent: Intent,
+        at_ms: u64,
+    },
+    Stage {
+        session_id: String,
+        phase: Phase,
+    },
+    Output {
+        session_id: String,
+        chars: u32,
+    },
+    Done {
+        session_id: String,
+    },
+    Fail {
+        session_id: String,
+        error: ErrorInfo,
+    },
     /// 采集运行时致命错误（设备拔出 / 被独占）。
-    StreamError { error: ErrorInfo },
+    StreamError {
+        error: ErrorInfo,
+    },
     /// 登录态失效（任何 SaaS 调用 refresh 失败）。
     AuthLost,
-    DismissTimer { token: u64 },
+    DismissTimer {
+        token: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,10 +229,16 @@ pub enum Effect {
         new_session_id: String,
     },
     /// 未登录：通知前端弹登录 / 提示，不开麦克风。
-    Blocked { binding: BindingId },
-    OpenCapture { session_id: String },
+    Blocked {
+        binding: BindingId,
+    },
+    OpenCapture {
+        session_id: String,
+    },
     /// 停止采集并落盘，随后把录音交给前端 worker 处理。
-    StopCaptureForProcessing { session_id: String },
+    StopCaptureForProcessing {
+        session_id: String,
+    },
     /// 停止采集并落盘，但不转写（取消 / 登录失效）。
     StopCaptureAndEnd {
         session_id: String,
@@ -223,10 +257,17 @@ pub enum Effect {
         binding: BindingId,
         kind: EndKind,
     },
-    SkipRefine { session_id: String },
-    ModeSwitched { session_id: String, binding: BindingId },
+    SkipRefine {
+        session_id: String,
+    },
+    ModeSwitched {
+        session_id: String,
+        binding: BindingId,
+    },
     Cue(CueKind),
-    ScheduleDismiss { token: u64 },
+    ScheduleDismiss {
+        token: u64,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -414,7 +455,15 @@ impl Machine {
                 gate,
                 config,
                 new_session_id,
-            } => self.on_press(binding, at_ms, gate, config, new_session_id, now_ms, &mut fx),
+            } => self.on_press(
+                binding,
+                at_ms,
+                gate,
+                config,
+                new_session_id,
+                now_ms,
+                &mut fx,
+            ),
             Input::GateChecked {
                 binding,
                 at_ms,
@@ -451,10 +500,7 @@ impl Machine {
                     self.enter_idle(now_ms);
                 }
             }
-            Input::Stopped {
-                session_id,
-                voiced,
-            } => {
+            Input::Stopped { session_id, voiced } => {
                 if self.is_current(&session_id) && self.phase == Phase::Transcribing && !voiced {
                     self.enter_failed(ErrorInfo::code("silent"), now_ms, &mut fx);
                 }

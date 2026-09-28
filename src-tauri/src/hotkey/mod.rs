@@ -186,7 +186,6 @@ pub struct HotkeyConfigPayload {
     pub bindings: HashMap<String, Option<HotkeyBinding>>,
 }
 
-
 /// active 表里每条 combo 同时携带"用户实际期望的 (mod, side) 集合"，handler
 /// 触发时用 modifier_only::current_pressed() 二次校验，命中错误左右就丢弃事件。
 /// expected 不含 fn（B3 已拦 fn 进 combo）。

@@ -287,7 +287,11 @@ fn read_input_device_for_dictation<R: Runtime>(app: &AppHandle<R>) -> Option<Str
     use tauri_plugin_store::StoreExt;
     let s = app.store("settings.json").ok()?;
     let root = s.get("root")?;
-    let dev = root.get("general")?.get("inputDevice")?.as_str()?.to_string();
+    let dev = root
+        .get("general")?
+        .get("inputDevice")?
+        .as_str()?
+        .to_string();
     (!dev.is_empty()).then_some(dev)
 }
 
@@ -299,7 +303,9 @@ pub(crate) fn open_dictation_capture<R: Runtime>(
 ) -> Result<(), String> {
     let date = date_from_recording_id(session_id)
         .ok_or_else(|| format!("invalid recording id: {session_id}"))?;
-    let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cap = dictation_capture()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(prev) = cap.take() {
         // 状态机保证同一时刻只有一个会话；这里只是防御残留，放掉旧 ref 再开新的。
         log::warn!("[audio] dictation capture {prev} still open → release before {session_id}");
@@ -324,7 +330,9 @@ pub(crate) fn save_dictation_capture<R: Runtime>(
     session_id: &str,
 ) -> Option<Result<RecordingResult, String>> {
     {
-        let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
+        let mut cap = dictation_capture()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if cap.as_deref() != Some(session_id) {
             return None;
         }
@@ -336,7 +344,9 @@ pub(crate) fn save_dictation_capture<R: Runtime>(
 
 /// 结束听写采集并丢弃样本（Zeroizing 清零）。会话不持有采集时返回 false。
 pub(crate) fn discard_dictation_capture(session_id: &str) -> bool {
-    let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cap = dictation_capture()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if cap.as_deref() != Some(session_id) {
         return false;
     }
@@ -349,7 +359,9 @@ pub(crate) fn discard_dictation_capture(session_id: &str) -> bool {
 
 /// 应急清场（force_stop）时清掉采集所有权与样本。
 fn clear_dictation_capture() {
-    let mut cap = dictation_capture().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cap = dictation_capture()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if cap.take().is_some() {
         let _ = recording_slot().lock().map(|mut slot| slot.take());
         log::info!("[audio] dictation capture flag cleared");

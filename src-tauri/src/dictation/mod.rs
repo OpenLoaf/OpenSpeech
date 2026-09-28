@@ -31,11 +31,11 @@ use crate::active_app::ActiveWindowInfo;
 use crate::audio::RecordingResult;
 use crate::hotkey::BindingId;
 
-pub use machine::{Intent, Snapshot};
 use machine::{
     CueKind, Effect, EndKind, ErrorInfo, FAILED_DISMISS_MS, Gate, Input, Machine, Phase,
     SegmentMode, SessionConfig,
 };
+pub use machine::{Intent, Snapshot};
 pub use output::FinishOutcome;
 
 const STATE_EVENT: &str = "openspeech://dictation/state";
@@ -311,8 +311,10 @@ fn run_effect(app: &AppHandle, effect: Effect) {
             let app = app.clone();
             thread::spawn(move || {
                 crate::stt::close_if_active();
-                let rec = crate::audio::save_dictation_capture(&app, &session_id)
-                    .and_then(|r| r.map_err(|e| log::warn!("[dictation] save on end failed: {e}")).ok());
+                let rec = crate::audio::save_dictation_capture(&app, &session_id).and_then(|r| {
+                    r.map_err(|e| log::warn!("[dictation] save on end failed: {e}"))
+                        .ok()
+                });
                 end_session(&app, session_id, kind, binding, rec);
             });
         }
@@ -397,9 +399,9 @@ fn open_capture(app: &AppHandle, session_id: String) {
     let mut target_app = output::active_window();
     // 项目目录要走本机 IPC（Orca RPC，最坏 300ms）：和开麦克风并行，不推迟录音起点。
     // STARTED 之前 join 回来，前端组实时 ASR 上下文时就能按项目取历史。
-    let project_probe = target_app.clone().map(|info| {
-        std::thread::spawn(move || crate::active_app::resolve_project(&info))
-    });
+    let project_probe = target_app
+        .clone()
+        .map(|info| std::thread::spawn(move || crate::active_app::resolve_project(&info)));
     if let Ok(mut c) = ctx().lock() {
         *c = Some(SessionCtx {
             session_id: session_id.clone(),
@@ -686,7 +688,10 @@ pub fn dictation_fail(session_id: String, code: String, message: Option<String>)
 /// 强制整句模式：没有真实音频流，边说边出字无从谈起。
 #[tauri::command]
 pub fn dictation_debug_simulate(audio_path: String, duration_ms: u64) -> Result<(), String> {
-    let busy = machine().lock().map(|m| m.phase() != Phase::Idle).unwrap_or(true);
+    let busy = machine()
+        .lock()
+        .map(|m| m.phase() != Phase::Idle)
+        .unwrap_or(true);
     if busy {
         return Err("dictation busy".into());
     }
@@ -705,7 +710,10 @@ pub fn dictation_debug_simulate(audio_path: String, duration_ms: u64) -> Result<
     if let Ok(mut d) = debug_rec().lock() {
         *d = Some((session_id.clone(), rec));
     }
-    let mut session = config().lock().map(|c| c.session.clone()).unwrap_or_default();
+    let mut session = config()
+        .lock()
+        .map(|c| c.session.clone())
+        .unwrap_or_default();
     session.segment_mode = SegmentMode::Utterance;
     session.streaming_inject = false;
     dispatch(Input::Press {
