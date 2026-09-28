@@ -723,16 +723,28 @@ pub(crate) async fn run_refine_core<R: Runtime>(
         }
     }
 
+    // 端到端关联 id：SaaS 的 http-logger 会原样收下 x-request-id 并写进 ai_request_log.requestId，
+    // 用听写 session id 做值，拿客户端日志里的 task_id 就能直接查服务端那一行。
+    // BYOK 走第三方 provider，不外发本地 session id。
+    let request_id = (input.mode == "saas").then(|| {
+        task_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    });
     let mut current_key = resolved.api_key.clone();
     let mut attempt: u32 = 0;
+    let mut sent_at: Instant;
     let resp = loop {
         attempt += 1;
-        let send_result = crate::http::client()
+        sent_at = Instant::now();
+        let mut req = crate::http::client()
             .post(&resolved.full_url)
             .bearer_auth(&current_key)
-            .json(&body)
-            .send()
-            .await;
+            .json(&body);
+        if let Some(rid) = request_id.as_deref() {
+            req = req.header("x-request-id", rid);
+        }
+        let send_result = req.send().await;
         let resp = match send_result {
             Ok(r) => r,
             Err(e) => {
@@ -747,6 +759,18 @@ pub(crate) async fn run_refine_core<R: Runtime>(
         };
 
         let status = resp.status();
+        // headers_ms = 发出请求 → 收到响应头；SaaS 流式路径要等上游首帧才回头，这段基本就是
+        // 「网络 + 服务端排队 + 上游首 token」，与 ai_request_log.firstTokenLatencyMs 对照即可拆开。
+        log::info!(
+            "[ai_refine] response headers status={} headers_ms={} attempt={} request_id={:?} server_request_id={:?}",
+            status.as_u16(),
+            sent_at.elapsed().as_millis(),
+            attempt,
+            request_id,
+            resp.headers()
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok()),
+        );
         if status.is_success() {
             break resp;
         }
@@ -819,6 +843,7 @@ pub(crate) async fn run_refine_core<R: Runtime>(
     let mut buf = String::new();
     let mut full = String::new();
     let mut credits_consumed: f64 = 0.0;
+    let mut first_token_ms: Option<u128> = None;
     while let Some(chunk) = stream.next().await {
         if take_cancelled(task_id.as_deref()) {
             log::info!("[ai_refine] cancelled by session task_id={task_id:?}");
@@ -868,6 +893,7 @@ pub(crate) async fn run_refine_core<R: Runtime>(
             for choice in parsed.choices {
                 if let Some(content) = choice.delta.content {
                     if !content.is_empty() {
+                        first_token_ms.get_or_insert_with(|| sent_at.elapsed().as_millis());
                         // 三级 hold 串联：先等前缀过滤器确认模型没有回显本次请求的
                         // system-tag，再让离题守卫预判前缀没跑题，最后经 stripper 做尾句号
                         // tail-hold——三类内容都不能先流式注入后才处理。
@@ -907,6 +933,15 @@ pub(crate) async fn run_refine_core<R: Runtime>(
             );
         }
     }
+    // 客户端视角的分段耗时，字段与 ai_request_log 的 latencyMs / firstTokenLatencyMs 一一对照；
+    // 两边差值 ≈ 网络 + 代理 + 服务端 handler 之前的鉴权 / 积分检查。
+    log::info!(
+        "[ai_refine] timing request_id={:?} first_token_ms={:?} total_ms={} attempt={}",
+        request_id,
+        first_token_ms,
+        sent_at.elapsed().as_millis(),
+        attempt,
+    );
     if context_leak_filter.stripped_blocks() > 0 {
         log::warn!(
             "[ai_refine] stripped {} echoed system-tag block(s) from response prefix task_id={:?}",
