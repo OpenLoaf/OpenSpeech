@@ -312,10 +312,17 @@ pub(crate) fn open_dictation_capture<R: Runtime>(
         let _ = recording_slot().lock().map(|mut slot| slot.take());
         stop();
     }
+    // 先于开流启用：第一批 PCM 就进缓冲，等 stt_start 装好会话再补发。
+    crate::stt::preroll_arm();
     let device = read_input_device_for_dictation(app);
-    start(app.clone(), device)?; // +1 ref;失败直接返回,无 ref 泄漏
+    if let Err(e) = start(app.clone(), device) {
+        // +1 ref 失败直接返回，无 ref 泄漏
+        crate::stt::preroll_disarm();
+        return Err(e);
+    }
     if let Err(e) = recording_start(session_id.to_string(), date) {
         stop(); // 回滚刚取的 +1 ref
+        crate::stt::preroll_disarm();
         return Err(e);
     }
     *cap = Some(session_id.to_string());
@@ -338,6 +345,7 @@ pub(crate) fn save_dictation_capture<R: Runtime>(
         }
         *cap = None;
         stop();
+        crate::stt::preroll_disarm();
     }
     Some(recording_stop_impl(app))
 }
@@ -353,6 +361,7 @@ pub(crate) fn discard_dictation_capture(session_id: &str) -> bool {
     *cap = None;
     let _ = recording_slot().lock().map(|mut slot| slot.take());
     stop();
+    crate::stt::preroll_disarm();
     log::info!("[audio] dictation capture discarded (id={session_id})");
     true
 }

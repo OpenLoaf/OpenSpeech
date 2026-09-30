@@ -103,6 +103,7 @@
 - **ref 放**:前端 stop/cancel 的 `stopAudioLevel` 放那唯一 +1;flag 由 `audio_recording_stop/cancel/force_stop` 清。
 - **释放铁律**:终态放弃(gate 未过 / preflight 失败 / adopt 出错)必须 `release_dictation_capture`(锁串行 stop+清 flag);但 **epoch-stale(被后续 press 抢占)绝不能 release**——那会杀掉获胜 press 已 adopt 的采集。批量迟到场景:press1/2 stale 保留采集,press3 adopt,一段录音。
 - **验证盲区**:ref 配平是集成级(单测 FSM 复刻覆盖不到),改后必须真机 `pnpm tauri dev` 盯 macOS 状态栏橙点确认不泄漏。
+- **stt_start 仍由前端驱动 → 开头丢字(栽过坑,2026-09-29)**:采集下沉后麦克风当帧就开、波形立刻有,但实时会话要等主窗收到 `dictation/started` 再 invoke `stt_start`,节流时迟到 1–5s(日志 `dictation capture opened` 与 `[worker] session started` 的时间差)。这段帧以前被 `try_send_audio_pcm16` 当「无会话」丢掉 → 本地模型 / 边说边出字模式丢开头几个字。现在 `stt` 模块有预录缓冲:`open_dictation_capture` 开流前 arm、save/discard disarm,会话进 slot 时及之后首帧按序补发(日志 `preroll flushed`)。新增听写采集的开/收路径必须配对 arm/disarm。
 
 ## AI refine 后处理三级 hold 与 `driftGuard` 只开听写（栽过坑，2026-09-22）
 

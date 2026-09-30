@@ -58,7 +58,7 @@
 //   refresh_token 续期，握手时一定拿到的是新鲜 access_token。续期失败 → 走
 //   handle_session_expired 等价 REST 的 refresh-fail 清场路径。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -163,15 +163,91 @@ fn slot() -> &'static Mutex<Option<SessionState>> {
     S.get_or_init(|| Mutex::new(None))
 }
 
-/// 供 audio 回调调：若有激活 session 就把 PCM16 LE bytes 入队。
-/// try_lock 失败（stt_start/finalize 正在改 slot）或无 session 时静默丢帧，
-/// 不阻塞 audio callback。
-pub fn try_send_audio_pcm16(bytes: Vec<u8>) {
-    let Ok(guard) = slot().try_lock() else {
+/// 预录缓冲上限：16kHz mono pcm16 约 30s。正常只需兜住 stt_start 迟到的几秒；
+/// 整句 SaaS 模式根本不开实时会话，缓冲会一路涨到上限，超出的直接丢。
+const PREROLL_MAX_BYTES: usize = 16_000 * 2 * 30;
+
+#[derive(Default)]
+struct Preroll {
+    chunks: VecDeque<Vec<u8>>,
+    bytes: usize,
+}
+
+/// 听写采集已开、实时会话还没进 slot 期间的 PCM 暂存。
+///
+/// 为什么需要：cpal 在 hotkey 按下当帧就由 Rust 打开，但 stt_start 由主窗 webview
+/// 收到 dictation/started 后才调；主窗隐藏时被 WKWebView 节流，这一来回实测 1–5s。
+/// 这段音频以前直接丢，用户表现是「只见波形不出字，开头几个字丢了」。
+/// None = 未启用（非听写采集期间，帧照旧直接丢）。
+fn preroll() -> &'static Mutex<Option<Preroll>> {
+    static P: OnceLock<Mutex<Option<Preroll>>> = OnceLock::new();
+    P.get_or_init(|| Mutex::new(None))
+}
+
+/// 听写采集打开前调：清空并启用预录缓冲。
+pub(crate) fn preroll_arm() {
+    if let Ok(mut p) = preroll().lock() {
+        *p = Some(Preroll::default());
+    }
+}
+
+/// 听写采集结束（落盘 / 丢弃）时调：关闭并清空预录缓冲。
+pub(crate) fn preroll_disarm() {
+    if let Ok(mut p) = preroll().lock() {
+        *p = None;
+    }
+}
+
+/// 缓冲未启用或已满时丢帧。
+fn preroll_push(bytes: Vec<u8>) {
+    let Ok(mut p) = preroll().lock() else {
         return;
     };
-    if let Some(s) = guard.as_ref() {
-        let _ = s.ctrl_tx.send(Control::Audio(bytes));
+    if let Some(p) = p.as_mut()
+        && p.bytes + bytes.len() <= PREROLL_MAX_BYTES
+    {
+        p.bytes += bytes.len();
+        p.chunks.push_back(bytes);
+    }
+}
+
+/// 把预录缓冲按顺序补发给会话。缓冲保持启用（只清空）：之后若 slot try_lock 失败，
+/// 帧还能暂存，下一帧再补发，不打乱顺序。
+fn preroll_flush(tx: &mpsc::Sender<Control>) {
+    let Ok(mut p) = preroll().lock() else {
+        return;
+    };
+    let Some(p) = p.as_mut() else {
+        return;
+    };
+    if p.chunks.is_empty() {
+        return;
+    }
+    let n = p.chunks.len();
+    let bytes = std::mem::take(&mut p.bytes);
+    for chunk in p.chunks.drain(..) {
+        let _ = tx.send(Control::Audio(chunk));
+    }
+    log::info!(
+        "[stt] preroll flushed {n} chunks ({} ms) into session",
+        bytes / (2 * 16)
+    );
+}
+
+/// 供 audio 回调调：若有激活 session 就把 PCM16 LE bytes 入队（先补发预录缓冲）。
+/// 无 session 或 try_lock 失败（stt_start/finalize 正在改 slot）时进预录缓冲；
+/// 缓冲未启用则丢帧。不阻塞 audio callback。
+pub fn try_send_audio_pcm16(bytes: Vec<u8>) {
+    let Ok(guard) = slot().try_lock() else {
+        preroll_push(bytes);
+        return;
+    };
+    match guard.as_ref() {
+        Some(s) => {
+            preroll_flush(&s.ctrl_tx);
+            let _ = s.ctrl_tx.send(Control::Audio(bytes));
+        }
+        None => preroll_push(bytes),
     }
 }
 
@@ -577,7 +653,11 @@ fn stt_start_impl<R: Runtime>(
         })
         .map_err(|e| format!("spawn stt worker: {e}"))?;
 
-    *slot().lock().map_err(|e| e.to_string())? = Some(SessionState {
+    let mut guard = slot().lock().map_err(|e| e.to_string())?;
+    // 持 slot 锁补发：此间音频回调 try_lock 失败只会往缓冲尾部追加，顺序不乱。
+    // 不等下一帧再补，是为了短按松手时 finalize 抢在下一帧前也不漏开头。
+    preroll_flush(&ctrl_tx);
+    *guard = Some(SessionState {
         ctrl_tx,
         worker: Some(worker),
         final_segments,
@@ -1126,5 +1206,53 @@ mod tests {
             }
         }
         assert_eq!(killed, Some("decode_errors"));
+    }
+
+    fn drain_audio(rx: &mpsc::Receiver<Control>) -> Vec<Vec<u8>> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                Control::Audio(b) => Some(b),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // 预录缓冲是全局单例：几种场景放在一个测试里串行跑，避免并行测试互相踩。
+    // 回归点：stt_start 迟到期间的开头音频必须按原顺序补给会话，而不是丢掉。
+    #[test]
+    fn preroll_buffers_until_session_then_flushes_in_order() {
+        // 未启用：无会话时帧直接丢（非听写采集期间的旧行为）。
+        preroll_disarm();
+        try_send_audio_pcm16(vec![9]);
+        let (tx, rx) = mpsc::channel();
+        preroll_flush(&tx);
+        assert!(drain_audio(&rx).is_empty());
+
+        // 启用后无会话：帧进缓冲，补发保持顺序，补发后缓冲清空。
+        preroll_arm();
+        try_send_audio_pcm16(vec![1]);
+        try_send_audio_pcm16(vec![2]);
+        preroll_push(vec![3]);
+        preroll_flush(&tx);
+        assert_eq!(drain_audio(&rx), vec![vec![1], vec![2], vec![3]]);
+        preroll_flush(&tx);
+        assert!(drain_audio(&rx).is_empty());
+
+        // 上限：超出部分丢弃，保住开头。
+        preroll_arm();
+        preroll_push(vec![0; PREROLL_MAX_BYTES]);
+        preroll_push(vec![7]);
+        preroll_flush(&tx);
+        let got = drain_audio(&rx);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].len(), PREROLL_MAX_BYTES);
+
+        // 关闭后缓冲清空，残留不会串进下一次会话。
+        preroll_push(vec![5]);
+        preroll_disarm();
+        preroll_arm();
+        preroll_flush(&tx);
+        assert!(drain_audio(&rx).is_empty());
+        preroll_disarm();
     }
 }
