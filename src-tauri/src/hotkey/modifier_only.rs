@@ -327,6 +327,11 @@ static LISTEN_STARTED: AtomicBool = AtomicBool::new(false);
 /// 介于其间），靠这个标志计算 is_repeat 让前端能丢弃 auto-repeat 帧。
 static ESC_PRESSED: AtomicBool = AtomicBool::new(false);
 
+/// Esc 当前是否物理按下（rdev 观测值）。ESC 吞键延后解除时用来等用户松手。
+pub fn esc_is_pressed() -> bool {
+    ESC_PRESSED.load(Ordering::SeqCst)
+}
+
 /// 创建空的 `SharedModifierOnlyState`，**不启动** rdev::listen 线程。在 setup
 /// 阶段调用，把空 state 注册到 Tauri Manager 让后续 `apply_bindings` 能安全
 /// no-op。真正的 listen 启动由 `start_listener` 做。

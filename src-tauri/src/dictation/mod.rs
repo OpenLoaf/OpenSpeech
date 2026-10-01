@@ -228,11 +228,15 @@ fn apply_phase_change(app: &AppHandle, prev: Phase, next: Phase) {
         let app = app.clone();
         let on = esc(next);
         // esc_capture_* 持 hotkey_op_lock，必须脱离主线程。
+        // 解除走延后版本：ESC 取消时立刻反注册会让这次 Esc 漏给前台（见 esc_capture_release）。
         thread::spawn(move || {
             let r = if on {
                 crate::hotkey::esc_capture_start(app)
             } else {
-                crate::hotkey::esc_capture_stop(app)
+                crate::hotkey::esc_capture_release(app, || {
+                    let phase = machine().lock().map(|m| m.phase()).unwrap_or(Phase::Idle);
+                    !esc(phase)
+                })
             };
             if let Err(e) = r {
                 log::warn!("[dictation] esc capture toggle failed: {e}");

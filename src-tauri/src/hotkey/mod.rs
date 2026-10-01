@@ -642,6 +642,40 @@ pub fn esc_capture_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn esc_capture_stop<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let _op = hotkey_op_lock().lock().unwrap_or_else(|e| e.into_inner());
+    unregister_esc(&app)
+}
+
+/// 延后解除 ESC 吞键：等 Esc 物理松开再留一小段余量，然后在 hotkey_op_lock 内
+/// 复核 `still_released()`，为 true 才反注册。
+///
+/// 为什么不能立刻 stop：ESC 取消是 rdev 回调里同步走状态机的，listen-only tap
+/// 先于 Carbon 热键匹配看到这次按键，立刻 unregister 会抢在 WindowServer 把这次
+/// keyDown 路由给热键之前完成——结果正是这次 Esc 漏给前台（Claude Code 被中断）。
+/// 长按 Esc 的 auto-repeat 同理，所以要等松手。
+///
+/// 复核放在锁内：新一轮录音的 `esc_capture_start` 也要抢同一把锁，要么它在我们
+/// 之后重新注册，要么我们看到阶段已回到活跃态而跳过，不会把新会话的吞键拆掉。
+pub fn esc_capture_release<R: Runtime>(
+    app: AppHandle<R>,
+    still_released: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    const RELEASE_WAIT_MAX: std::time::Duration = std::time::Duration::from_secs(3);
+    const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    const GRACE: std::time::Duration = std::time::Duration::from_millis(150);
+    let started = std::time::Instant::now();
+    while modifier_only::esc_is_pressed() && started.elapsed() < RELEASE_WAIT_MAX {
+        std::thread::sleep(POLL);
+    }
+    std::thread::sleep(GRACE);
+    let _op = hotkey_op_lock().lock().unwrap_or_else(|e| e.into_inner());
+    if !still_released() {
+        log::debug!("[hotkey] esc_capture_release: phase active again, keep Esc swallowed");
+        return Ok(());
+    }
+    unregister_esc(&app)
+}
+
+fn unregister_esc<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let plugin = app.global_shortcut();
     let sc = esc_shortcut();
     if !plugin.is_registered(sc) {
