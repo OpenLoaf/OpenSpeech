@@ -99,6 +99,8 @@
 |---|---|
 | 第一次按下 | 进入 Recording（前 300 ms 仅显示"准备中"悬浮态） |
 | 第二次按下（**同 id**） | 结束录音，进入 Transcribing |
+| AI 优化等待期间再次按下（**同 id**，Refining） | 立即跳过第二段优化，输出第一段原始转写；不开启新录音 |
+| 转写 / 翻译 / 输出期间，或优化时按其他快捷键 | 忽略，不打断当前流程 |
 | 录音中按"另一种"激活键（**dictate_ptt ↔ translate**） | 仅 UTTERANCE 模式：切 `activeId` 不结束录音；REALTIME 模式：忽略 |
 | 录音持续超过 SaaS realtime 会话 2 小时硬上限 | 服务端发 `closed{reason:"max_duration"}`，视为录音异常结束，history 标 failed |
 | 第一次按下 < 300 ms 内立即再按一次 | 视为误触，悬浮条淡出，不调用大模型，不计入历史 |

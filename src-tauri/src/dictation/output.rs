@@ -209,6 +209,11 @@ fn with_session<T>(session_id: &str, f: impl FnOnce(&mut OutputSession) -> T) ->
     Some(f(s))
 }
 
+/// 跳过优化后停止流式注入；迟到的 AI delta 不再落字，原文由 finish 整段输出。
+pub(super) fn disable_streaming(session_id: &str) {
+    with_session(session_id, |s| s.streaming = false);
+}
+
 fn probe_ime(session_id: &str) -> bool {
     if let Some(Some(v)) = with_session(session_id, |s| s.ime_blocked) {
         return v;
@@ -336,6 +341,26 @@ fn finish(app: &AppHandle, session_id: &str, text: &str) -> FinishOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skip_refine_disables_streaming_only_for_current_session() {
+        begin("skip-refine-test", None, true, false);
+        disable_streaming("stale-session");
+        assert_eq!(
+            with_session("skip-refine-test", |s| s.streaming),
+            Some(true)
+        );
+        disable_streaming("skip-refine-test");
+        assert_eq!(
+            with_session("skip-refine-test", |s| s.streaming),
+            Some(false)
+        );
+        assert_eq!(
+            with_session("skip-refine-test", |s| s.cursor.clone()),
+            Some(String::new())
+        );
+        end("skip-refine-test");
+    }
 
     fn app(name: &str, id: Option<&str>) -> ActiveWindowInfo {
         ActiveWindowInfo {

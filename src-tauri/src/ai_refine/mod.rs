@@ -52,12 +52,16 @@ const EVENT_DELTA: &str = "openspeech://ai-refine:delta";
 const EVENT_DONE: &str = "openspeech://ai-refine:done";
 const EVENT_ERROR: &str = "openspeech://ai-refine:error";
 
-/// 被取消的 task_id 集合：听写会话取消 / 跳过 AI 优化时登记，SSE 循环下一帧检查到即中止，
-/// 不再继续消耗 credits、也不再 emit delta。每条只命中一次，命中后移除。
+/// 被取消的 task_id 集合：保留尚未开始的请求的取消意图；每条命中后移除。
 fn cancelled_tasks() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
         std::sync::OnceLock::new();
     SET.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+fn cancel_notify() -> &'static tokio::sync::Notify {
+    static NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
+    NOTIFY.get_or_init(tokio::sync::Notify::new)
 }
 
 /// 中止 task_id 对应的 refine 流（若在跑）。重复调用无副作用。
@@ -68,6 +72,32 @@ pub fn cancel_task(task_id: &str) {
             set.clear();
         }
         set.insert(task_id.to_string());
+    }
+    // 唤醒请求本身，不依赖响应头 / 下一帧 SSE 到达。
+    cancel_notify().notify_waiters();
+}
+
+async fn wait_cancelled(task_id: &str) {
+    loop {
+        let notified = cancel_notify().notified();
+        tokio::pin!(notified);
+        // 先登记 waiter 再检查集合，避免检查与 await 之间的取消信号丢失。
+        notified.as_mut().enable();
+        if take_cancelled(Some(task_id)) {
+            return;
+        }
+        notified.await;
+    }
+}
+
+async fn until_cancelled<T>(
+    task_id: &str,
+    work: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::select! {
+        biased;
+        _ = wait_cancelled(task_id) => Err(ERR_CANCELLED.to_string()),
+        result = work => result,
     }
 }
 
@@ -587,6 +617,21 @@ pub(crate) async fn run_refine_core<R: Runtime>(
     app: AppHandle<R>,
     input: RefineChatInput,
 ) -> Result<RefineChatResult, String> {
+    let Some(task_id) = input.task_id.clone() else {
+        return run_refine_request(app, input).await;
+    };
+    let result = until_cancelled(&task_id, run_refine_request(app.clone(), input)).await;
+    if result.as_ref().is_err_and(|e| e == ERR_CANCELLED) {
+        log::info!("[ai_refine] cancelled by session task_id={task_id}");
+        emit_error(&app, Some(&task_id), ERR_CANCELLED, ERR_CANCELLED);
+    }
+    result
+}
+
+async fn run_refine_request<R: Runtime>(
+    app: AppHandle<R>,
+    input: RefineChatInput,
+) -> Result<RefineChatResult, String> {
     let task_id = input.task_id.clone();
     let sp_chars = input.system_prompt.chars().count();
     let sp_bytes = input.system_prompt.len();
@@ -845,11 +890,6 @@ pub(crate) async fn run_refine_core<R: Runtime>(
     let mut credits_consumed: f64 = 0.0;
     let mut first_token_ms: Option<u128> = None;
     while let Some(chunk) = stream.next().await {
-        if take_cancelled(task_id.as_deref()) {
-            log::info!("[ai_refine] cancelled by session task_id={task_id:?}");
-            emit_error(&app, task_id.as_deref(), ERR_CANCELLED, ERR_CANCELLED);
-            return Err(ERR_CANCELLED.to_string());
-        }
         let chunk = match chunk {
             Ok(c) => c,
             Err(e) => {
@@ -1130,6 +1170,75 @@ fn emit_error<R: Runtime>(app: &AppHandle<R>, task_id: Option<&str>, code: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancellation_before_request_prevents_work_from_starting() {
+        let id = uuid::Uuid::new_v4().to_string();
+        cancel_task(&id);
+        let result: Result<(), String> = until_cancelled(&id, async {
+            panic!("a pre-cancelled request must not start");
+        })
+        .await;
+        assert_eq!(result, Err(ERR_CANCELLED.to_string()));
+    }
+
+    // 等不到响应头 / 下一帧 SSE 的请求也必须马上释放，不靠网络唤醒。
+    #[tokio::test]
+    async fn cancellation_drops_request_that_never_responds() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let task_id = id.clone();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = Dropped(dropped.clone());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            until_cancelled(&task_id, async move {
+                let _guard = guard;
+                let _ = started_tx.send(());
+                std::future::pending::<Result<(), String>>().await
+            })
+            .await
+        });
+        started_rx.await.unwrap();
+        cancel_task(&id);
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("cancel must not wait for the network")
+            .unwrap();
+        assert_eq!(result, Err(ERR_CANCELLED.to_string()));
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancelling_other_task_does_not_interrupt_request() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let other_id = uuid::Uuid::new_v4().to_string();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            until_cancelled(&id, async {
+                let _ = started_tx.send(());
+                finish_rx.await.map_err(|e| e.to_string())
+            })
+            .await
+        });
+        started_rx.await.unwrap();
+        cancel_task(&other_id);
+        finish_tx.send("completed").unwrap();
+        assert_eq!(task.await.unwrap(), Ok("completed"));
+        assert!(take_cancelled(Some(&other_id)));
+    }
 
     /// 测试里固定用这条 fake guard——业务三语版本只在 guard_section 自己的单测里校验，
     /// 其余 build_context_message / build_messages 测试只关心"Guard 段总在最前 + 含 type=\"Guard\""。

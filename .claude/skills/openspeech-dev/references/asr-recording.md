@@ -1,12 +1,12 @@
 # 录音 / realtime ASR 协作约定
 
 > 何时读：改录音、改 STT、调 SaaS realtime ASR 集成、改触发录音的 gate 逻辑、加新 provider、**新增任何直连 SaaS（realtime / file 转写 / chat completions / V4 tools）的链路**。
-> 真相来源：`src-tauri/src/stt/mod.rs` + `src-tauri/src/local_asr/` + `src-tauri/src/audio/` + `src-tauri/src/transcribe/mod.rs` + `src-tauri/src/ai_refine/mod.rs` + `src-tauri/src/openloaf/mod.rs` + `src/lib/stt.ts` + `src/stores/recording.ts`。事件名 / 命令名 / payload 直接读源码。
+> 真相来源：`src-tauri/src/stt/mod.rs` + `src-tauri/src/local_asr/` + `src-tauri/src/audio/` + `src-tauri/src/transcribe/mod.rs` + `src-tauri/src/ai_refine/mod.rs` + `src-tauri/src/openloaf/mod.rs` + `src-tauri/src/dictation/` + `src/lib/stt.ts` + `src/stores/recording/`。事件名 / 命令名 / payload 直接读源码。
 > 用法权威 = 全局 `hex-openloaf-saas-sdk` skill（含 Rust crate）。
 
 ---
 
-## SaaS access_token 续期协作（栽过坑，2026-05-06）
+## SaaS access_token 续期协作
 
 **任何"直连 SaaS"的链路（realtime ASR、saas-file 转写、ai_refine chat、未来新增的 V4 tool）都必须满足两条契约**，否则会把用户从登录态踢出：
 
@@ -41,7 +41,7 @@
 ### 类型标注
 - `send_start` 第二参数 `None` 时显式标类型：`None::<serde_json::Value>`。
 
-### PCM 格式（栽过坑，2026-04-25）
+### PCM 格式
 - PCM 帧 = **PCM16 LE bytes**，channels = **1**。
 - cpal 默认 f32 多 ch，必须在 audio callback 里就地下混 mono + 量化。
 - `stt_start` 的 `send_start` 也必须报 `channels:1`，否则服务端按 2ch 解析全错位。
@@ -49,7 +49,7 @@
 ### 采样率
 - 不重采样，跟随设备原生 sr 透传给服务端。
 
-### feature ID 大小写（栽过坑，2026-04-25）
+### feature ID 大小写
 - **是 `realtimeAsr`（小写 sr），不是 `realtimeASR`** —— 错了 WS 握手直接 500。
 
 ### 未登录路径
@@ -63,25 +63,27 @@
 
 ---
 
-## 触发录音 Gate（`recording.ts::start`）
+## 听写会话状态机归 Rust（`src-tauri/src/dictation/`）
 
-按顺序拦截，任一命中即放弃本次录音：
+状态图、事件、上报命令与不变量的权威 = `docs/voice-input-flow.md`「状态机」节；这里只记实现约束。
 
-1. **未登录且未配 BYO endpoint** → `useUIStore.openLogin()`。
-2. **SAAS 路径 + `navigator.onLine === false`** → 同步拦截 + `openNoInternet()`。
-3. **SAAS 路径乐观启动后异步 `invoke("openloaf_health_check")`**，false 且仍在 preparing/recording → 回滚 + 弹无网络。
+- **前端只渲染、只发意图**：`stores/recording/store.ts` 是快照投影，`worker.ts` / `pipeline.ts` 跑 ASR / 整理 / 历史，所有上报带 session_id，过期会话的上报 Rust 一律丢弃。不要在前端重新推导状态或另起 FSM。
+- **开录鉴权在 Rust**（`dictation::on_hotkey`）：已登录或 `customDictationReady`，否则静默恢复登录 ≤1.5s，仍失败发 `blocked`，**绝不打开麦克风**。
+- **状态出口不能挂在主窗 timer 上**：听写期间主窗是隐藏 webview，`window.setTimeout` 会被节流甚至永不 fire（曾导致 FSM 永久卡在「转录中」、按键全被吞）。复位 / 回收逻辑放 Rust 状态机（如 Failed 2.5s 自动回 Idle），前端收尾用微任务，视觉淡出交给可见的悬浮条窗口。
+
+## 听写采集：open / save / discard 成对，全在 Rust
+
+`audio::open_dictation_capture` / `save_dictation_capture` / `discard_dictation_capture` 只由 `dictation` runtime 调用，前端不参与 cpal 引用计数。**单一不变量：一次听写的 cpal ref 只取一次、放一次。**
+
+- `dictation_capture()` 锁跨 `start()` / `stop()`：open 未完成时到来的 discard 会等 open 结束再释放，不漏放 ref。open 失败的每个分支都要回滚已取的 ref 并 disarm 预录。
+- open 是阻塞的（cpal 冷启动 ~100ms），调用方放后台线程，不能阻塞 rdev 键盘线程。
+- 录音 id 由 Rust `audio::new_recording_id` 生成，格式必须与前端 `src/lib/ids.ts::newId` 一致（同时是会话 id、录音文件名、历史 id）。
+- **预录缓冲（开头丢字）**：麦克风在按键当帧就开，但实时会话要等主窗收到 `dictation/started` 再 invoke `stt_start`，节流时迟到 1–5s（日志 `dictation capture opened` 与 `[worker] session started` 的时间差）。这段帧以前被 `try_send_audio_pcm16` 当「无会话」丢掉 → 本地模型 / 边说边出字模式丢开头几个字。`stt` 模块有预录缓冲：`open_dictation_capture` 开流前 arm、save/discard disarm，会话进 slot 时及之后首帧按序补发（日志 `preroll flushed`）。新增听写采集的开/收路径必须配对 arm/disarm。
+- **验证盲区**：ref 配平是集成级，单测覆盖不到；改采集路径后必须真机 `pnpm tauri dev` 盯 macOS 状态栏橙点确认不泄漏。
 
 ---
 
-## FSM 复位禁用可节流 timer（栽过坑，2026-06-04）
-
-`recording.ts` 的 FSM `transcribing/injecting → idle` 复位**绝不能**靠 `window.setTimeout`。听写期间主窗是隐藏 webview，其 timer 会被 Chromium/WebView2 background timer throttling 节流甚至冻结（hidden-page），延迟可达数十秒乃至永不 fire。旧版 toggle-off（`setTimeout(...,300)`）与 `simulateFinalize`（`setTimeout(...,800)`）都把唯一的回 idle 出口挂在这种 timer 上 → 0.2.49 Windows "一直在转录中"：finalize 全部微任务（tail/paste/hint）正常跑完，唯独那帧 idle timer 不 fire，FSM 永久卡 injecting、PTT 被 "非 idle 一律 IGNORED" 守卫全吞、只能重启。
-
-规约：复位走 `finalize().then()` 的**微任务里立即 set idle**（微任务不被节流）+ `.catch` 兜 reject；守卫必须含 `injecting`（onChunk 流式首段会把 transcribing→injecting）；视觉收尾停顿交给可见的 overlay 窗口自己的淡出，不要塞回主窗 timer。回归测试：`stores/recording.stuck-injecting.repro.test.ts`（变体 C/D 在"timer 永不 fire"下断言仍回 idle）。
-
----
-
-## 会议「暂停」= 真停麦克风（栽过坑，2026-06-08）
+## 会议「暂停」= 真停麦克风
 
 会议录制的 pause **必须停掉 cpal 采集流**（前端 `stores/meetings.ts::pause()` 调 `stopAudioLevel()`、`resume()` 调 `startAudioLevel()`），不能只设 Rust `meeting_pause` 的 paused flag。只设 flag → cpal stream 一直跑 → **macOS 状态栏橙色录音指示灯常亮** → 用户以为「点了暂停还在录」（用户实报 bug）。
 
@@ -93,23 +95,11 @@
 - **暂停放行听写**：`hotkey::maybe_block_for_meeting` 用 `meetings::is_capturing()`（有会议 **且非暂停**）而非 `has_active()`，暂停态放行听写/翻译/Ask；audio fanout 仍用 `has_active()`（暂停时 try_send 内部 paused gate 丢帧）。
 - **pause/resume 并发守卫**：两者是 async，await 期间 view 还没翻，入口 gate 拦不住二次进入/与 stop 交错 → 双击致共享 ref_count 失衡（橙点不灭 / 误停听写）。用 module-level `pauseResumeInFlight` + 每个 await 后复查 view（被 stop 抢走则回滚已加的 cpal ref 再退出）。stop 走自己的 `stopInFlight`（用户结束动作不该被 pause/resume 挡）。resume 入口还须挡「听写进行中」（`useRecordingStore.getState().activeId !== null`）——UI「继续」按钮绕过 hotkey 拦截，否则两路同抢 cpal、听写串进会议字幕。
 
-## 采集下沉:Rust 在 hotkey 按下当帧预开 cpal,前端 adopt(栽过坑,2026-07-01)
-
-**病**:听写 FSM 跑在主窗 webview;主窗隐藏时被 macOS WKWebView 节流,Tauri hotkey `listen` 回调延迟 2–4s → 用户以为没反应连按 → epoch 去抖把多余点按收掉 → 「按好几次才录上」+ 节流期语音丢失。Rust `pressed: dictate_ptt` 与前端 `[recording] event received` 的时间差(正常 <1s,卡顿 2–4s)是判据。
-
-**修**:采集生命周期从前端下沉到 Rust,前端从「驱动」变「接管」。**单一不变量:一次听写的 cpal ref 只取一次、放一次。**
-- Rust:`is_recording_binding` 按下 → `audio::preopen_dictation_capture`(fire-and-forget 后台线程,**不阻塞 rdev**——`start()` cpal 冷启动 ~100ms)→ `ensure_dictation_capture`(**持 `DICTATION_CAPTURE` 锁跨 `start()` 的原子入口**:rdev 预开与前端 adopt 并发只有一个真 start,另一个等锁后 adopt,ref 恒 +1)。`DICTATION_ENABLED`(前端按 canRecord 推)gate 预开,未登录不开麦(隐私)。
-- 前端(`recording/store.ts`):start 块用 `adopt_dictation_capture` 拿 Rust 生成的 recordingId(chrono 本地时间,对齐 `ids.ts` 格式),**不再 `startAudioLevel`**;`startRecordingSession(id, adopted=true)` 跳过 `audio_recording_start`(否则重置 session、丢预采音频);直接进 `recording`(不再有 preparing 冷启动窗口)。
-- **ref 放**:前端 stop/cancel 的 `stopAudioLevel` 放那唯一 +1;flag 由 `audio_recording_stop/cancel/force_stop` 清。
-- **释放铁律**:终态放弃(gate 未过 / preflight 失败 / adopt 出错)必须 `release_dictation_capture`(锁串行 stop+清 flag);但 **epoch-stale(被后续 press 抢占)绝不能 release**——那会杀掉获胜 press 已 adopt 的采集。批量迟到场景:press1/2 stale 保留采集,press3 adopt,一段录音。
-- **验证盲区**:ref 配平是集成级(单测 FSM 复刻覆盖不到),改后必须真机 `pnpm tauri dev` 盯 macOS 状态栏橙点确认不泄漏。
-- **stt_start 仍由前端驱动 → 开头丢字(栽过坑,2026-09-29)**:采集下沉后麦克风当帧就开、波形立刻有,但实时会话要等主窗收到 `dictation/started` 再 invoke `stt_start`,节流时迟到 1–5s(日志 `dictation capture opened` 与 `[worker] session started` 的时间差)。这段帧以前被 `try_send_audio_pcm16` 当「无会话」丢掉 → 本地模型 / 边说边出字模式丢开头几个字。现在 `stt` 模块有预录缓冲:`open_dictation_capture` 开流前 arm、save/discard disarm,会话进 slot 时及之后首帧按序补发(日志 `preroll flushed`)。新增听写采集的开/收路径必须配对 arm/disarm。
-
-## AI refine 后处理三级 hold 与 `driftGuard` 只开听写（栽过坑，2026-09-22）
+## AI refine 后处理三级 hold 与 `driftGuard` 只开听写
 
 `run_refine_core` 的 SSE 消费链是 **context-leak filter → drift guard → trailing-period stripper** 三级 hold 串联，任何新加的"输出先看一眼再放"逻辑都插到这条链里，不要另起一条独立缓冲——否则前端 `injectIncremental` 的 typedLen 前缀假设会被打破（已注入的字撤不回）。
 
-`RefineChatInput.driftGuard` 是**调用方契约**，Rust 不做默认开：听写 refine（`finalize.ts` phase 1 两处 + `history.ts` 重试）传 `true`；翻译 phase 2 / 润色 / 会议摘要 / 标题 / 设置页测试按钮 **不传**。开错地方的症状是"译文被换回原文"——译文与原文零字符重叠，守卫必判离题。同一个开关还控制 Guard 末尾的「输出只能来自正文」锚定句（`guard_section(lang, anchor_to_body)`）——翻译路径误开会被 prompt 要求逐词对应原文，译不出来。
+`RefineChatInput.driftGuard` 是**调用方契约**，Rust 不做默认开：听写 refine（`stores/recording/pipeline.ts` + `stores/history.ts` 重试）传 `true`；翻译 phase 2 / 润色 / 会议摘要 / 标题 / 设置页测试按钮 **不传**。开错地方的症状是"译文被换回原文"——译文与原文零字符重叠，守卫必判离题。同一个开关还控制 Guard 末尾的「输出只能来自正文」锚定句（`guard_section(lang, anchor_to_body)`）——翻译路径误开会被 prompt 要求逐词对应原文，译不出来。
 
 `MessageContext.requestTime` 对 refine 是幻觉诱因（正文「下午的行程是点点点点点」被填成「上午九点十五分」= 当时的系统时钟），且坏输出会经 ConversationHistory 级联污染后续每条。守卫兜住的是"整段离题"；"前半句照录、后半句凭空补一个时间"这种局部幻觉守卫抓不到，只能靠 prompt r3 的「补全值只能来自正文」约束。细节见 `docs/ai-refine.md` 离题守卫一节。
 
@@ -117,7 +107,7 @@
 
 **项目上下文（Orca）**：Orca 窗口标题恒为「Orca」、一个窗口装几十个项目，按 target_app 取历史会串项目；所以开录时查 Orca 本机 RPC 拿选中项目目录，历史按 `history.project` 取。查询和开麦克风并行、STARTED 前 join（实时 ASR 上下文在 STARTED 时组装），松手时不再查（沿用起点项目）。只走 RPC 不读它的 profile-state.db：库里 `activeWorkspaceKey` 是陈旧值，`activeWorktreeId` 也有 1–5s 延迟。
 
-## 本地离线模型（mode=local，2026-09-27）
+## 本地离线模型（mode=local）
 
 产品规则见 `docs/settings.md`「本地模型」+ `docs/privacy.md`；这里只记实现层的取舍。
 
@@ -131,6 +121,12 @@
 - **finalize 提前返回**：`stt/mod.rs` 的 `stream_ended` 在 worker 因 EndOfStream/Closed/Error 退出时置位，`stt_finalize` 见到即返回，不再死等 800ms 尾包窗口（云端也受益）。本地收尾上限放宽到 30s（低配机解码落后于实时时，3s 截断会丢尾句）。
 - **离线 + SaaS 整理 + 未登录**：`pushConfig` 直接把 refineEnabled 置 false——否则整理 401 会弹登录框打断刻意离线的用户。
 - **模型下载源**：R2 bucket `openspeech` 的 `models/asr/<归档原名>`，顺序为腾讯 CDN（国内）→ R2 自定义域 → GitHub Release 兜底（国内直连 GitHub 实测 100~200KB/s 且常断流，所以断点续传必须保留）。对象永不覆盖：换归档就换文件名，同时更新 sha256。`models/` 不是版本前缀，`r2-cleanup-beta.yml` 按 `v<semver>` 白名单识别版本，否则 `sort -V` 会把 `models` 排成「最老正式版」删掉。R2 下行免费，只按 Class B 请求计费，模型分发几乎零成本。
+
+## 跳过 AI 优化的取消约定
+
+听写跳过 AI 优化必须能打断等待响应头与 SSE 下一帧的请求，不能等上游再发内容才检查取消；否则模型首 token 慢时，快捷键与“跳过”按钮都会失效。行为规则见 `docs/voice-input-flow.md`。
+
+取消时也要由 Rust 先关闭本会话的流式注入：主窗可能尚未收到跳过事件，迟到的 AI delta 若先落字，原文与已注入前缀不一致就只能降级剪贴板；原文收尾输出仍沿用同一会话。
 
 ## 隐私边界（呼应 `docs/privacy.md`）
 

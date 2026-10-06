@@ -112,7 +112,7 @@
 
 - 托盘左键 → `quick_panel::toggle_from_tray`，复用同一个 quick panel 窗口，按 mode 在 show 时 `set_size`（两个 mode 尺寸不同，别在 ensure 里写死）。
 - 定位用 `TrayIconEvent::Click` 的 `rect`（物理像素、左上原点）：图标在屏幕上半 → 卡片在图标下方（macOS 菜单栏），否则在上方（Windows 底部任务栏）；视觉卡片夹在 work area 内。
-- **贴图标那一侧透明边距必须为 0**：四周统一 40px 时，顶部边距压到菜单栏上，macOS 会把整个窗口往下推，卡片被推低正好 40px（踩过）；Windows 底部边距盖住任务栏会吃掉任务栏点击。Rust 按方向算边距，经 `openspeech://quick-panel-insets` 在 mode 事件前推给前端设 padding。
+- **贴图标那一侧透明边距必须为 0**：四周统一 40px 时，顶部边距压到菜单栏上，macOS 会把整个窗口往下推，卡片被推低正好 40px；Windows 底部边距盖住任务栏会吃掉任务栏点击。Rust 按方向算边距，经 `openspeech://quick-panel-insets` 在 mode 事件前推给前端设 padding。
 - **失焦 hide 与托盘点击的竞态**：面板可见时点托盘图标，先到 `Focused(false)` 把面板 hide，Click 随后才到——若不处理会立刻重新弹出。`LAST_BLUR_HIDE_MS` 记录失焦 hide 时刻，400ms 内的托盘点击视为「关」。菜单项触发（anchor=None）不走这个守卫。
 - 菜单项「最近识别」没有 rect，用 `Enter` / `Click` 记下的上次图标位置；Linux 不发托盘事件 → 居中。
 - 卡片内「打开主窗口」必须**先** `quick_panel_hide` 再 `show_main_window_cmd`：hide 会把前台还给原 app，顺序反了主窗刚激活就被抢走前台。
@@ -170,11 +170,11 @@
 
 ---
 
-## 托盘「停止录音」兜底 + Fn 被 macOS 吞的卡死根因（栽过坑，2026-06-28）
+## 托盘「停止录音」兜底 + Fn 被 macOS 吞键
 
-- **根因**：听写是 toggle 模式（`store.ts`：`released` 不参与 FSM，仅 `pressed` 开始/结束），停止只有「再按一次绑定键」一条路。绑定键若是 Fn 且 macOS `AppleFnUsageType≠0`（系统设置「按下🌐键时」= 切输入法 / Emoji / 听写），按 Fn 被系统层整键消费、rdev 收不到 → 停止那次按下永远到不了 app → 录音永久卡 `recording`、overlay 常驻、updater 一直 `deferred: recording`。5 分钟自动 abort 兜底早被移除（`store.ts:106`），无任何自动退路。
-- **退路（A）**：托盘录音中插「停止录音」项（`tray.rs::tray_set_recording` 由前端 rec/prep 进出各推一次；`TRAY_STOP_RECORDING_EVENT`）。前端 `store.ts` 的 `uTrayStop` 监听：`recording` 态 `emit("openspeech://hotkey",{id:activeId,phase:"pressed"})` **复用热键派发链做真正的 toggle off（转写不丢话）**，其余活跃态退回 `cancelByEsc`（保证回 idle、保存音频到历史）。这是唯一不依赖被吞热键的出口。
-- **根因可见化（C）**：`commands::fn_usage_type` 读 `defaults read com.apple.HIToolbox AppleFnUsageType`（缺省=0=Do Nothing，非 macOS 恒 0）；`HotkeyBinder.tsx` 在绑定含 Fn + macOS + 值≠0 时挂软警告 `hotkey:warning.fn_usage_conflict`，引导改成「不执行任何操作」。**app 在用户态拦不住系统层吞键，只能可见化 + 给退路。**
+- **根因**：听写是 toggle 模式，停止只有「再按一次绑定键」一条路。绑定键若是 Fn 且 macOS `AppleFnUsageType≠0`（系统设置「按下🌐键时」= 切输入法 / Emoji / 听写），按 Fn 被系统层整键消费、rdev 收不到 → 录音永久卡住、overlay 常驻、updater 一直 `deferred: recording`。没有录音时长自动 abort。
+- **退路**：录音中托盘出现「停止录音」项。显隐由 `dictation` runtime 在状态变化时调 `tray::tray_set_recording` 推送；菜单事件 `tray::stop_recording` → `dictation::on_tray_stop()` 直接结束录音（不唤出主窗、不依赖热键）。这是唯一不依赖被吞热键的出口，不能删。
+- **根因可见化**：`commands::fn_usage_type` 读 `defaults read com.apple.HIToolbox AppleFnUsageType`（缺省 0，非 macOS 恒 0）；`HotkeyBinder.tsx` 在绑定含 Fn + macOS + 值≠0 时挂软警告 `hotkey:warning.fn_usage_conflict`。**app 在用户态拦不住系统层吞键，只能可见化 + 给退路。**
 
 ## Autostart
 

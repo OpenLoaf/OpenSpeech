@@ -698,7 +698,16 @@ impl Machine {
                     fx.push(Effect::Cue(CueKind::Start));
                 }
             }
-            // 处理中按键一律忽略，且不开采集（旧实现会预开一路麦克风后泄漏）。
+            Phase::Refining => {
+                // 原始转写已经就绪：再按本会话的快捷键等价于「跳过 AI 优化」，
+                // 沿用同一会话输出原文，绝不能开新采集。
+                if let Some(s) = self.session.as_ref().filter(|s| s.binding == binding) {
+                    fx.push(Effect::SkipRefine {
+                        session_id: s.id.clone(),
+                    });
+                }
+            }
+            // 其余处理阶段按键忽略，且不开采集（旧实现会预开一路麦克风后泄漏）。
             _ => {}
         }
     }
@@ -811,6 +820,83 @@ mod tests {
         assert!(fx.is_empty());
         assert_eq!(m.phase(), Phase::Transcribing);
         assert_eq!(m.session().map(|s| s.id.as_str()), Some("s1"));
+    }
+
+    #[test]
+    fn same_hotkey_skips_refine_without_starting_a_new_session() {
+        for binding in [
+            BindingId::DictatePtt,
+            BindingId::DictateToggle,
+            BindingId::Translate,
+        ] {
+            let mut m = Machine::new();
+            recording_with_refine(&mut m, binding, "s1");
+            press(&mut m, binding, 5_000, "s2");
+            m.handle(
+                Input::Stage {
+                    session_id: "s1".into(),
+                    phase: Phase::Refining,
+                },
+                5_100,
+            );
+
+            let fx = press(&mut m, binding, 6_000, "s3");
+            assert_eq!(
+                fx,
+                vec![Effect::SkipRefine {
+                    session_id: "s1".into()
+                }]
+            );
+            assert_eq!(m.phase(), Phase::Refining);
+            assert_eq!(m.session().map(|s| s.id.as_str()), Some("s1"));
+        }
+    }
+
+    #[test]
+    fn other_hotkey_does_not_skip_refine() {
+        let mut m = Machine::new();
+        recording_with_refine(&mut m, BindingId::DictateToggle, "s1");
+        press(&mut m, BindingId::DictateToggle, 5_000, "s2");
+        m.handle(
+            Input::Stage {
+                session_id: "s1".into(),
+                phase: Phase::Refining,
+            },
+            5_100,
+        );
+
+        assert!(press(&mut m, BindingId::Translate, 6_000, "s3").is_empty());
+        assert_eq!(
+            m.session().map(|s| s.binding),
+            Some(BindingId::DictateToggle)
+        );
+    }
+
+    #[test]
+    fn hotkey_does_not_interrupt_translation_or_output() {
+        for phase in [Phase::Translating, Phase::Outputting] {
+            let mut m = Machine::new();
+            recording_with_refine(&mut m, BindingId::Translate, "s1");
+            press(&mut m, BindingId::Translate, 5_000, "s2");
+            m.handle(
+                Input::Stage {
+                    session_id: "s1".into(),
+                    phase: Phase::Translating,
+                },
+                5_100,
+            );
+            if phase == Phase::Outputting {
+                m.handle(
+                    Input::Output {
+                        session_id: "s1".into(),
+                        chars: 3,
+                    },
+                    5_200,
+                );
+            }
+            assert!(press(&mut m, BindingId::Translate, 6_000, "s3").is_empty());
+            assert_eq!(m.phase(), phase);
+        }
     }
 
     // 旧会话的上报（迟到的 refine 输出 / 完成）不能影响新会话。

@@ -347,6 +347,9 @@ fn run_effect(app: &AppHandle, effect: Effect) {
             });
         }
         Effect::SkipRefine { session_id } => {
+            // 主窗可能还没处理 skip 事件：先拦住已在途的 AI delta，免得原文回退时
+            // 已注入优化稿的前缀，最终文本只能降级到剪贴板。
+            output::disable_streaming(&session_id);
             crate::ai_refine::cancel_task(&session_id);
             emit(app, SKIP_REFINE_EVENT, session_id);
         }
