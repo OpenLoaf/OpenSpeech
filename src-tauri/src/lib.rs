@@ -203,10 +203,11 @@ pub fn run() {
             dictation::init(app.handle());
 
             // ---- 主窗口尺寸自适应屏幕 ----------------------------------------
-            // 初始尺寸（tauri.conf.json）是上限值；小屏 / 高 DPI 时按主显示器
-            // work area 缩小，留出任务栏和边距。每次创建主窗口时只设置一次，
-            // 之后不干预用户手动调整。
+            // 初始尺寸（tauri.conf.json）是上限值；按主显示器 work area 缩小，
+            // 留出任务栏和边距。Windows 按实际像素固定 100%，其它平台跟随 DPI。
+            // 初始布局只设置一次，之后保留用户手动调整的尺寸。
             if let Some(window) = app.get_webview_window("main") {
+                window::configure_ui_scale(&window)?;
                 // macOS 保留原生 decorations：titleBarStyle:Overlay + hiddenTitle 让红绿灯叠在内容上；
                 // Win/Linux 关掉 decorations，由前端 WindowControls 接管。
                 #[cfg(not(target_os = "macos"))]

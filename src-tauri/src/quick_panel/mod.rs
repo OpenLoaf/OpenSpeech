@@ -20,8 +20,8 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
-    PhysicalSize, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, Runtime,
+    WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 
 /// macOS：记录召唤 quick panel 之前的 frontmost app PID。
@@ -168,6 +168,7 @@ pub fn ensure<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let builder = builder.visible_on_all_workspaces(true);
 
     let window = builder.build()?;
+    crate::window::configure_ui_scale(&window)?;
     log::warn!("[quick-panel] ensure: builder.build() returned");
 
     position_centered(&window, (WIDTH, HEIGHT))?;
@@ -206,7 +207,7 @@ fn position_centered<R: Runtime>(
     let Some(monitor) = active_monitor(app)? else {
         return Ok(());
     };
-    let scale = monitor.scale_factor();
+    let scale = crate::window::ui_scale_factor(monitor.scale_factor());
     let work_area = monitor.work_area();
     let logical_w = work_area.size.width as f64 / scale;
     let logical_h = work_area.size.height as f64 / scale;
@@ -215,8 +216,8 @@ fn position_centered<R: Runtime>(
     let x = origin_x + (logical_w - width) / 2.0;
     // 上 1/3 处更接近 Spotlight 的视觉中心，比纯几何居中舒服。
     let y = origin_y + (logical_h - height) / 3.0;
-    window.set_size(LogicalSize::new(width, height))?;
-    window.set_position(LogicalPosition::new(x, y))?;
+    window.set_size(crate::window::ui_size(width, height))?;
+    window.set_position(LogicalPosition::new(x, y).to_physical::<i32>(scale))?;
     Ok(())
 }
 
@@ -244,7 +245,7 @@ fn position_near_tray<R: Runtime>(
         )?;
         return Ok(Insets::UNIFORM);
     };
-    let scale = monitor.scale_factor();
+    let scale = crate::window::ui_scale_factor(monitor.scale_factor());
     let gap = TRAY_GAP * scale;
     let (card_w, card_h) = (card_w_l * scale, card_h_l * scale);
 

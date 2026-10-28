@@ -8,7 +8,8 @@
 ## 窗口与标题栏
 
 - 主窗口 `titleBarStyle: "Overlay"` + `hiddenTitle: true`：macOS 红绿灯嵌入内容区左上角。
-- 实际启动尺寸由 `window.rs` 按主显示器 work area 自适应计算。work area 边界优先于静态最小尺寸：空间不足时运行时同步下调 minimum，避免 Windows 笔记本 175% 缩放后被最小高度顶出任务栏；窗口按 work area 的物理坐标居中，兼容任务栏停靠在左侧或顶部。
+- 实际启动尺寸由 `window.rs` 按主显示器 work area 自适应计算。work area 边界优先于静态最小尺寸：空间不足时运行时同步下调 minimum，避免窗口被最小高度顶出任务栏；窗口按 work area 的物理坐标居中，兼容任务栏停靠在左侧或顶部。
+- **Windows 固定 100% UI 大小**：主窗口、悬浮条、Quick Panel 的设计尺寸按实际像素显示，页面缩放抵消显示器 DPI；切换 DPI 时保留用户调整后的实际窗口尺寸。不能关闭进程 DPI awareness，否则 Windows 会把整个窗口位图放大且模糊。tao 的 DPI 事件早于其自动 resize，尺寸还原必须从工作线程排入 UI 队列。macOS / Linux 继续使用 logical px。
 - **全屏被全局禁用**：
   - `tauri.conf.json` 初始 `fullscreen: false`。
   - macOS 端 `lib.rs::disable_macos_fullscreen` 清 `FullScreenPrimary` / 加 `FullScreenNone`，绿按钮降级为 zoom。
@@ -72,7 +73,7 @@
 - **豁免** drag region —— 不应被拖。
 - macOS 跨 Space / 全屏可见：`visible_on_all_workspaces(true)`（Tauri 2.1+）；低版本走 `objc2` 设 `collectionBehavior |= canJoinAllSpaces | fullScreenAuxiliary`。
 - 全屏态下仍不可见时回退"靠声音兜底"，已知平台限制。
-- 尺寸是 logical px，由系统按 DPI 缩放，**不要自乘 `devicePixelRatio`**。
+- 尺寸由 Rust 统一处理：Windows 固定实际像素，macOS / Linux 使用 logical px；前端**不要自乘 `devicePixelRatio`**。
 
 ---
 

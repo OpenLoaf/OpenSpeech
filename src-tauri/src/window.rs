@@ -2,18 +2,77 @@
 // 唤出时切回 Regular 并抢前台。toggle/show 是 pub(crate)，被 hotkey 与 openloaf 跨模块调用。
 
 use crate::audio;
-use tauri::{LogicalSize, Manager, PhysicalPosition, Runtime};
+use tauri::{LogicalSize, Manager, PhysicalPosition, Runtime, Size};
 
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
+
+/// Windows 的 UI 按实际像素显示；其它平台继续跟随显示器缩放。
+pub(crate) fn ui_scale_factor(monitor_scale: f64) -> f64 {
+    if cfg!(target_os = "windows") {
+        1.0
+    } else {
+        monitor_scale
+    }
+}
+
+pub(crate) fn ui_size(width: f64, height: f64) -> Size {
+    let size = LogicalSize::new(width, height);
+    if cfg!(target_os = "windows") {
+        size.to_physical::<u32>(1.0).into()
+    } else {
+        size.into()
+    }
+}
+
+/// 保留进程的 DPI awareness，避免 Windows 把整个窗口做模糊的位图拉伸。
+/// WebView2 的页面缩放抵消系统 DPI，窗口尺寸则由调用方使用实际像素设置。
+pub(crate) fn configure_ui_scale<R: Runtime>(
+    _window: &tauri::WebviewWindow<R>,
+) -> tauri::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let window = _window;
+        window.set_zoom(window.scale_factor()?.recip())?;
+
+        let window_handle = window.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::ScaleFactorChanged { scale_factor, .. } = event {
+                // tao 在应用 WM_DPICHANGED 的建议尺寸之前发出此事件，此时仍能读取
+                // 旧的实际尺寸。保留用户手动调整后的大小；最大化窗口继续填满工作区。
+                let size = window_handle.inner_size().ok().filter(|size| {
+                    size.width > 0
+                        && size.height > 0
+                        && !window_handle.is_maximized().unwrap_or(true)
+                        && !window_handle.is_minimized().unwrap_or(true)
+                });
+                let scale = *scale_factor;
+                let window = window_handle.clone();
+                // 从工作线程排入 UI 队列，等 tao 本轮 DPI 自动调整完成后再还原尺寸。
+                // 在事件回调里直接 set_size 会先执行，随后被 tao 的调整覆盖。
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = window.set_zoom(scale.recip()) {
+                        log::warn!("[window] failed to keep 100% UI scale: {error}");
+                    }
+                    if let Some(size) = size
+                        && let Err(error) = window.set_size(size)
+                    {
+                        log::warn!("[window] failed to preserve physical size: {error}");
+                    }
+                });
+            }
+        });
+    }
+    Ok(())
+}
 
 const MAIN_WINDOW_IDEAL_WIDTH: f64 = 1060.0;
 const MAIN_WINDOW_IDEAL_HEIGHT: f64 = 740.0;
 const MAIN_WINDOW_MIN_WIDTH: f64 = 720.0;
 const MAIN_WINDOW_MIN_HEIGHT: f64 = 480.0;
 // 总边距（左右 / 上下之和），单位为 logical px。目标尺寸始终先从 work area
-// 扣掉这圈空间；不能再用静态 min size 把它顶回去，否则 Windows 175% 缩放下
-// 典型 1080p 工作区只有约 594 logical px 高，600px 的最小高度会越过任务栏。
+// 扣掉这圈空间；不能再用静态 min size 把它顶回去，否则小屏幕上的窗口
+// 最小高度可能越过任务栏。Windows 使用实际像素，其它平台使用 logical px。
 const MAIN_WINDOW_MARGIN_X: f64 = 80.0;
 const MAIN_WINDOW_MARGIN_Y: f64 = 80.0;
 
@@ -45,18 +104,30 @@ pub(crate) fn fit_main_window_to_primary_monitor(window: &tauri::WebviewWindow) 
         return;
     };
 
-    let scale = monitor.scale_factor();
+    let scale = ui_scale_factor(monitor.scale_factor());
     let work_area = monitor.work_area();
     let work_width = work_area.size.width as f64 / scale;
     let work_height = work_area.size.height as f64 / scale;
     let layout = main_window_layout(work_width, work_height);
 
-    if let Err(error) =
-        window.set_min_size(Some(LogicalSize::new(layout.min_width, layout.min_height)))
-    {
+    if let Err(error) = window.set_min_size(Some(ui_size(layout.min_width, layout.min_height))) {
         log::warn!("[main_window] failed to adapt minimum size: {error}");
     }
-    if let Err(error) = window.set_size(LogicalSize::new(layout.width, layout.height)) {
+    // 配置中的 maxWidth / maxHeight 也必须采用同一单位，否则 Windows 切屏后
+    // 仍可能把窗口上限放大。其它平台继续使用 Tauri 的 logical size。
+    if let Some(config) = window
+        .app_handle()
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == window.label())
+        && let (Some(width), Some(height)) = (config.max_width, config.max_height)
+        && let Err(error) = window.set_max_size(Some(ui_size(width, height)))
+    {
+        log::warn!("[main_window] failed to adapt maximum size: {error}");
+    }
+    if let Err(error) = window.set_size(ui_size(layout.width, layout.height)) {
         log::warn!("[main_window] failed to set startup size: {error}");
         return;
     }
@@ -76,7 +147,7 @@ pub(crate) fn fit_main_window_to_primary_monitor(window: &tauri::WebviewWindow) 
     }
 
     log::info!(
-        "[main_window] startup layout scale={scale:.2} work_area={}x{} physical target={:.0}x{:.0} logical min={:.0}x{:.0}",
+        "[main_window] startup layout ui_scale={scale:.2} work_area={}x{} physical target={:.0}x{:.0} UI min={:.0}x{:.0}",
         work_area.size.width,
         work_area.size.height,
         layout.width,
@@ -196,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_margin_on_windows_1080p_at_175_percent() {
+    fn preserves_margin_on_small_logical_work_area() {
         let work_width = 1920.0 / 1.75;
         let work_height = 1040.0 / 1.75;
         let layout = main_window_layout(work_width, work_height);
@@ -215,5 +286,39 @@ mod tests {
         assert_eq!(layout.height, 320.0);
         assert_eq!(layout.min_width, 700.0);
         assert_eq!(layout.min_height, 320.0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_uses_100_percent_size_at_every_monitor_scale() {
+        for monitor_scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let scale = ui_scale_factor(monitor_scale);
+            let layout = main_window_layout(1920.0 / scale, 1040.0 / scale);
+
+            assert_eq!(layout.width, 1060.0);
+            assert_eq!(layout.height, 740.0);
+            assert_eq!(
+                ui_size(layout.width, layout.height).to_physical::<u32>(monitor_scale),
+                tauri::PhysicalSize::new(1060, 740),
+            );
+            assert_eq!(
+                ui_size(260.0, 150.0).to_physical::<u32>(monitor_scale),
+                tauri::PhysicalSize::new(260, 150),
+            );
+            assert_eq!(
+                ui_size(640.0, 440.0).to_physical::<u32>(monitor_scale),
+                tauri::PhysicalSize::new(640, 440),
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn other_platforms_keep_logical_sizes() {
+        assert_eq!(ui_scale_factor(2.0), 2.0);
+        assert_eq!(
+            ui_size(1060.0, 740.0).to_physical::<u32>(2.0),
+            tauri::PhysicalSize::new(2120, 1480),
+        );
     }
 }

@@ -77,6 +77,8 @@ pub fn ensure_overlay<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let window = builder.build()?;
 
+    crate::window::configure_ui_scale(&window)?;
+
     position_to_bottom_center(&window)?;
 
     #[cfg(target_os = "macos")]
@@ -264,7 +266,7 @@ fn position_to_bottom_center<R: Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let Some(monitor) = active_monitor(app)? else {
         return Ok(());
     };
-    let scale = monitor.scale_factor();
+    let scale = crate::window::ui_scale_factor(monitor.scale_factor());
     let work_area = monitor.work_area();
     let logical_w = work_area.size.width as f64 / scale;
     let logical_h = work_area.size.height as f64 / scale;
@@ -283,7 +285,9 @@ fn position_to_bottom_center<R: Runtime>(window: &tauri::WebviewWindow<R>) -> ta
         x,
         y,
     );
-    window.set_position(LogicalPosition::new(x, y))?;
+    #[cfg(target_os = "windows")]
+    window.set_size(crate::window::ui_size(WIDTH, HEIGHT))?;
+    window.set_position(LogicalPosition::new(x, y).to_physical::<i32>(scale))?;
     LAST_MON_ORIGIN.store(
         pack_origin(monitor.position().x, monitor.position().y),
         Ordering::Relaxed,
