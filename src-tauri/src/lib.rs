@@ -191,6 +191,15 @@ pub fn run() {
         // 用户必须退出重进才能恢复（实测 0.2.47 一次启动复现）。
         .manage(hotkey::modifier_only::create_state())
         .manage::<openloaf::SharedOpenLoaf>(std::sync::Arc::new(openloaf::OpenLoafState::new()))
+        // 主窗 webview 是听写 worker 的宿主：它重新加载（内容进程超内存被系统回收后
+        // Tauri 自动 reload 等）就意味着旧 worker 已死，进行中的会话交给 Rust 收尾。
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                dictation::on_main_page_load(payload.url().as_str());
+            }
+        })
         .setup(|app| {
             // ---- 禁用 macOS App Nap（必须尽早）-------------------------------
             #[cfg(target_os = "macos")]
@@ -528,6 +537,7 @@ pub fn run() {
             dictation::dictation_finish,
             dictation::dictation_complete,
             dictation::dictation_fail,
+            dictation::dictation_take_orphans,
             dictation::dictation_debug_simulate,
             stt::stt_start,
             stt::stt_finalize,

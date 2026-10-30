@@ -18,6 +18,9 @@ pub const TOO_SHORT_MS: u64 = 1300;
 pub const OS_DUPLICATE_PRESS_MS: u64 = 100;
 /// Failed 态停留时长，到点自动回 Idle。
 pub const FAILED_DISMISS_MS: u64 = 2500;
+/// Refining 阶段请求跳过后，worker 仍未开始输出的最长等待；超过视为 worker 失联。
+/// 正常 worker 收到跳过会立刻输出原文，几十毫秒内就离开 Refining。
+pub const SKIP_REFINE_WATCHDOG_MS: u64 = 3000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -189,6 +192,12 @@ pub enum Input {
     },
     /// 登录态失效（任何 SaaS 调用 refresh 失败）。
     AuthLost,
+    /// 主窗 worker 失联（webview 重载 / 内容进程被系统回收）：没人再推进本会话。
+    WorkerLost,
+    /// 跳过 AI 优化的看门狗到点：仍停在 Refining 说明 worker 没响应。
+    SkipStalled {
+        session_id: String,
+    },
     DismissTimer {
         token: u64,
     },
@@ -218,6 +227,8 @@ pub enum EndKind {
     StartFailed,
     /// 采集运行中断。
     Interrupted,
+    /// 主窗 worker 失联：音频已落盘，交给重载后的 worker 补一条失败历史。
+    WorkerLost,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -258,6 +269,10 @@ pub enum Effect {
         kind: EndKind,
     },
     SkipRefine {
+        session_id: String,
+    },
+    /// Refining 阶段跳过后启动看门狗，到点回灌 `Input::SkipStalled`。
+    WatchSkip {
         session_id: String,
     },
     ModeSwitched {
@@ -446,6 +461,42 @@ impl Machine {
         }
     }
 
+    /// 跳过 AI 优化。Transcribing 阶段跳过只是标记「转写完不整理」，转写本身可能还要很久，
+    /// 所以只在 Refining 阶段挂看门狗。
+    fn push_skip(&self, session_id: String, fx: &mut Vec<Effect>) {
+        if self.phase == Phase::Refining {
+            fx.push(Effect::WatchSkip {
+                session_id: session_id.clone(),
+            });
+        }
+        fx.push(Effect::SkipRefine { session_id });
+    }
+
+    /// worker 失联：会话不能再等 worker 收尾，Rust 自己结束并保留录音。
+    fn worker_lost(&mut self, now_ms: u64, fx: &mut Vec<Effect>) {
+        let Some(s) = self.session.as_ref() else {
+            return;
+        };
+        let (session_id, binding) = (s.id.clone(), s.binding);
+        match self.phase {
+            Phase::Recording => {
+                fx.push(Effect::StopCaptureAndEnd {
+                    session_id,
+                    binding,
+                    kind: EndKind::WorkerLost,
+                });
+                fx.push(Effect::Cue(CueKind::Cancel));
+            }
+            p if p.is_processing() => fx.push(Effect::EndWork {
+                session_id,
+                binding,
+                kind: EndKind::WorkerLost,
+            }),
+            _ => return,
+        }
+        self.enter_failed(ErrorInfo::code("worker_lost"), now_ms, fx);
+    }
+
     pub fn handle(&mut self, input: Input, now_ms: u64) -> Vec<Effect> {
         let mut fx = Vec::new();
         match input {
@@ -533,9 +584,7 @@ impl Machine {
                     if matches!(self.phase, Phase::Transcribing | Phase::Refining)
                         && let Some(s) = self.session.as_ref().filter(|s| s.uses_ai())
                     {
-                        fx.push(Effect::SkipRefine {
-                            session_id: s.id.clone(),
-                        });
+                        self.push_skip(s.id.clone(), &mut fx);
                     }
                 }
             },
@@ -617,6 +666,12 @@ impl Machine {
                     });
                     fx.push(Effect::Cue(CueKind::Cancel));
                     self.enter_failed(ErrorInfo::code("auth_lost"), now_ms, &mut fx);
+                }
+            }
+            Input::WorkerLost => self.worker_lost(now_ms, &mut fx),
+            Input::SkipStalled { session_id } => {
+                if self.is_current(&session_id) && self.phase == Phase::Refining {
+                    self.worker_lost(now_ms, &mut fx);
                 }
             }
             Input::DismissTimer { token } => {
@@ -702,9 +757,7 @@ impl Machine {
                 // 原始转写已经就绪：再按本会话的快捷键等价于「跳过 AI 优化」，
                 // 沿用同一会话输出原文，绝不能开新采集。
                 if let Some(s) = self.session.as_ref().filter(|s| s.binding == binding) {
-                    fx.push(Effect::SkipRefine {
-                        session_id: s.id.clone(),
-                    });
+                    self.push_skip(s.id.clone(), fx);
                 }
             }
             // 其余处理阶段按键忽略，且不开采集（旧实现会预开一路麦克风后泄漏）。
@@ -843,13 +896,145 @@ mod tests {
             let fx = press(&mut m, binding, 6_000, "s3");
             assert_eq!(
                 fx,
-                vec![Effect::SkipRefine {
-                    session_id: "s1".into()
-                }]
+                vec![
+                    Effect::WatchSkip {
+                        session_id: "s1".into()
+                    },
+                    Effect::SkipRefine {
+                        session_id: "s1".into()
+                    },
+                ]
             );
             assert_eq!(m.phase(), Phase::Refining);
             assert_eq!(m.session().map(|s| s.id.as_str()), Some("s1"));
         }
+    }
+
+    fn refining(m: &mut Machine, id: &str) {
+        recording_with_refine(m, BindingId::DictateToggle, id);
+        press(m, BindingId::DictateToggle, 5_000, "x");
+        m.handle(
+            Input::Stage {
+                session_id: id.into(),
+                phase: Phase::Refining,
+            },
+            5_100,
+        );
+    }
+
+    // 主窗 webview 被系统回收后 worker 不会再上报：会话必须由 Rust 收尾，不能永远卡在整理中。
+    #[test]
+    fn worker_lost_during_processing_ends_session_as_failed() {
+        let mut m = Machine::new();
+        refining(&mut m, "s1");
+        let fx = m.handle(Input::WorkerLost, 6_000);
+        assert_eq!(
+            fx[0],
+            Effect::EndWork {
+                session_id: "s1".into(),
+                binding: BindingId::DictateToggle,
+                kind: EndKind::WorkerLost,
+            }
+        );
+        assert_eq!(m.phase(), Phase::Failed);
+        assert_eq!(m.snapshot().error, Some(ErrorInfo::code("worker_lost")));
+        assert!(m.session().is_none());
+    }
+
+    // 录音中 worker 失联：实时转写已经没人接，停录并保存音频，不让用户对着空气继续说。
+    #[test]
+    fn worker_lost_during_recording_keeps_audio() {
+        let mut m = Machine::new();
+        recording(&mut m, "s1");
+        let fx = m.handle(Input::WorkerLost, 2_000);
+        assert_eq!(
+            fx[0],
+            Effect::StopCaptureAndEnd {
+                session_id: "s1".into(),
+                binding: BindingId::DictateToggle,
+                kind: EndKind::WorkerLost,
+            }
+        );
+        assert_eq!(m.phase(), Phase::Failed);
+    }
+
+    #[test]
+    fn worker_lost_when_idle_is_noop() {
+        let mut m = Machine::new();
+        assert!(m.handle(Input::WorkerLost, 1_000).is_empty());
+        assert_eq!(m.phase(), Phase::Idle);
+    }
+
+    // 跳过后 worker 没响应（仍停在 Refining）→ 看门狗收尾；已经开始输出就不打断。
+    #[test]
+    fn stalled_skip_ends_session_only_while_still_refining() {
+        let mut m = Machine::new();
+        refining(&mut m, "s1");
+        let fx = m.handle(
+            Input::Intent {
+                intent: Intent::SkipRefine,
+                at_ms: 6_000,
+            },
+            6_000,
+        );
+        assert!(fx.contains(&Effect::WatchSkip {
+            session_id: "s1".into()
+        }));
+        m.handle(
+            Input::SkipStalled {
+                session_id: "stale".into(),
+            },
+            9_000,
+        );
+        assert_eq!(m.phase(), Phase::Refining);
+        m.handle(
+            Input::SkipStalled {
+                session_id: "s1".into(),
+            },
+            9_000,
+        );
+        assert_eq!(m.phase(), Phase::Failed);
+
+        let mut m = Machine::new();
+        refining(&mut m, "s1");
+        m.handle(
+            Input::Output {
+                session_id: "s1".into(),
+                chars: 3,
+            },
+            6_100,
+        );
+        assert!(
+            m.handle(
+                Input::SkipStalled {
+                    session_id: "s1".into()
+                },
+                9_000
+            )
+            .is_empty()
+        );
+        assert_eq!(m.phase(), Phase::Outputting);
+    }
+
+    // 转写阶段的跳过只是预约「转写完不整理」，转写可能很久，不能挂看门狗。
+    #[test]
+    fn skip_during_transcribing_has_no_watchdog() {
+        let mut m = Machine::new();
+        recording_with_refine(&mut m, BindingId::DictateToggle, "s1");
+        press(&mut m, BindingId::DictateToggle, 5_000, "x");
+        let fx = m.handle(
+            Input::Intent {
+                intent: Intent::SkipRefine,
+                at_ms: 5_100,
+            },
+            5_100,
+        );
+        assert_eq!(
+            fx,
+            vec![Effect::SkipRefine {
+                session_id: "s1".into()
+            }]
+        );
     }
 
     #[test]

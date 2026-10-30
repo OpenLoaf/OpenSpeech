@@ -16,6 +16,11 @@
 //   dictation/blocked       未登录，前端弹登录框或悬浮条提示
 //   dictation/skip-refine   用户要求跳过 AI 优化
 //   dictation/mode-switched 录音中听写 ↔ 翻译互切
+//   dictation/orphans       有 worker 失联时结束的会话待补历史，worker 调 dictation_take_orphans 领走
+//
+// worker 失联：主窗 webview 重载（内容进程超内存被系统回收后 Tauri 自动 reload，或开发期
+// 整页刷新）时，旧 worker 连同它手上的会话一起消失。Rust 检测到主窗重新加载即结束当前会话，
+// 录音照常落盘，会话信息暂存为 orphan，等新 worker 起来后补一条失败历史（可在历史里重试）。
 
 mod machine;
 mod output;
@@ -33,7 +38,7 @@ use crate::hotkey::BindingId;
 
 use machine::{
     CueKind, Effect, EndKind, ErrorInfo, FAILED_DISMISS_MS, Gate, Input, Machine, Phase,
-    SegmentMode, SessionConfig,
+    SKIP_REFINE_WATCHDOG_MS, SegmentMode, SessionConfig,
 };
 pub use machine::{Intent, Snapshot};
 pub use output::FinishOutcome;
@@ -45,6 +50,7 @@ const ENDED_EVENT: &str = "openspeech://dictation/ended";
 const BLOCKED_EVENT: &str = "openspeech://dictation/blocked";
 const SKIP_REFINE_EVENT: &str = "openspeech://dictation/skip-refine";
 const MODE_SWITCHED_EVENT: &str = "openspeech://dictation/mode-switched";
+const ORPHANS_EVENT: &str = "openspeech://dictation/orphans";
 
 /// 开录鉴权时静默恢复登录态的最长等待；超时按未登录处理。
 const GATE_RECOVER_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -65,6 +71,8 @@ pub struct DictationConfig {
 struct SessionCtx {
     session_id: String,
     target_app: Option<ActiveWindowInfo>,
+    /// 交给 worker 处理的录音；worker 失联时据此保留音频。
+    rec: Option<RecordingResult>,
 }
 
 #[derive(Serialize, Clone)]
@@ -94,7 +102,7 @@ struct ProcessPayload {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct EndedPayload {
+pub struct EndedPayload {
     session_id: String,
     kind: EndKind,
     binding: BindingId,
@@ -119,6 +127,12 @@ fn machine() -> &'static Mutex<Machine> {
 fn config() -> &'static Mutex<DictationConfig> {
     static C: OnceLock<Mutex<DictationConfig>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(DictationConfig::default()))
+}
+
+/// worker 失联时结束的会话，等新 worker 领走补历史。
+fn orphans() -> &'static Mutex<Vec<EndedPayload>> {
+    static O: OnceLock<Mutex<Vec<EndedPayload>>> = OnceLock::new();
+    O.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn ctx() -> &'static Mutex<Option<SessionCtx>> {
@@ -159,13 +173,17 @@ pub fn init(app: &AppHandle) {
     let _ = APP.set(app.clone());
 }
 
-fn target_app_of(session_id: &str) -> Option<ActiveWindowInfo> {
+fn ctx_of(session_id: &str) -> Option<SessionCtx> {
     ctx()
         .lock()
         .ok()?
         .as_ref()
         .filter(|c| c.session_id == session_id)
-        .and_then(|c| c.target_app.clone())
+        .cloned()
+}
+
+fn target_app_of(session_id: &str) -> Option<ActiveWindowInfo> {
+    ctx_of(session_id).and_then(|c| c.target_app)
 }
 
 /// 会话当前绑定与配置（录音中可能因听写 ↔ 翻译互切而变化，所以每次现取）。
@@ -353,6 +371,12 @@ fn run_effect(app: &AppHandle, effect: Effect) {
             crate::ai_refine::cancel_task(&session_id);
             emit(app, SKIP_REFINE_EVENT, session_id);
         }
+        Effect::WatchSkip { session_id } => {
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(SKIP_REFINE_WATCHDOG_MS));
+                dispatch(Input::SkipStalled { session_id });
+            });
+        }
         Effect::ModeSwitched {
             session_id,
             binding,
@@ -387,7 +411,27 @@ fn end_session(
 ) {
     output::end(&session_id);
     take_debug_rec(&session_id);
-    let target_app = target_app_of(&session_id);
+    let ctx = ctx_of(&session_id);
+    let target_app = ctx.as_ref().and_then(|c| c.target_app.clone());
+    if kind == EndKind::WorkerLost {
+        // 处理阶段的录音已在交给 worker 时落盘，从上下文取回。
+        let rec = rec.or_else(|| ctx.and_then(|c| c.rec));
+        log::warn!(
+            "[dictation] worker lost, session={session_id} ended; audio kept={}",
+            rec.as_ref().is_some_and(|r| !r.audio_path.is_empty())
+        );
+        if let Ok(mut o) = orphans().lock() {
+            o.push(EndedPayload {
+                session_id,
+                kind,
+                binding,
+                rec,
+                target_app,
+            });
+        }
+        emit(app, ORPHANS_EVENT, ());
+        return;
+    }
     emit(
         app,
         ENDED_EVENT,
@@ -413,6 +457,7 @@ fn open_capture(app: &AppHandle, session_id: String) {
         *c = Some(SessionCtx {
             session_id: session_id.clone(),
             target_app: target_app.clone(),
+            rec: None,
         });
     }
     let debug = is_debug(&session_id);
@@ -511,6 +556,11 @@ fn stop_for_processing(app: &AppHandle, session_id: String) {
     if !phase.is_processing() {
         return;
     }
+    if let Ok(mut c) = ctx().lock()
+        && let Some(c) = c.as_mut().filter(|c| c.session_id == session_id)
+    {
+        c.rec = Some(rec.clone());
+    }
     let target_app = target_app_of(&session_id);
     let dest_app = match config.segment_mode {
         SegmentMode::Realtime => target_app.clone(),
@@ -587,6 +637,14 @@ pub fn on_tray_stop() {
 
 pub fn on_auth_lost() {
     dispatch(Input::AuthLost);
+}
+
+/// 主窗 webview 开始加载页面（首次启动、内容进程被回收后自动 reload、开发期刷新）。
+/// 旧页面里的 worker 已经不在了，正在进行的会话没人收尾，必须由这里结束。
+pub fn on_main_page_load(url: &str) {
+    let phase = machine().lock().map(|m| m.phase()).unwrap_or(Phase::Idle);
+    log::info!("[dictation] main webview page load started url={url} phase={phase:?}");
+    dispatch(Input::WorkerLost);
 }
 
 pub fn on_audio_stream_error(reason: &str) {
@@ -679,6 +737,15 @@ pub async fn dictation_finish(
 pub fn dictation_complete(session_id: String) {
     output::end(&session_id);
     dispatch(Input::Done { session_id });
+}
+
+/// worker 启动 / 收到 orphans 事件时领走失联会话，逐条补写失败历史。
+#[tauri::command]
+pub fn dictation_take_orphans() -> Vec<EndedPayload> {
+    orphans()
+        .lock()
+        .map(|mut o| std::mem::take(&mut *o))
+        .unwrap_or_default()
 }
 
 #[tauri::command]

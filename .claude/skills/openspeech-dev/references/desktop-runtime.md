@@ -77,6 +77,12 @@
 
 ---
 
+## 主窗 webview 被系统回收（听写卡死 / 白屏）
+
+- 主窗页面常驻后台、承载听写 worker。macOS WebKit 对**不可见**页面有 inactive 内存上限（实测 4096 MB），超了直接杀 WebContent 进程（`log show --info --predicate 'processID == <openspeech pid> AND category == "MemoryPressure"'` 能看到 `ExceededMemoryLimit`），应用日志里只表现为主窗 JS 日志突然停止。
+- Tauri < 2.12（runtime-wry 2.10）不处理 `webViewWebContentProcessDidTerminate`，页面永久白屏；≥ 2.12 默认自动 reload。**不要**给主窗自定义 `on_web_content_process_terminate`，会顶掉这个默认 reload。
+- 会话收尾不依赖 reload 是否成功：`lib.rs` 的 `on_page_load`（主窗 Started）→ `dictation::on_main_page_load` 结束当前会话；新 worker 启动时 `dictation_take_orphans` 补失败历史。
+
 ## Quick Panel（通用快速操作面板，Spotlight 风格）
 
 > 真相来源：`src-tauri/src/quick_panel/mod.rs`、`src/pages/QuickPanel/`、`capabilities/quick-panel.json`。

@@ -128,6 +128,8 @@
 
 取消时也要由 Rust 先关闭本会话的流式注入：主窗可能尚未收到跳过事件，迟到的 AI delta 若先落字，原文与已注入前缀不一致就只能降级剪贴板；原文收尾输出仍沿用同一会话。
 
+实现入口：取消包装 = `ai_refine::until_cancelled`（新增的 refine 请求路径都要套上它）；关流式注入 = `dictation/output.rs::disable_streaming`；触发 = `dictation/machine.rs` 的 `Intent::SkipRefine`（只在 Refining 且本轮同一快捷键时生效，refine 关闭时为 no-op）。
+
 ## 隐私边界（呼应 `docs/privacy.md`）
 
 - 录音仅落盘本机：`app_data_dir/recordings/<id>.wav`。

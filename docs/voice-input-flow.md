@@ -27,7 +27,10 @@
   Refining ──再按同一快捷键──▶ Outputting（跳过 AI 优化，输出原始转写）
   处理中（Transcribing/Refining/Translating）× ─▶ Idle（保留原文进历史）；Esc ─▶ Idle（丢弃）
   Failed ──2.5s / Esc / 下次按键──▶ Idle
+  Recording / 处理中 ──主窗 worker 失联──▶ Failed(worker_lost)（音频保留，补一条失败历史可重试）
 ```
+
+主窗页面是听写 worker 的宿主。它重新加载（WebContent 进程超内存被系统回收后自动 reload）时，旧 worker 连同手上的会话一起消失，Rust 检测到主窗重载即结束当前会话；Refining 阶段请求跳过 AI 优化后 3 秒仍未开始输出，也按 worker 失联处理，不让悬浮条无限计时。
 
 | 模块 | 职责 |
 |---|---|
