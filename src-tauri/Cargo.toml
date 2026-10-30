@@ -55,7 +55,7 @@ uuid = { version = "1", features = ["v4"] }
 url = "2"
 tauri-plugin-dialog = "2"
 # dev-only：配合 lib.rs 里 #[cfg(debug_assertions)] gate；release 不启动 WebSocket。
-tauri-plugin-mcp-bridge = "0.2"
+tauri-plugin-mcp-bridge = "0.13"
 webrtc-vad = "0.4.0"
 async-openai = { version = "0.36", default-features = false, features = ["rustls", "chat-completion"] }
 futures-util = "0.3"
