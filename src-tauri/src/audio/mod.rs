@@ -78,7 +78,7 @@ const MIC_SILENCE_THRESHOLD_MS: u64 = 3000;
 #[derive(Clone, Serialize)]
 struct MicStartFailedPayload {
     /// "no-input-device" | "permission-denied" | "device-busy" | "device-config-unsupported"
-    /// | "device-removed" | "device-unavailable" | "generic"
+    /// | "device-removed" | "device-unavailable" | "starting-slow" | "generic"
     reason: &'static str,
     /// 原始 error 字符串（含 cpal 内部分类 / HAL 错误码），给开发者排查 / 日志用，
     /// 不直接展示给终端用户。
@@ -115,7 +115,11 @@ fn classify_mic_start_error(raw: &str) -> &'static str {
     if s.contains("stream config") || s.contains("unsupported") {
         return "device-config-unsupported";
     }
-    // 初始化超时也可能是驱动卡住；没有明确证据时不能断言被其他应用独占。
+    // 等 ready 超时：多为 CoreAudio 冷启动（睡眠唤醒 / 长时间闲置后首次开麦）慢，
+    // 不能断言被其他应用独占或缺权限，提示用户直接重试即可。
+    if s.contains("not ready within") {
+        return "starting-slow";
+    }
     "generic"
 }
 
@@ -140,7 +144,7 @@ mod mic_error_tests {
     fn does_not_infer_exclusive_use_from_a_timeout() {
         assert_eq!(
             classify_mic_start_error("audio stream not ready within 3000ms"),
-            "generic"
+            "starting-slow"
         );
         assert_eq!(
             classify_mic_start_error("Device or resource busy"),
@@ -1321,9 +1325,11 @@ fn spawn_monitor_thread<R: Runtime>(
     (stop_tx, th)
 }
 
-/// 同步等 audio 线程把 cpal stream 起来。冷启动 macOS 实测 ~1s，所以默认 1.5s
-/// 上限——超时即视为失败，调用方拿到 Err 不会再贸然走 stt_start。
-const STREAM_READY_TIMEOUT: Duration = Duration::from_millis(1500);
+/// 同步等 audio 线程把 cpal stream 起来。超时即视为失败，调用方拿到 Err 不会再贸然走
+/// stt_start。macOS 平时冷启动 ~1s，但睡眠唤醒 / 长时间闲置后 CoreAudio HAL 首次开麦
+/// （同时提示音输出 sink 也在重建）线上实测 ~2s，原 1.5s 上限会把随后就绪的 stream
+/// 白白关掉，所以放宽到 3s。
+const STREAM_READY_TIMEOUT: Duration = Duration::from_millis(3000);
 
 #[track_caller]
 pub fn start<R: Runtime>(app: AppHandle<R>, device_name: Option<String>) -> Result<(), String> {
