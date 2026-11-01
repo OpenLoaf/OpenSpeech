@@ -25,6 +25,7 @@
         "shadow": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "backgroundColor": "#000000",
         "backgroundThrottling": "disabled"
       }
     ],
