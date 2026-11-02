@@ -8,6 +8,7 @@
 ## 窗口与标题栏
 
 - 主窗口 `titleBarStyle: "Overlay"` + `hiddenTitle: true`：macOS 红绿灯嵌入内容区左上角。
+- 主窗口 `backgroundColor: "#000000"`：窗口创建即显示，前端加载完成前露出窗口底色而非 WKWebView 默认白底；取值对齐深色主题下 LoadingScreen 的 `bg-te-bg`（`.dark` 的 `--te-bg`），删掉会出现启动白闪。
 - 实际启动尺寸由 `window.rs` 按主显示器 work area 自适应计算。work area 边界优先于静态最小尺寸：空间不足时运行时同步下调 minimum，避免窗口被最小高度顶出任务栏；窗口按 work area 的物理坐标居中，兼容任务栏停靠在左侧或顶部。
 - **Windows 固定 100% UI 大小**：主窗口、悬浮条、Quick Panel 的设计尺寸按实际像素显示，页面缩放抵消显示器 DPI；切换 DPI 时保留用户调整后的实际窗口尺寸。不能关闭进程 DPI awareness，否则 Windows 会把整个窗口位图放大且模糊。tao 的 DPI 事件早于其自动 resize，尺寸还原必须从工作线程排入 UI 队列。macOS / Linux 继续使用 logical px。
 - **全屏被全局禁用**：

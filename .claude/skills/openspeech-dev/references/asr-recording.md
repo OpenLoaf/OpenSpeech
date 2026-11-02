@@ -76,7 +76,7 @@
 `audio::open_dictation_capture` / `save_dictation_capture` / `discard_dictation_capture` 只由 `dictation` runtime 调用，前端不参与 cpal 引用计数。**单一不变量：一次听写的 cpal ref 只取一次、放一次。**
 
 - `dictation_capture()` 锁跨 `start()` / `stop()`：open 未完成时到来的 discard 会等 open 结束再释放，不漏放 ref。open 失败的每个分支都要回滚已取的 ref 并 disarm 预录。
-- open 是阻塞的（cpal 冷启动 ~100ms），调用方放后台线程，不能阻塞 rdev 键盘线程。
+- open 是阻塞的：`audio::start` 同步等 cpal stream 就绪，平时冷启动约 1s，睡眠唤醒 / 长时间闲置后首次开麦约 2s，上限 `STREAM_READY_TIMEOUT` = 3s，超时归类为 `mic-start-failed` 的 `starting-slow`（提示再按一次，不当作设备占用或缺权限）。调用方放后台线程，不能阻塞 rdev 键盘线程。
 - 录音 id 由 Rust `audio::new_recording_id` 生成，格式必须与前端 `src/lib/ids.ts::newId` 一致（同时是会话 id、录音文件名、历史 id）。
 - **预录缓冲（开头丢字）**：麦克风在按键当帧就开，但实时会话要等主窗收到 `dictation/started` 再 invoke `stt_start`，节流时迟到 1–5s（日志 `dictation capture opened` 与 `[worker] session started` 的时间差）。这段帧以前被 `try_send_audio_pcm16` 当「无会话」丢掉 → 本地模型 / 边说边出字模式丢开头几个字。`stt` 模块有预录缓冲：`open_dictation_capture` 开流前 arm、save/discard disarm，会话进 slot 时及之后首帧按序补发（日志 `preroll flushed`）。新增听写采集的开/收路径必须配对 arm/disarm。
 - **验证盲区**：ref 配平是集成级，单测覆盖不到；改采集路径后必须真机 `pnpm tauri dev` 盯 macOS 状态栏橙点确认不泄漏。
