@@ -19,6 +19,11 @@
 
   <!-- 蓝牙中央角色：扫描 ESP32 无线麦克风的 BLE 广播以发现可配对设备。
        macOS 12+ 强制要求；缺失会让 CoreBluetooth 在首次 start_scan 时直接拒绝。 -->
+  <!-- 系统音频录制（macOS 14.4+）：会议录制用 Core Audio process tap 录本机正在播放的
+       声音（会议软件里对方的发言）。首次开会时系统按此文案弹授权；缺失时 tap 只给静音。 -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>OpenSpeech 需要录制系统声音，以便会议录制时转写会议软件里对方的发言。</string>
+
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>OpenSpeech 需要蓝牙权限以扫描并配对 ESP32 无线麦克风设备。</string>
 </dict>

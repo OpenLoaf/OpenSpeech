@@ -36,6 +36,7 @@ use crate::db;
 use crate::meetings::writers::{MeetingAudioWriter, MeetingTranscriptAppender};
 use crate::openloaf::{RefreshOutcome, SharedOpenLoaf, handle_session_expired};
 
+mod system_audio;
 mod writers;
 
 /// 前端订阅的事件名。
@@ -138,6 +139,12 @@ struct ActiveMeeting {
     /// meeting_stop 直接返回给前端写 history.audio_path，无需等 worker 回报。
     audio_rel_path: String,
     transcript_rel_path: String,
+    /// 用户是否要录系统声音（StartArgs 决定，整场不变）；resume 时据此重开采集。
+    want_system_audio: bool,
+    /// 系统声音采集；None = 未开启 / 暂停中 / 平台不支持 / 失败，此时只录麦克风。
+    /// drop 即停止采集。暂停时同样停掉——与「暂停 = 真停麦克风」一致，否则 macOS
+    /// 状态栏的录音指示一直亮，用户会以为暂停了还在录。
+    system_audio: Option<system_audio::SystemAudio>,
 }
 
 fn active_slot() -> &'static Mutex<Option<ActiveMeeting>> {
@@ -238,6 +245,9 @@ pub struct StartArgs {
     /// 本地日期 yyyy-MM-dd——audio/transcript 文件落到 recordings/<date>/<id>.{ogg,jsonl}。
     /// 由前端按本地时区生成，避免 Rust 端拿到 UTC 跟用户「翻文件夹」的语义偏一天。
     pub date: String,
+    /// 是否同时录系统声音（本机开会时对方的声音）。缺省 = true：老前端不传也能录到对方。
+    #[serde(default)]
+    pub capture_system_audio: Option<bool>,
 }
 
 /// meeting_start 的返回值：前端拿到 paths 后立刻 INSERT 一条 status='in_progress'
@@ -466,6 +476,14 @@ fn meeting_start_impl<R: Runtime>(
         })
         .map_err(|e| format!("spawn meetings worker: {e}"))?;
 
+    // 握手成功、worker 已起才开系统声音：失败只降级为只录麦克风，不影响会议开始。
+    let want_system_audio = args.capture_system_audio.unwrap_or(true);
+    let system_audio = if want_system_audio {
+        system_audio::start()
+    } else {
+        None
+    };
+
     {
         let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
         *slot = Some(ActiveMeeting {
@@ -478,6 +496,8 @@ fn meeting_start_impl<R: Runtime>(
             elapsed_baseline_ms: 0,
             audio_rel_path: audio_rel_path.clone(),
             transcript_rel_path: transcript_rel_path.clone(),
+            want_system_audio,
+            system_audio,
         });
     }
 
@@ -499,7 +519,7 @@ fn meeting_start_impl<R: Runtime>(
 /// audio callback / 测试代码喂 PCM16 LE 帧的入口。无激活会议时无 op。
 /// 暂停态时丢帧（不是错误，前端 pause 后 cpal 仍在跑），避免污染识别。
 /// 锁内只 clone Sender 句柄 + 读 atomic，零阻塞：worker 不再共享这把锁。
-pub fn try_send_audio_pcm16(pcm16: Vec<u8>) {
+pub fn try_send_audio_pcm16(mut pcm16: Vec<u8>) {
     let Ok(slot) = active_slot().try_lock() else {
         return;
     };
@@ -525,6 +545,10 @@ pub fn try_send_audio_pcm16(pcm16: Vec<u8>) {
             BYTES.load(Ordering::Relaxed)
         );
     }
+    // 麦克风帧是主时钟：在这里把同等时长的系统声音叠上去，ASR 与 OGG 拿到同一份混音。
+    if a.system_audio.is_some() {
+        system_audio::mix_into_pcm16(&mut pcm16);
+    }
     let _ = a.audio_tx.send(pcm16);
 }
 
@@ -532,8 +556,10 @@ pub fn try_send_audio_pcm16(pcm16: Vec<u8>) {
 pub fn meeting_pause<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
     let a = slot.as_mut().ok_or("no active meeting")?;
+    let mut stopped_system_audio = None;
     if !a.paused.load(Ordering::Relaxed) {
         a.paused.store(true, Ordering::Relaxed);
+        stopped_system_audio = a.system_audio.take();
         // 累计已运行的时间作为 baseline，下一次 resume 重新计时。
         a.elapsed_baseline_ms += a.started_at.elapsed().as_millis() as u64;
     }
@@ -543,6 +569,8 @@ pub fn meeting_pause<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         elapsed_ms: a.elapsed_baseline_ms,
     };
     drop(slot);
+    // 锁外停采集：AudioDeviceStop / 线程 join 有几毫秒，别让麦克风 fanout 的 try_lock 落空。
+    drop(stopped_system_audio);
     let _ = app.emit(EVENT_STATUS, payload);
     Ok(())
 }
@@ -551,16 +579,32 @@ pub fn meeting_pause<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 pub fn meeting_resume<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
     let a = slot.as_mut().ok_or("no active meeting")?;
+    let mut restart_system_audio = false;
     if a.paused.load(Ordering::Relaxed) {
         a.paused.store(false, Ordering::Relaxed);
         a.started_at = Instant::now();
+        restart_system_audio = a.want_system_audio && a.system_audio.is_none();
     }
+    let meeting_id = a.meeting_id.clone();
     let payload = StatusPayload {
-        meeting_id: a.meeting_id.clone(),
+        meeting_id: meeting_id.clone(),
         status: MeetingStatus::Active,
         elapsed_ms: a.elapsed_baseline_ms,
     };
     drop(slot);
+    if restart_system_audio {
+        // 锁外开采集（建 tap / 开流要几十毫秒）；开好后确认会议还是这一场、且没被
+        // 再次暂停才装回去，否则直接 drop 掉。
+        let sys = system_audio::start();
+        let mut slot = active_slot().lock().map_err(|e| e.to_string())?;
+        if let Some(a) = slot.as_mut()
+            && a.meeting_id == meeting_id
+            && !a.paused.load(Ordering::Relaxed)
+            && a.system_audio.is_none()
+        {
+            a.system_audio = sys;
+        }
+    }
     let _ = app.emit(EVENT_STATUS, payload);
     Ok(())
 }

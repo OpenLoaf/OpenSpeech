@@ -123,6 +123,11 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
+objc2 = "0.6"
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+objc2-core-foundation = { version = "0.3", features = ["CFDictionary"] }
+objc2-foundation = "0.3"
 # 社区维护的 macOS 权限 plugin（ayangweb/tauri-plugin-macos-permissions）。
 # 我们用它的 `request_microphone_permission`（Apple 官方 AVCaptureDevice
 # requestAccessForMediaType API）+ `request_accessibility_permission`
