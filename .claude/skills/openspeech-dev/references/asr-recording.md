@@ -95,6 +95,16 @@
 - **暂停放行听写**：`hotkey::maybe_block_for_meeting` 用 `meetings::is_capturing()`（有会议 **且非暂停**）而非 `has_active()`，暂停态放行听写/翻译/Ask；audio fanout 仍用 `has_active()`（暂停时 try_send 内部 paused gate 丢帧）。
 - **pause/resume 并发守卫**：两者是 async，await 期间 view 还没翻，入口 gate 拦不住二次进入/与 stop 交错 → 双击致共享 ref_count 失衡（橙点不灭 / 误停听写）。用 module-level `pauseResumeInFlight` + 每个 await 后复查 view（被 stop 抢走则回滚已加的 cpal ref 再退出）。stop 走自己的 `stopInFlight`（用户结束动作不该被 pause/resume 挡）。resume 入口还须挡「听写进行中」（`useRecordingStore.getState().activeId !== null`）——UI「继续」按钮绕过 hotkey 拦截，否则两路同抢 cpal、听写串进会议字幕。
 
+## 会议录系统声音（`src-tauri/src/meetings/system_audio/`）
+
+本机开会时对方声音只走扬声器 / 耳机，只录麦克风 = 录不到对方（用户实报）。会议开始时默认同时录系统声音并与麦克风混成一路，ASR 与 OGG 拿到同一份。
+
+- **macOS 不用 cpal 0.17 自带 loopback**：它对输出设备先判 `supports_input()`，USB 耳机这类输入输出同设备的会被当麦克风打开（录到耳机麦克风）；还不检查 tap 的 OSStatus、tap 绑定开流时的输出设备。自建全局 tap（排除本进程）+ 私有 aggregate + IOProc。Windows 输出端点不带输入，cpal loopback 可直接用。
+- **麦克风是主时钟**：混音发生在 `meetings::try_send_audio_pcm16`，系统声音进 ring，按水位 ±1% 微调读取步长吸收时钟偏差（麦克风路径无状态重采样每块丢 0~1 采样也靠这个吸收）。别改成系统声音驱动——Windows loopback 无声时根本不回调。
+- **暂停 = 也停 tap**（同上节「暂停 = 真停麦克风」的理由：macOS 系统音频录制也有状态栏指示），resume 锁外重建。
+- **授权被拒不报错只给静音**（macOS 14.4+ 「仅系统录音」TCC，文案在 Info.plist `NSAudioCaptureUsageDescription`）；结束时 `[sysaudio]` 日志会写「整场静音」诊断。真机自测：`cargo test --lib captures_system_audio_on_device -- --ignored`。
+- `StartArgs.captureSystemAudio` 缺省 true，前端暂无开关；UI 波形仍只反映麦克风电平。
+
 ## AI refine 后处理三级 hold 与 `driftGuard` 只开听写
 
 `run_refine_core` 的 SSE 消费链是 **context-leak filter → drift guard → trailing-period stripper** 三级 hold 串联，任何新加的"输出先看一眼再放"逻辑都插到这条链里，不要另起一条独立缓冲——否则前端 `injectIncremental` 的 typedLen 前缀假设会被打破（已注入的字撤不回）。
