@@ -36,6 +36,7 @@ use crate::db;
 use crate::meetings::writers::{MeetingAudioWriter, MeetingTranscriptAppender};
 use crate::openloaf::{RefreshOutcome, SharedOpenLoaf, handle_session_expired};
 
+pub mod summary_clipboard;
 mod system_audio;
 mod writers;
 

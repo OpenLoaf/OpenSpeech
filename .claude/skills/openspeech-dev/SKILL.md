@@ -72,6 +72,7 @@ description: OpenSpeech 项目（跨平台 AI 语音输入桌面应用，Tauri 2
 
 - **Tailwind v4**（不再走 PostCSS，入口 `src/App.css` 用 `@import "tailwindcss"`）
 - **React Router v7**（API 与 v6 不兼容，禁止降级）
+- **会议纪要复制**在本机生成。PNG 和 PDF 共用渲染链路以保留系统中文字体，Word 保留可编辑的正文。原生文件剪贴板只记录文件引用，PDF / DOCX 要在粘贴期间保留对应缓存文件。
 - **Rust edition 2024**
 - **`rdev` = `openloaf-rdev` 0.5.1（OpenLoaf 自有 fork via crates.io，crate 通过 `package = "..."` 重命名）**
   - fork 修的是 macOS event tap 在 `kCGEventTapDisabledByTimeout` / `ByUserInput` 时的自愈，解决 "按下第一次没反应、得再按一次" 偶发 bug。

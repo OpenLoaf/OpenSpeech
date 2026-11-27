@@ -551,6 +551,8 @@ pub fn run() {
             meetings::meeting_transcript_delete,
             meetings::meeting_translation_append,
             meetings::meeting_export_markdown,
+            meetings::summary_clipboard::meeting_copy_summary,
+            meetings::summary_clipboard::meeting_save_summary,
             meetings::meeting_summary_write,
             meetings::meeting_summary_load,
             meetings::meeting_summary_delete,

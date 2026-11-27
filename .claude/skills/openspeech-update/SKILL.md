@@ -157,7 +157,10 @@ CI `fail-fast: true`：任一 platform 失败就取消其他。重跑与常用 g
 
 ## 八、Step 5：Publish draft Release
 
-CI 成功后只创建 **draft**，**不会自动让用户看到**。必须 publish：
+CI 成功后 GitHub 上只是 **draft**，但 **release job 已把 `latest.json` 传到 R2**——客户端 updater 首选 R2 / CDN，
+所以 **CI 跑完的那一刻用户就已经能收到更新**，draft 只挡住第三兜底 GitHub `/latest/download/`。
+「先停在 draft 让人测一下再放量」**做不到**；要先验证就走 `references/beta.md`（2026-11-25 v0.2.67 实测确认）。
+仍必须 publish，让 GitHub 兜底与 Release 页一致：
 
 ```bash
 gh release view v0.x.y --repo OpenLoaf/OpenSpeech --json isDraft,assets   # draft 是否就绪
